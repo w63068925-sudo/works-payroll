@@ -67,6 +67,15 @@ input[type=date],input[type=tel],input[type=email]{width:100%;height:52px;paddin
 .filebtn{display:inline-flex;align-items:center;height:40px;padding:0 14px;border:1px solid var(--line);border-radius:10px;font-size:14px;cursor:pointer;white-space:nowrap;background:#fff}
 .filebtn input{position:absolute;width:1px;height:1px;opacity:0}
 .filebtn:focus-within{border-color:var(--ink);box-shadow:0 0 0 3px rgba(29,28,26,.08)}
+.sday{font-size:13px;color:var(--muted);margin:16px 0 6px;font-weight:600}
+.sopt{display:flex;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#fff;margin-bottom:8px;cursor:pointer}
+.sopt input{width:20px;height:20px;flex:0 0 auto}
+.sopt .t{font-weight:600}.sopt .d{font-size:13px;color:var(--muted)}
+.sopt.off{opacity:.55;cursor:default}
+.sopt:has(input:checked){border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;background:var(--paper);color:var(--muted);white-space:nowrap}
+.pill.ok{background:var(--accent-soft);color:var(--accent)}.pill.warn{background:var(--warn-soft);color:var(--warn)}.pill.no{background:var(--danger-soft);color:var(--danger)}
+.contract{white-space:pre-wrap;font-size:14px;line-height:1.8;max-height:55vh;overflow:auto}
 .clock{font-family:var(--num);font-size:56px;font-weight:700;line-height:1.1;letter-spacing:-.02em}
 .btn.big{height:64px;font-size:19px}
 .btn.out{background:var(--accent)}
@@ -139,7 +148,7 @@ function viewLogin(message) {
       <div id="m">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
       <button class="btn" id="go">登入</button>
     </form>
-    ${state.join ? '<button class="btn ghost" id="toreg">第一次來？填寫基本資料</button>' : ''}
+    ${state.join ? '<button class="btn ghost" id="toreg">第一次報名？先填基本資料</button>' : ''}
     <p class="foot">連續輸入錯誤 5 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
   if (state.join) document.getElementById('toreg').addEventListener('click', () => viewRegister());
   const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
@@ -149,7 +158,7 @@ function viewLogin(message) {
     e.preventDefault(); go.disabled = true; go.textContent = '登入中…'; m.innerHTML = '';
     try {
       const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
-      if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : viewList(); }
+      if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList(); }
       if (r.error === 'locked') m.innerHTML = '<div class="msg err">輸入錯誤次數過多，帳號已暫時鎖定。請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。</div>';
       else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。' + (r.attempts_left != null ? '還可以再試 ' + esc(r.attempts_left) + ' 次。' : '') + '</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
@@ -162,7 +171,7 @@ async function viewList() {
   document.title = '我的薪資｜沃克思';
   app.innerHTML = brand + '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
   let r;
-  try { r = await rpc('payroll_my_payslips', { p_token: state.token }); }
+  try { const both = await Promise.all([rpc('payroll_my_payslips', { p_token: state.token }), rpc('payroll_my_events', { p_token: state.token })]); r = both[0]; state.myEvents = both[1].ok ? both[1].events : []; }
   catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewList()">重新載入</button>'; return; }
   if (!r.ok) { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
   state.person = r.person; state.payslips = r.payslips;
@@ -183,6 +192,7 @@ function renderList() {
         <button class="btn ghost small" id="out">登出</button>
       </div>
     </div>
+    ${scheduleBlock()}
     ${state.person.default_password ? '<div class="msg warn">你還在使用預設密碼（生日）。為了保護薪資資料，建議按右上角「我的資料」→「更改密碼」換一組。</div>' : ''}
     ${state.payslips.length ? `
       <div class="tabs" role="tablist">
@@ -198,6 +208,8 @@ function renderList() {
     <p class="foot">薪資明細依勞動基準法第 23 條提供，可隨時查詢與列印。金額有疑問請聯絡沃克思的活動窗口。</p>`;
   app.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { state.year = b.dataset.y; renderList(); }));
   app.querySelectorAll('.slip').forEach(b => b.addEventListener('click', () => viewSlip(b.dataset.id)));
+  app.querySelectorAll('[data-contract]').forEach(b => b.addEventListener('click', () => viewContract(b.dataset.contract)));
+  app.querySelectorAll('[data-join]').forEach(b => b.addEventListener('click', () => { saveJoin(b.dataset.join); viewRecruit(); }));
   document.getElementById('out').addEventListener('click', async () => { try { await rpc('payroll_logout', { p_token: state.token }); } catch (e) {} saveToken(null); viewLogin(); });
   document.getElementById('me').addEventListener('click', viewProfile);
 }
@@ -317,19 +329,19 @@ async function viewRegister() {
       <p class="hint">戶名會自動使用你的姓名。</p>
       <label class="check"><input id="ok" type="checkbox" required><span>我同意沃克思為了發放薪資、辦理勞工保險與就業保險加退保、所得稅扣繳申報，以及依勞動法令保存紀錄，蒐集、處理並使用以上資料與之後上傳的證件影本。資料依法保存 5 年，我可以隨時登入查閱與更正。</span></label>
       <div id="m"></div>
-      <button class="btn" id="go">送出</button>
+      <button class="btn" id="go">下一步</button>
     </form>
     <button class="link" id="tologin" style="margin-top:10px">我已經有帳號，直接登入</button>`;
   const nid = document.getElementById('nid'), m = document.getElementById('m'), go = document.getElementById('go');
   nid.addEventListener('input', () => { nid.value = nid.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
-  document.getElementById('tologin').addEventListener('click', () => viewLogin());
+  document.getElementById('tologin').addEventListener('click', () => viewLogin('登入後繼續報名。'));
   document.getElementById('f').addEventListener('submit', async e => {
     e.preventDefault(); m.innerHTML = ''; go.disabled = true;
     const name = document.getElementById('nm').value.trim(), bd = document.getElementById('bd').value;
     try {
       const r = await rpc('payroll_register', { p_join: state.join, p_data: Object.assign(readProfile(name), { name, national_id: nid.value, birth_date: bd, consent: document.getElementById('ok').checked }) });
       if (r.ok) {
-        saveToken(r.token); saveJoin(null);
+        saveToken(r.token);
         const [y, mo, d] = bd.split('-'); const pw = String(Number(y) - 1911).padStart(3, '0') + mo + d;
         return viewDocs('基本資料已建立。之後登入的帳號是身分證字號，密碼是你的民國生日 7 碼（' + pw + '）。');
       }
@@ -360,7 +372,7 @@ async function uploadDoc(kind, file) {
   if (!c.ok) throw new Error('上傳後確認失敗，請再試一次。');
 }
 function docsBlock(documents) {
-  return '<div class="card pad" style="padding-top:4px;padding-bottom:4px">' + DOCS.map(([k, t]) => `<div class="doc"><div><div>${t}</div><div class="st ${documents[k] ? 'ok' : ''}" id="st-${k}">${documents[k] ? '已上傳（' + esc(String(documents[k]).slice(0, 10).replace(/-/g, '/')) + '）' : '尚未上傳'}</div></div><label class="filebtn">${documents[k] ? '重新上傳' : '選擇檔案'}<input type="file" accept="image/*,application/pdf" data-doc="${k}"></label></div>`).join('') + '</div>';
+  return '<div class="card pad" style="padding-top:4px;padding-bottom:4px">' + DOCS.map(([k, t]) => `<div class="doc"><div><div>${t}</div><div class="st ${documents[k] ? 'ok' : ''}" id="st-${k}">${documents[k] ? '已上傳（' + esc(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date(documents[k])).replace(/-/g, '/')) + '）' : '尚未上傳'}</div></div><label class="filebtn">${documents[k] ? '重新上傳' : '選擇檔案'}<input type="file" accept="image/*,application/pdf" data-doc="${k}"></label></div>`).join('') + '</div>';
 }
 function bindDocs(after) {
   app.querySelectorAll('input[data-doc]').forEach(inp => inp.addEventListener('change', async () => {
@@ -380,7 +392,7 @@ function viewDocs(message) {
     <button class="btn" id="done">完成</button>
     <p class="foot">存摺請拍封面（有戶名與帳號的那一頁），不要拍提款卡或信用卡。現在沒帶在身邊也可以先按完成，之後到「我的資料」補傳。</p>`;
   bindDocs();
-  document.getElementById('done').addEventListener('click', () => state.ticket ? viewCheckin() : viewList());
+  document.getElementById('done').addEventListener('click', () => state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList());
 }
 async function viewProfile(message) {
   document.title = '我的資料｜沃克思';
@@ -411,6 +423,115 @@ async function viewProfile(message) {
       m.innerHTML = r2.ok ? '<div class="msg ok">已儲存。</div>' : r2.error === 'session' ? '' : '<div class="msg err">' + esc(PERR[r2.error] || '儲存失敗。') + '</div>';
       if (r2.error === 'session') { saveToken(null); viewLogin('登入已逾時，請重新登入。'); }
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+  });
+}
+
+const SST = { applied: ['審核中', ''], waitlist: ['備取', 'warn'], accepted: ['已錄取', 'ok'], rejected: ['未錄取', 'no'] };
+const shiftTime = s => s.start + '–' + s.end + (s.overnight ? '（翌日）' : '');
+function scheduleBlock() {
+  const evs = state.myEvents || [];
+  if (!evs.length) return '';
+  return '<h2>我的排班</h2>' + evs.map(e => `<div class="card pad" style="margin-bottom:10px">
+    <div class="row"><span class="name" style="font-weight:600">${esc(e.event)}</span>${e.contract_needed ? '<span class="pill warn">待確認契約</span>' : ''}</div>
+    ${e.location ? '<div class="meta" style="font-size:13px;color:var(--muted)">' + esc(e.location) + '</div>' : ''}
+    <div style="margin-top:8px">${e.shifts.map(s => `<div class="row" style="padding:5px 0;font-size:14px"><span>${esc(fmtDate(s.work_date, true).slice(5))}　${esc(s.start)}–${esc(s.end)}${s.role ? '　' + esc(s.role) : ''}</span><span class="pill ${SST[s.status][1]}">${SST[s.status][0]}</span></div>`).join('')}</div>
+    ${e.contract_needed ? `<button class="btn" style="margin-top:12px" data-contract="${esc(e.app_id)}">確認勞動契約</button>` : e.contract_accepted_at ? `<button class="link" data-contract="${esc(e.app_id)}">查看已確認的契約</button>` : ''}
+    <button class="link" style="margin-left:14px" data-join="${esc(e.join)}">修改報名</button></div>`).join('');
+}
+
+async function viewRecruit(message) {
+  document.title = '活動報名｜沃克思';
+  app.innerHTML = brand + '<div class="skeleton" style="height:180px"></div><div class="skeleton"></div>';
+  let pub;
+  try { pub = await rpc('payroll_event_public', { p_join: state.join }); } catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewRecruit()">再試一次</button>'; return; }
+  if (!pub.ok) { saveJoin(null); return state.token ? viewList() : viewLogin(PERR.bad_join); }
+  const ev = pub.event, form = ev.form || {}, qs = form.questions || [];
+  let mine = null, hasPhoto = false;
+  if (state.token) {
+    const r = await rpc('payroll_my_application', { p_token: state.token, p_join: state.join });
+    if (!r.ok) { saveToken(null); } else { mine = r.application; hasPhoto = r.has_photo; }
+  }
+  const my = (mine && mine.shifts) || {}, ans = (mine && mine.answers) || {};
+  const days = {}; pub.shifts.forEach(s => (days[s.work_date] = days[s.work_date] || []).push(s));
+  const head = `<p class="sub">${esc(ev.employer)}</p><h1>${esc(ev.name)}</h1>
+    <p class="sub">${esc(fmtPeriod(ev.start_date, ev.end_date))}${ev.location ? '　' + esc(ev.location) : ''}</p>
+    ${ev.description ? '<div class="card pad" style="margin-top:14px;white-space:pre-wrap;font-size:14px">' + esc(ev.description) + '</div>' : ''}
+    ${message ? '<div class="msg ok">' + esc(message) + '</div>' : ''}`;
+  if (!state.token) {
+    app.innerHTML = brand + head + `
+      ${ev.recruiting ? '' : '<div class="msg warn">這場活動目前不開放報名。</div>'}
+      ${pub.shifts.length ? '<h2>班次</h2>' + Object.keys(days).sort().map(dk => '<div class="sday">' + esc(fmtDate(dk, true)) + '</div>' + days[dk].map(s => `<div class="sopt off" style="cursor:default"><div><div class="t">${esc(shiftTime(s))}　${esc(s.role || '')}</div><div class="d">${s.rate || ev.default_hourly_rate ? '時薪 ' + money(s.rate || ev.default_hourly_rate) + ' 元　' : ''}${s.accepted >= s.headcount ? '已額滿' : '需要 ' + s.headcount + ' 人'}</div></div></div>`).join('')).join('') : ''}
+      <button class="btn" id="reg">第一次報名，填寫基本資料</button>
+      <button class="btn ghost" id="login">我已經有帳號，登入報名</button>
+      <p class="foot">基本資料只要填一次，之後報名其他活動直接登入即可。</p>`;
+    document.getElementById('reg').addEventListener('click', () => viewRegister());
+    document.getElementById('login').addEventListener('click', () => viewLogin('登入後繼續報名。'));
+    return;
+  }
+  const lockedAccepted = Object.values(my).includes('accepted');
+  app.innerHTML = brand + head + `
+    ${ev.recruiting ? '' : '<div class="msg warn">這場活動目前不開放報名，以下是你的報名結果。</div>'}
+    <form id="f">
+      ${pub.shifts.length ? '<h2>選擇想上的班次（可複選）</h2>' + Object.keys(days).sort().map(dk => '<div class="sday">' + esc(fmtDate(dk, true)) + '</div>' + days[dk].map(s => {
+        const st = my[s.id], full = s.accepted >= s.headcount && st !== 'accepted', off = st === 'accepted' || !ev.recruiting || (full && !st);
+        return `<label class="sopt ${off ? 'off' : ''}"><input type="checkbox" name="sh" value="${esc(s.id)}" ${st ? 'checked' : ''} ${off ? 'disabled' : ''}>
+          <div style="flex:1"><div class="t">${esc(shiftTime(s))}　${esc(s.role || '')}</div><div class="d">${s.rate || ev.default_hourly_rate ? '時薪 ' + money(s.rate || ev.default_hourly_rate) + ' 元　' : ''}${full ? '已額滿' : '需要 ' + s.headcount + ' 人'}${s.note ? '　' + esc(s.note) : ''}</div></div>
+          ${st ? '<span class="pill ' + SST[st][1] + '">' + SST[st][0] + '</span>' : ''}</label>`; }).join('')).join('') : ''}
+      ${qs.length ? '<h2>報名問題</h2><div class="card pad" style="padding-top:2px">' + qs.map(q => `<label for="q_${esc(q.id)}">${esc(q.label)}${q.required ? '' : '（選填）'}</label>` + (q.type === 'choice'
+        ? `<select id="q_${esc(q.id)}" data-q="${esc(q.id)}"><option value="">請選擇</option>${(q.options || []).map(o => `<option ${ans[q.id] === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
+        : `<input id="q_${esc(q.id)}" type="text" data-q="${esc(q.id)}" value="${esc(ans[q.id] || '')}">`)).join('') + '</div>' : ''}
+      ${form.experience ? `<h2>相關經驗</h2><textarea id="exp" style="width:100%;min-height:96px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:16px" placeholder="曾擔任過的活動、品牌與工作內容">${esc((mine && mine.experience) || '')}</textarea>` : ''}
+      ${form.photo ? `<h2>個人照片</h2><div class="card pad" style="padding-top:4px;padding-bottom:4px"><div class="doc"><div><div>清楚的半身生活照</div><div class="st ${hasPhoto ? 'ok' : ''}" id="st-photo">${hasPhoto ? '已上傳' : '尚未上傳'}</div></div><label class="filebtn">${hasPhoto ? '重新上傳' : '選擇照片'}<input type="file" accept="image/*" data-doc="photo"></label></div></div>` : ''}
+      <div id="m"></div>
+      ${ev.recruiting ? `<button class="btn" id="go">${mine ? '更新報名' : '送出報名'}</button>` : ''}
+    </form>
+    ${mine && !lockedAccepted && ev.recruiting ? '<button class="link" id="wd" style="margin-top:10px">取消報名</button>' : ''}
+    <button class="btn ghost" id="tolist">查看我的排班與薪資</button>
+    <p class="foot">錄取結果會顯示在「我的排班」。已錄取的班次如需取消，請聯絡活動負責人。</p>`;
+  bindDocs();
+  document.getElementById('tolist').addEventListener('click', viewList);
+  const wd = document.getElementById('wd');
+  if (wd) wd.addEventListener('click', async () => {
+    if (!wd.dataset.sure) { wd.dataset.sure = '1'; wd.textContent = '確定要取消報名？再按一次'; return; }
+    const r = await rpc('payroll_withdraw', { p_token: state.token, p_join: state.join });
+    viewRecruit(r.ok ? '已取消報名。' : '無法取消，已錄取的班次請聯絡活動負責人。');
+  });
+  const f = document.getElementById('f');
+  f.addEventListener('submit', async e => {
+    e.preventDefault();
+    const m = document.getElementById('m'), go = document.getElementById('go'); m.innerHTML = ''; go.disabled = true;
+    const answers = {}; f.querySelectorAll('[data-q]').forEach(el => { answers[el.dataset.q] = el.value; });
+    const shift_ids = [...f.querySelectorAll('input[name=sh]:checked')].map(x => x.value);
+    const exp = document.getElementById('exp');
+    try {
+      const r = await rpc('payroll_apply', { p_token: state.token, p_join: state.join, p_data: { shift_ids, answers, experience: exp ? exp.value : '' } });
+      if (r.ok) { window.scrollTo(0, 0); return viewRecruit(mine ? '報名已更新。' : '已送出報名。錄取結果會顯示在「我的排班」。'); }
+      if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
+      m.innerHTML = '<div class="msg err">' + esc({ closed: '這場活動目前不開放報名。', no_shift: '請至少選一個班次。', bad_shift: '班次有變動，請重新整理頁面。', missing_answer: '請回答「' + (r.question || '') + '」。', bad_answer: '請重新選擇「' + (r.question || '') + '」。', missing_experience: '請填寫相關經驗。', missing_photo: '請上傳個人照片。', bad_join: PERR.bad_join }[r.error] || '送出失敗，請再試一次。') + '</div>';
+    } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+    go.disabled = false;
+  });
+}
+
+async function viewContract(appId) {
+  document.title = '勞動契約｜沃克思';
+  app.innerHTML = brand + '<div class="skeleton" style="height:300px"></div>';
+  const r = await rpc('payroll_contract', { p_token: state.token, p_app: appId });
+  if (!r.ok) { if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); } return viewList(); }
+  app.innerHTML = brand + `<button class="link no-print" id="back">← 返回</button>
+    <h1 style="margin-top:8px">勞動契約</h1>
+    <p class="sub">${r.accepted_at ? '你已於 ' + esc(new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(r.accepted_at))) + ' 確認同意。' : '請完整閱讀後勾選同意。錄取的班次如有變動，需要重新確認。'}</p>
+    <div class="card pad contract" style="margin-top:16px">${esc(r.text || '目前沒有已錄取的班次。')}</div>
+    ${r.accepted_at || !r.text ? '<button class="btn ghost no-print" id="print">列印／存成 PDF</button>' : `<label class="check no-print"><input id="ok" type="checkbox"><span>我已閱讀並同意以上契約內容。</span></label><div id="m"></div><button class="btn no-print" id="go">確認同意</button>`}`;
+  document.getElementById('back').addEventListener('click', viewList);
+  const pr = document.getElementById('print'); if (pr) pr.addEventListener('click', () => window.print());
+  const go = document.getElementById('go');
+  if (go) go.addEventListener('click', async () => {
+    if (!document.getElementById('ok').checked) { document.getElementById('m').innerHTML = '<div class="msg err">請先勾選同意。</div>'; return; }
+    go.disabled = true;
+    const r2 = await rpc('payroll_accept_contract', { p_token: state.token, p_app: appId });
+    if (r2.ok) return viewContract(appId);
+    document.getElementById('m').innerHTML = '<div class="msg err">確認失敗，請重新整理後再試。</div>'; go.disabled = false;
   });
 }
 
@@ -462,7 +583,8 @@ async function viewCheckin(action) {
       else { saveTicket(null); codeMsg = r.error === 'expired' ? 'QR 碼已過期，請重新掃描現場的 QR 碼。' : 'QR 碼無法辨識，請重新掃描。'; }
     } catch (err) { codeMsg = '網路連線失敗，請重新掃描 QR 碼。'; }
   }
-  if (!state.token && join) return viewRegister();
+  if (state.ticket && code && state.token) return viewCheckin();
+  if (state.join && join) return viewRecruit();
   if (!state.token) return viewLogin(codeMsg || (state.ticket ? '請先登入，登入後就可以簽到。' : null));
   if (state.ticket && code) return viewCheckin();
   viewList();

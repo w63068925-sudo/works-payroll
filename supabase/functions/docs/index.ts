@@ -8,7 +8,7 @@ const cors = {
 };
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
-const KINDS = ["id_front", "id_back", "bankbook"];
+const KINDS = ["id_front", "id_back", "bankbook", "photo"];
 const EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "application/pdf": "pdf" };
 
 Deno.serve(async (req: Request) => {

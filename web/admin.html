@@ -142,7 +142,8 @@ async function rpc(name, body) {
 }
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
-const d = s => s ? String(s).slice(0, 10).replace(/-/g, '/') : '—';
+const tpe = s => { s = String(s); return s.length > 10 && s.includes('T') ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date(s)) : s.slice(0, 10); };
+const d = s => s ? tpe(s).replace(/-/g, '/') : '—';
 const md = s => s ? String(s).slice(5, 10).replace('-', '/') : '—';
 const hm = t => t ? String(t).slice(11, 16) : '—';
 const dur = m => m == null ? '—' : Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0');
@@ -268,16 +269,16 @@ function viewEvents() {
       const r = await rpc('admin_create_event', { p_patch: { name: $('en').value, start_date: $('es').value, end_date: $('ee').value, default_break_minutes: $('eb').value, pay_within_days: $('ed').value } });
       if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + (r.error === 'bad_name' ? '請填活動名稱。' : '請確認日期，結束日不能早於開始日。') + '</div>'; return; }
       if ($('eh').value) await rpc('admin_update_event', { p_id: r.id, p_patch: { default_hourly_rate: $('eh').value } });
-      flash('ok', '活動已建立。接著把新人報名連結傳給工讀生。'); go('#/events/' + r.id + '/staff');
+      S.filter.nextRtab = 'shifts'; flash('ok', '活動與報名連結已建立。先新增班次，再把報名連結傳給工讀生。'); go('#/events/' + r.id + '/staff');
     };
   };
 }
 
 /* ---------- 單場活動 ---------- */
-const STEPS = [['staff', '人員'], ['att', '出勤'], ['review', '核對'], ['publish', '發布'], ['payout', '匯款']];
+const STEPS = [['staff', '招募'], ['att', '出勤'], ['review', '核對'], ['publish', '發布'], ['payout', '匯款']];
 async function loadEventData(id) {
-  const [ev, att, st] = await Promise.all([rpc('admin_event', { p_event: id }), rpc('admin_attendance', { p_event: id }), rpc('admin_event_staff', { p_event: id })]);
-  S.cache = { id, slips: ev.payslips, eventIssues: ev.event_issues, att: att.rows, settings: att.settings || {}, staff: st.staff, signupOpen: st.signup_open };
+  const [ev, att, st, rc] = await Promise.all([rpc('admin_event', { p_event: id }), rpc('admin_attendance', { p_event: id }), rpc('admin_event_staff', { p_event: id }), rpc('admin_recruit', { p_event: id })]);
+  S.cache = { id, slips: ev.payslips, eventIssues: ev.event_issues, att: att.rows, settings: att.settings || {}, staff: st.staff, signupOpen: st.signup_open, rc };
 }
 function stepInfo(e) {
   const c = S.cache, t = today();
@@ -286,7 +287,11 @@ function stepInfo(e) {
   const openAtt = c.att.filter(r => r.clock_in && !r.clock_out).length;
   const pub = live.filter(s => s.status === 'published').length;
   return {
-    staff: { done: c.staff.length > 0, s: c.staff.length + ' 人' },
+    staff: (() => {
+      const sh = c.rc.shifts, need = sh.reduce((a, x) => a + x.headcount, 0), acc = sh.reduce((a, x) => a + Number(x.accepted), 0), pend = sh.reduce((a, x) => a + Number(x.applied), 0);
+      if (!sh.length) return { done: c.staff.length > 0, s: c.staff.length ? c.staff.length + ' 人' : '尚未開班次', attn: !c.staff.length };
+      return { done: acc >= need, s: '錄取 ' + acc + ' / ' + need + (pend ? '，' + pend + ' 待審' : ''), attn: pend > 0 || acc < need };
+    })(),
     att: { done: c.att.length > 0 && !openAtt, s: openAtt ? openAtt + ' 筆未簽退' : c.att.length + ' 筆紀錄', attn: openAtt > 0 },
     review: { done: live.length > 0 && !issues, s: issues ? '剩 ' + issues + ' 件' : live.length ? '完成' : '尚無薪資單', attn: issues > 0 },
     publish: { done: live.length > 0 && pub === live.length, s: pub + ' / ' + live.length, attn: live.length > 0 && pub < live.length },
@@ -296,16 +301,17 @@ function stepInfo(e) {
 async function viewEvent(id, step) {
   const e = S.ov.events.find(x => x.id === id);
   if (!e) return go('#/events');
-  if (S.cache.id !== id || !step || S.cache.stale) { shell('events', '<div class="skeleton"></div><div class="skeleton"></div>'); await loadEventData(id); }
+  if (S.cache.id !== id) { S.filter.rtab = S.filter.nextRtab || null; S.filter.nextRtab = null; S.filter.rshift = ''; S.filter.qdraft = null; }
+  if (S.cache.id !== id || !step || S.cache.stale) { const keep = S.flash; shell('events', '<div class="skeleton"></div><div class="skeleton"></div>'); S.flash = keep; await loadEventData(id); }
   S.cache.stale = false;
   const info = stepInfo(e);
   if (!step) { step = (STEPS.find(([k]) => !info[k].done) || STEPS[3])[0]; history.replaceState(null, '', '#/events/' + id + '/' + step); }
   const [st] = eventState(e);
-  const body = { staff: stepStaff, att: stepAtt, review: stepReview, publish: stepPublish, payout: stepPayout }[step] || stepPublish;
+  const body = { staff: stepRecruit, att: stepAtt, review: stepReview, publish: stepPublish, payout: stepPayout }[step] || stepPublish;
   shell('events', `
     <div class="crumb"><a href="#/events">活動</a> / ${esc(e.name)}</div>
     <div class="head"><div><h1>${esc(e.name)}</h1><p class="sub">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(d(e.end_date)) : ''}　${st}</p></div>
-      <div class="row"><button class="btn ghost" id="join">新人報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
+      <div class="row"><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
     <div class="steps" role="tablist" aria-label="流程">
       ${STEPS.map(([k, t], i) => `<button class="step ${info[k].done ? 'done' : ''}" role="tab" aria-selected="${k === step}" data-s="${k}">
         <span class="n"><i>${info[k].done ? '✓' : i + 1}</i>${['一', '二', '三', '四', '五'][i]}</span><b>${t}</b><span class="s ${info[k].attn ? 'attn' : ''}">${esc(info[k].s)}</span></button>`).join('')}
@@ -328,7 +334,7 @@ function toggleJoin(e) {
     const q = qrcode(0, 'M'); q.addData(url); q.make();
     box.innerHTML = `<div class="card pad" style="margin-bottom:18px;display:flex;gap:18px;align-items:center;flex-wrap:wrap">
       <div style="width:120px" class="qrbox">${q.createSvgTag({ cellSize: 3, margin: 1, scalable: true })}</div>
-      <div class="grow" style="min-width:240px"><b>新人報名連結</b><p class="sub" style="margin:4px 0 10px">傳給第一次合作的工讀生，讓他們自己填基本資料與上傳證件。已經有資料的人直接登入即可。${r.open ? '' : '<br><span style="color:var(--warn)">這場活動已結束，連結目前無法使用。</span>'}</p>
+      <div class="grow" style="min-width:240px"><b>報名連結</b><p class="sub" style="margin:4px 0 10px">傳到 LINE 群組或社群。新朋友會先填基本資料，舊夥伴登入後直接選班次報名。${r.open ? '' : '<br><span style="color:var(--warn)">這場活動已結束，連結目前無法使用。</span>'}</p>
         <div class="row" style="align-items:center"><input id="ju" type="text" readonly value="${esc(url)}" class="grow" style="min-width:200px;width:auto"><button class="btn" id="copy">複製</button></div></div></div>`;
     $('copy').onclick = async () => { $('ju').select(); try { await navigator.clipboard.writeText(url); } catch (err) { document.execCommand('copy'); } $('copy').textContent = '已複製'; };
   });
@@ -342,18 +348,121 @@ function payOf(st, cfg) {
 }
 function splitWrap(listHtml) { return `<div class="split"><div>${listHtml}</div><aside class="card detail" id="detail" aria-live="polite"><p class="empty" style="padding:30px 0">點左側一筆查看明細</p></aside></div>`; }
 
-/* 步驟一：人員 */
+/* 步驟一：招募 */
+const RTABS = [['apps', '報名與錄取'], ['shifts', '班次'], ['form', '報名表單'], ['pay', '人員計薪']];
+const AST = { applied: ['待審', ''], waitlist: ['備取', 'warn'], accepted: ['錄取', 'ok'], rejected: ['不錄取', 'error'] };
+const shiftLabel = x => md(x.work_date) + ' ' + x.start + '–' + x.end + (x.overnight ? '⁺¹' : '') + (x.role ? ' ' + x.role : '');
+const stepRecruit = {
+  tab: () => S.filter.rtab || (S.cache.rc.shifts.length ? 'apps' : 'shifts'),
+  html: e => {
+    const t = stepRecruit.tab(), rc = S.cache.rc;
+    const pend = rc.applicants.filter(a => Object.values(a.shifts).some(v => v === 'applied')).length;
+    const tabs = `<div class="tabs" role="tablist" aria-label="招募">${RTABS.map(([k, n]) => `<button class="tab" role="tab" aria-selected="${k === t}" data-rt="${k}">${n}${k === 'apps' && pend ? ' <span class="badge warn">' + pend + '</span>' : k === 'shifts' ? ' <span class="dim">' + rc.shifts.length + '</span>' : ''}</button>`).join('')}</div>`;
+    const bar = `<div class="row" style="margin-bottom:12px;align-items:center"><span class="badge ${rc.event.recruiting ? 'ok' : ''}">${rc.event.recruiting ? '招募中' : '已停止招募'}</span>
+      <span class="sub grow">${rc.applicants.length} 人報名</span><button class="btn ghost sm" id="copyjoin">複製報名連結</button></div>`;
+    return tabs + bar + ({ apps: recruitApps, shifts: recruitShifts, form: recruitForm, pay: stepStaff }[t]).html(e);
+  },
+  bind: e => {
+    on('[data-rt]', 'click', (ev, b) => { S.filter.rtab = b.dataset.rt; S.detail = null; S.sel = new Set(); viewEvent(e.id, 'staff'); });
+    $('copyjoin').onclick = async () => { const url = new URL('./', location.href).href + '?join=' + S.cache.rc.event.signup_code; try { await navigator.clipboard.writeText(url); $('copyjoin').textContent = '已複製'; } catch (err) { prompt('複製這個連結', url); } };
+    ({ apps: recruitApps, shifts: recruitShifts, form: recruitForm, pay: stepStaff }[stepRecruit.tab()]).bind(e);
+  }
+};
+const recruitApps = {
+  html: () => {
+    const rc = S.cache.rc, fs = S.filter.rshift || '';
+    const shift = rc.shifts.find(x => x.id === fs);
+    const rows = rc.applicants.filter(a => !shift || a.shifts[shift.id]);
+    const sel = [...S.sel];
+    if (!rc.shifts.length) return '<div class="card empty">還沒有班次。先到「班次」分頁開班，工讀生才能報名。</div>';
+    return `<div class="chips"><button class="chip" aria-pressed="${!shift}" data-rs="">全部班次</button>${rc.shifts.map(x => `<button class="chip" aria-pressed="${x.id === fs}" data-rs="${esc(x.id)}">${esc(shiftLabel(x))}　${x.accepted}/${x.headcount}</button>`).join('')}</div>
+      ${splitWrap(`${shift ? '<p class="sub" style="margin-bottom:10px">' + esc(shiftLabel(shift)) + '　需要 ' + shift.headcount + ' 人，已錄取 ' + shift.accepted + ' 人。勾選後批次處理。</p>' : '<p class="sub" style="margin-bottom:10px">點選上方班次可以批次錄取；點任一人查看報名內容。</p>'}
+        <div class="card tablebox"><table><thead><tr>${shift ? '<th><input type="checkbox" id="all" aria-label="全選"></th>' : ''}<th>姓名</th><th>${shift ? '這個班次' : '報名班次'}</th><th class="r">合作過</th><th>契約</th></tr></thead>
+        <tbody>${rows.map(a => `<tr data-k="${esc(a.app_id)}" class="${S.detail && S.detail.key === a.app_id ? 'on' : ''}">${shift ? `<td><input type="checkbox" class="ck" data-id="${esc(a.app_id)}" ${S.sel.has(a.app_id) ? 'checked' : ''} aria-label="選取 ${esc(a.name)}"></td>` : ''}
+          <td>${esc(a.name)}${a.source === 'self' && !a.past_events ? ' <span class="badge ok">新人</span>' : ''}${a.has_photo ? ' <span class="dim">有照片</span>' : ''}<div class="dim">${esc(a.phone || '')}</div></td>
+          <td style="white-space:normal">${shift ? '<span class="badge ' + AST[a.shifts[shift.id]][1] + '">' + AST[a.shifts[shift.id]][0] + '</span>' : rc.shifts.filter(x => a.shifts[x.id]).map(x => '<span class="badge ' + AST[a.shifts[x.id]][1] + '" title="' + esc(AST[a.shifts[x.id]][0]) + '">' + esc(md(x.work_date)) + ' ' + esc(AST[a.shifts[x.id]][0]) + '</span>').join(' ')}</td>
+          <td class="r">${a.past_events ? a.past_events + ' 場' : '—'}</td>
+          <td>${a.contract_accepted_at ? '<span class="badge ok">已確認</span>' : Object.values(a.shifts).includes('accepted') ? '<span class="badge warn">待確認</span>' : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">還沒有人報名。把報名連結傳到 LINE 群組。</td></tr>'}</tbody></table></div>
+        ${shift && sel.length ? `<div class="bulk"><span class="grow">已選 ${sel.length} 人</span><button class="btn" data-dec="accepted">錄取</button><button class="btn ghost" data-dec="waitlist">備取</button><button class="btn ghost" data-dec="rejected">不錄取</button></div>` : ''}`)}`;
+  },
+  bind: e => {
+    on('[data-rs]', 'click', (ev, b) => { S.filter.rshift = b.dataset.rs; S.sel = new Set(); viewEvent(e.id, 'staff'); });
+    on('tbody tr[data-k]', 'click', (ev, tr) => { if (ev.target.closest('input')) return; openDetail('app', tr.dataset.k, e); });
+    on('.ck', 'change', (ev, c) => { c.checked ? S.sel.add(c.dataset.id) : S.sel.delete(c.dataset.id); viewEvent(e.id, 'staff'); });
+    const all = $('all'); if (all) { const fs = S.filter.rshift; const ids = S.cache.rc.applicants.filter(a => a.shifts[fs]).map(a => a.app_id); all.checked = ids.length && ids.every(i => S.sel.has(i)); all.onchange = () => { ids.forEach(i => all.checked ? S.sel.add(i) : S.sel.delete(i)); viewEvent(e.id, 'staff'); }; }
+    on('[data-dec]', 'click', async (ev, b) => {
+      const items = [...S.sel].map(app => ({ app, shift: S.filter.rshift }));
+      const r = await rpc('admin_decide', { p_items: items, p_status: b.dataset.dec });
+      const fl = (r.full || []).length, cl = (r.clash || []).length;
+      flash(fl || cl ? 'warn' : 'ok', '已更新 ' + r.updated + ' 人。' + (fl ? '名額已滿，' + fl + ' 人未錄取，可改列備取。' : '') + (cl ? cl + ' 人已錄取同時段的其他班次，未重複錄取。' : ''));
+      S.sel = new Set(); refreshEvent(e, 'staff');
+    });
+  }
+};
+const recruitShifts = {
+  html: () => {
+    const rc = S.cache.rc, cfg = S.cache.settings;
+    return splitWrap(`<div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">每個班次是一個時段與崗位。工讀生報名時勾選想上的班次。</p><button class="btn sm" id="newshift">新增班次</button></div>
+      <div class="card tablebox"><table><thead><tr><th>日期</th><th>時段</th><th>崗位</th><th class="r">時薪</th><th class="r">錄取 / 名額</th><th class="r">待審</th></tr></thead>
+      <tbody>${rc.shifts.map(x => `<tr data-k="${esc(x.id)}" class="${S.detail && S.detail.key === x.id ? 'on' : ''}"><td>${esc(d(x.work_date))}</td><td>${esc(x.start)}–${esc(x.end)}${x.overnight ? ' <span class="dim">翌日</span>' : ''}</td><td>${esc(x.role || '—')}</td>
+        <td class="r">${x.rate != null ? money(x.rate) : cfg.default_hourly_rate != null ? money(cfg.default_hourly_rate) + ' <span class="dim">預設</span>' : '<span class="badge warn">未設</span>'}</td>
+        <td class="r">${x.accepted >= x.headcount ? '<span class="badge ok">' + x.accepted + ' / ' + x.headcount + '</span>' : x.accepted + ' / ' + x.headcount}</td><td class="r">${x.applied || '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">還沒有班次，按「新增班次」開始。</td></tr>'}</tbody></table></div>`);
+  },
+  bind: e => { $('newshift').onclick = () => openDetail('newshift', 'new', e); on('tbody tr[data-k]', 'click', (ev, tr) => openDetail('shift', tr.dataset.k, e)); }
+};
+const recruitForm = {
+  html: () => {
+    const ev = S.cache.rc.event, f = ev.form || {}, qs = S.filter.qdraft || (f.questions || []).map(q => Object.assign({}, q));
+    S.filter.qdraft = qs;
+    return `<form id="ff" class="card pad" style="max-width:760px">
+      <div class="row"><div class="grow" style="min-width:220px"><label for="loc">工作地點</label><input id="loc" type="text" value="${esc(ev.location || '')}" placeholder="國立成功大學 光復校區"></div></div>
+      <label for="desc">活動說明（顯示在報名頁）</label><textarea id="desc" style="height:96px" placeholder="集合時間、服裝、注意事項">${esc(ev.description || '')}</textarea>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin-top:16px"><input type="checkbox" id="rec" ${ev.recruiting ? 'checked' : ''}> 開放報名</label>
+      <h2>要收集的資料</h2>
+      <p class="sub">姓名、身分證、生日、電話、地址、匯款帳戶、證件影本固定會收。以下可以每場自己決定。</p>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="fexp" ${f.experience ? 'checked' : ''}> 相關經驗（必填文字）</label>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="fphoto" ${f.photo ? 'checked' : ''}> 個人照片（必須上傳）</label>
+      <h2>自訂問題</h2>
+      <div id="qlist">${qs.map((q, i) => `<div class="card pad" style="margin-bottom:8px;padding:12px" data-qi="${i}">
+        <div class="row"><div class="grow" style="min-width:200px"><label>題目</label><input type="text" data-f="label" value="${esc(q.label || '')}" placeholder="身高"></div>
+          <div><label>類型</label><select data-f="type" style="width:120px"><option value="text" ${q.type !== 'choice' ? 'selected' : ''}>簡答</option><option value="choice" ${q.type === 'choice' ? 'selected' : ''}>單選</option></select></div></div>
+        <div class="row" style="margin-top:8px;align-items:center">${q.type === 'choice' ? `<div class="grow" style="min-width:200px"><label>選項（用逗號分隔）</label><input type="text" data-f="options" value="${esc((q.options || []).join('，'))}" placeholder="S，M，L，XL"></div>` : '<span class="grow"></span>'}
+          <label style="display:flex;gap:6px;align-items:center;color:var(--ink);margin:0"><input type="checkbox" data-f="required" ${q.required ? 'checked' : ''}> 必填</label>
+          <button type="button" class="link" data-rm="${i}">刪除</button></div></div>`).join('') || '<p class="sub">沒有自訂問題。</p>'}</div>
+      <button type="button" class="btn ghost sm" id="addq" style="margin-top:6px">新增問題</button>
+      <div id="dm" style="margin-top:14px"></div>
+      <div class="row" style="margin-top:6px"><button class="btn">儲存報名表單</button><a class="btn ghost" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="./?join=${esc(ev.signup_code)}">預覽報名頁</a></div></form>`;
+  },
+  bind: e => {
+    const read = () => { S.filter.qdraft = [...document.querySelectorAll('[data-qi]')].map((el, i) => {
+      const old = S.filter.qdraft[i] || {}, get = k => el.querySelector('[data-f=' + k + ']');
+      return { id: old.id || '', label: get('label').value, type: get('type').value, required: get('required').checked, options: get('options') ? get('options').value.split(/[,，、]/).map(x => x.trim()).filter(Boolean) : (old.options || []) }; }); };
+    const keep = () => ({ loc: $('loc').value, desc: $('desc').value, rec: $('rec').checked, exp: $('fexp').checked, photo: $('fphoto').checked });
+    const restore = k => { $('loc').value = k.loc; $('desc').value = k.desc; $('rec').checked = k.rec; $('fexp').checked = k.exp; $('fphoto').checked = k.photo; };
+    const redraw = () => { const k = keep(); viewEvent(e.id, 'staff').then(() => restore(k)); };
+    $('addq').onclick = () => { read(); S.filter.qdraft.push({ label: '', type: 'text', required: false, options: [] }); redraw(); };
+    on('[data-rm]', 'click', (ev, b) => { read(); S.filter.qdraft.splice(Number(b.dataset.rm), 1); redraw(); });
+    on('[data-f=type]', 'change', () => { read(); redraw(); });
+    $('ff').onsubmit = async ev => {
+      ev.preventDefault(); read();
+      const r = await rpc('admin_save_event_info', { p_event: e.id, p_patch: { location: $('loc').value, description: $('desc').value, recruiting: $('rec').checked,
+        form: { experience: $('fexp').checked, photo: $('fphoto').checked, questions: S.filter.qdraft } } });
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + (r.error === 'few_options' ? '「' + esc(r.question) + '」至少要兩個選項。' : '儲存失敗。') + '</div>'; return; }
+      S.filter.qdraft = null; flash('ok', '報名表單已儲存。'); refreshEvent(e, 'staff');
+    };
+  }
+};
 const stepStaff = {
   html: () => {
     const c = S.cache;
     return splitWrap(`
-      <div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">這場活動的工作人員。新人用報名連結登錄後會自動出現在這裡；舊人員打卡後也會加入。</p><button class="btn ghost sm" id="addatt">補登出勤</button></div>
+      <div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">已錄取或已出勤的人員，以及他們在這場活動的計薪方式。</p><button class="btn ghost sm" id="addatt">補登出勤</button></div>
       <div class="card tablebox"><table>
-        <thead><tr><th>姓名</th><th>計薪</th><th class="r">出勤</th><th class="r">證件</th><th>薪資單</th></tr></thead>
+        <thead><tr><th>姓名</th><th>計薪</th><th class="r">班次</th><th class="r">出勤</th><th class="r">證件</th><th>薪資單</th></tr></thead>
         <tbody>${c.staff.map(p => `<tr data-k="${esc(p.person_id)}" class="${S.detail && S.detail.key === p.person_id ? 'on' : ''}"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge ok">新登錄</span>' : ''}<div class="dim">${esc(p.national_id)}</div></td>
-          <td>${payOf(p.staff, c.settings)}</td><td class="r">${p.days} 天${p.open ? ' <span class="badge warn">未簽退</span>' : ''}</td>
+          <td>${payOf(p.staff, c.settings)}</td><td class="r">${p.accepted_shifts || '—'}${p.accepted_shifts && !p.contract ? ' <span class="badge warn">契約</span>' : ''}</td><td class="r">${p.days} 天${p.open ? ' <span class="badge warn">未簽退</span>' : ''}</td>
           <td class="r">${p.docs}/3${p.has_bank ? '' : ' <span class="badge warn">無帳戶</span>'}</td>
-          <td>${p.slip ? '<span class="badge ' + esc(p.slip.status) + '">' + STATUS[p.slip.status] + '</span>' : '<span class="dim">—</span>'}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">還沒有人員。按右上角「新人報名連結」傳給工讀生。</td></tr>'}</tbody>
+          <td>${p.slip ? '<span class="badge ' + esc(p.slip.status) + '">' + STATUS[p.slip.status] + '</span>' : '<span class="dim">—</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">還沒有人員。到「報名與錄取」錄取報名者。</td></tr>'}</tbody>
       </table></div>`);
   },
   bind: e => { on('tbody tr[data-k]', 'click', (ev, tr) => openDetail('staff', tr.dataset.k, e)); $('addatt').onclick = () => openDetail('addatt', 'new', e); }
@@ -507,6 +616,56 @@ async function openDetail(kind, key, e, keepScroll) {
   const box = $('detail'); if (!box) return;
   const close = '<button class="link x" id="dx">關閉</button>';
   const bindClose = () => { $('dx').onclick = () => { S.detail = null; box.innerHTML = '<p class="empty" style="padding:30px 0">點左側一筆查看明細</p>'; document.querySelectorAll('tbody tr.on').forEach(tr => tr.classList.remove('on')); }; };
+  if (kind === 'app') {
+    const rc = S.cache.rc, a = rc.applicants.find(x => x.app_id === key); if (!a) return;
+    const qs = (rc.event.form && rc.event.form.questions) || [];
+    box.innerHTML = `${close}<h1 style="font-size:19px">${esc(a.name)}</h1><p class="sub" style="margin-top:4px">${esc(a.national_id)}　${esc(a.phone || '')}　${a.past_events ? '合作過 ' + a.past_events + ' 場' : '第一次合作'}</p>
+      <div class="row" style="margin-top:10px">${a.has_photo ? '<button class="btn ghost sm" id="photo">看照片</button>' : ''}<button class="btn ghost sm" id="toperson">人員資料（證件 ${a.docs}/3）</button></div>
+      ${qs.length || a.experience ? '<h2>報名內容</h2><dl class="kv">' + qs.map(q => '<dt>' + esc(q.label) + '</dt><dd>' + esc(a.answers[q.id] || '—') + '</dd>').join('') + (a.experience ? '<dt>相關經驗</dt><dd style="text-align:left;white-space:pre-wrap">' + esc(a.experience) + '</dd>' : '') + '</dl>' : ''}
+      <h2>報名的班次</h2>
+      ${rc.shifts.filter(x => a.shifts[x.id]).map(x => `<div class="issue"><div>${esc(shiftLabel(x))}<div class="dim">${x.accepted}/${x.headcount} 已錄取　目前：${AST[a.shifts[x.id]][0]}</div></div>
+        <div class="row" style="gap:6px">${['accepted', 'waitlist', 'rejected'].map(st => `<button class="btn ${a.shifts[x.id] === st ? '' : 'ghost'} sm" data-one="${esc(x.id)}" data-st="${st}">${AST[st][0]}</button>`).join('')}</div></div>`).join('')}
+      <button class="btn block" id="accall">錄取全部報名的班次</button>
+      <h2>勞動契約</h2><p class="sub">${a.contract_accepted_at ? '已於 ' + esc(new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(a.contract_accepted_at))) + ' 線上確認。' : Object.values(a.shifts).includes('accepted') ? '已錄取，等待本人登入確認。錄取的班次有變動時需要重新確認。' : '錄取後由本人登入確認。'}</p>
+      ${Object.values(a.shifts).includes('accepted') ? '<button class="link" id="ctext">查看契約內容</button><div id="ctbox"></div>' : ''}`;
+    bindClose();
+    $('toperson').onclick = () => go('#/people/' + a.person_id);
+    if ($('photo')) $('photo').onclick = () => viewDoc(a.person_id, 'photo');
+    const decide = async (items, st) => {
+      const r = await rpc('admin_decide', { p_items: items, p_status: st });
+      const parts = []; if ((r.full || []).length) parts.push('名額已滿：' + r.full.join('、')); if ((r.clash || []).length) parts.push('與已錄取的班次時間重疊：' + r.clash.join('、'));
+      flash(parts.length ? 'warn' : 'ok', parts.length ? a.name + ' 部分未錄取。' + parts.join('；') + '。' : a.name + ' 已更新。'); S.detail = { kind: 'app', key }; refreshEvent(e, 'staff'); };
+    box.querySelectorAll('[data-one]').forEach(b => b.onclick = () => decide([{ app: key, shift: b.dataset.one }], b.dataset.st));
+    $('accall').onclick = () => decide(rc.shifts.filter(x => a.shifts[x.id] && a.shifts[x.id] !== 'accepted').map(x => ({ app: key, shift: x.id })), 'accepted');
+    if ($('ctext')) $('ctext').onclick = async () => { const r = await rpc('admin_contract', { p_app: key }); $('ctbox').innerHTML = '<div class="card pad" style="white-space:pre-wrap;font-size:13px;line-height:1.7;margin-top:8px;background:#fff">' + esc(r.text || '') + '</div>'; };
+    return;
+  }
+  if (kind === 'shift' || kind === 'newshift') {
+    const x = kind === 'shift' ? S.cache.rc.shifts.find(y => y.id === key) : null;
+    if (kind === 'shift' && !x) return;
+    box.innerHTML = `${close}<h1 style="font-size:19px">${x ? '修改班次' : '新增班次'}</h1>
+      <label for="sd">${x ? '日期' : '日期（從）'}</label><input id="sd" type="date" value="${esc(x ? x.work_date : (e.start_date || ''))}">
+      ${x ? '' : `<label for="su">到（同樣的班連續多天，單日可留空）</label><input id="su" type="date" value="${esc(e.end_date && e.end_date !== e.start_date ? e.end_date : '')}">`}
+      <div class="row" style="margin-top:14px"><div class="grow"><label for="ss">開始</label><input id="ss" type="text" inputmode="numeric" placeholder="10:00" value="${esc(x ? x.start : '')}"></div><div class="grow"><label for="se">結束</label><input id="se" type="text" inputmode="numeric" placeholder="18:30" value="${esc(x ? x.end : '')}"></div></div>
+      <label for="sr">崗位</label><input id="sr" type="text" placeholder="PT" value="${esc(x ? x.role || '' : '')}">
+      <div class="row" style="margin-top:14px"><div class="grow"><label for="sh">需要人數</label><input id="sh" type="text" inputmode="numeric" value="${esc(x ? x.headcount : '1')}"></div><div class="grow"><label for="sp">時薪（留空＝活動預設）</label><input id="sp" type="text" inputmode="decimal" value="${esc(x && x.rate != null ? Number(x.rate) : '')}"></div></div>
+      <label for="sn">備註（工讀生看得到）</label><input id="sn" type="text" placeholder="需自備黑色長褲" value="${esc(x ? x.note || '' : '')}">
+      <div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">${x ? '儲存' : '建立班次'}</button>
+      ${x ? '<button class="link" id="del" style="margin-top:12px;color:var(--danger)">刪除班次</button><p class="sub" style="margin-top:8px">修改已有人錄取的班次，錄取者需要重新確認契約。</p>' : '<p class="sub" style="margin-top:10px">結束時間早於開始時間會視為跨夜班。</p>'}`;
+    bindClose();
+    $('save').onclick = async () => {
+      const r = await rpc('admin_save_shifts', { p_event: e.id, p_shift: x ? key : null, p_patch: { work_date: $('sd').value, until_date: $('su') ? $('su').value : '', start: $('ss').value, end: $('se').value, role: $('sr').value, headcount: $('sh').value, rate: $('sp').value, note: $('sn').value } });
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + (r.error === 'below_accepted' ? '人數不能少於已錄取人數。' : '請確認日期、時間（例如 10:00）與人數。') + '</div>'; return; }
+      flash('ok', x ? '班次已更新。' : '已建立 ' + r.count + ' 個班次。'); S.detail = null; refreshEvent(e, 'staff');
+    };
+    if ($('del')) $('del').onclick = async () => {
+      if (!$('del').dataset.sure) { $('del').dataset.sure = '1'; $('del').textContent = '確定刪除？再按一次'; return; }
+      const r = await rpc('admin_delete_shift', { p_shift: key });
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">這個班次已有人錄取，請先取消錄取再刪除。</div>'; return; }
+      flash('ok', '班次已刪除。'); S.detail = null; refreshEvent(e, 'staff');
+    };
+    return;
+  }
   if (kind === 'addatt') {
     box.innerHTML = `${close}<h1 style="font-size:19px">補登出勤</h1><p class="sub" style="margin-top:4px">給忘記掃碼簽到的人。建立後再填上下班時間。</p>
       <label for="xid">身分證字號</label><input id="xid" type="text" maxlength="10" autocapitalize="characters">
@@ -598,7 +757,8 @@ async function viewToday(pick) {
   const t = today(), rows = att.rows.filter(r => r.work_date === t || (r.clock_in && !r.clock_out));
   const working = rows.filter(r => r.clock_in && !r.clock_out), done = rows.filter(r => r.clock_out);
   const seen = new Set(rows.map(r => r.person_id));
-  const notYet = st.staff.filter(p => !seen.has(p.person_id) && (!p.staff || p.staff.relation !== 'contract'));
+  const notYet = st.has_shifts ? st.staff.filter(p => p.today_shift && !seen.has(p.person_id)) : st.staff.filter(p => !seen.has(p.person_id) && (!p.staff || p.staff.relation !== 'contract'));
+  const shiftOf = {}; st.staff.forEach(p => { shiftOf[p.person_id] = p.today_shift; });
   const list = (title, items, fn) => `<h2>${title}（${items.length}）</h2><div class="card">${items.length ? '<table>' + items.map(fn).join('') + '</table>' : '<p class="empty" style="padding:18px">—</p>'}</div>`;
   shell('today', `
     <div class="head"><div><h1>今日現場</h1><p class="sub">${esc(d(t))}　每 30 秒自動更新</p></div><a class="btn ghost" style="display:inline-flex;align-items:center;text-decoration:none" href="#/events/${esc(e.id)}/att">到出勤明細</a></div>
@@ -608,10 +768,10 @@ async function viewToday(pick) {
         <p class="sub" style="margin-top:10px">每分鐘自動更換</p><button class="btn block" id="full" style="margin-top:12px">全螢幕顯示</button></div>
       <div>
         <div class="stats"><div class="card stat"><div class="k">上班中</div><div class="v">${working.length}</div></div><div class="card stat"><div class="k">已簽退</div><div class="v">${done.length}</div></div><div class="card stat"><div class="k">尚未簽到</div><div class="v" style="${notYet.length ? 'color:var(--warn)' : ''}">${notYet.length}</div></div></div>
-        ${list('上班中', working, r => `<tr><td>${esc(r.name)}</td><td class="r">${esc(hm(r.clock_in))} 簽到${r.work_date !== t ? ' <span class="badge warn">' + esc(md(r.work_date)) + ' 未簽退</span>' : ''}</td></tr>`)}
-        ${list('尚未簽到', notYet, p => `<tr><td>${esc(p.name)}</td><td class="r"><span class="dim">${esc(p.phone || '')}</span></td></tr>`)}
+        ${list('上班中', working, r => `<tr><td>${esc(r.name)}${st.has_shifts && !shiftOf[r.person_id] ? ' <span class="badge warn">今天沒排班</span>' : ''}</td><td class="r">${esc(hm(r.clock_in))} 簽到${r.work_date !== t ? ' <span class="badge warn">' + esc(md(r.work_date)) + ' 未簽退</span>' : ''}</td></tr>`)}
+        ${list('尚未簽到', notYet, p => `<tr><td>${esc(p.name)}${p.today_shift ? '<div class="dim">班次 ' + esc(p.today_shift) + '</div>' : ''}</td><td class="r"><span class="dim">${esc(p.phone || '')}</span></td></tr>`)}
         ${list('已簽退', done, r => `<tr><td>${esc(r.name)}</td><td class="r">${esc(hm(r.clock_in))}–${esc(hm(r.clock_out))}　${esc(dur(r.minutes))}</td></tr>`)}
-        <p class="sub" style="margin-top:10px">「尚未簽到」是這場活動已登錄、但今天還沒打卡的人。忘記打卡請到出勤明細補登。</p>
+        <p class="sub" style="margin-top:10px">${st.has_shifts ? '「尚未簽到」是今天有排班、但還沒打卡的人。' : '這場活動沒有開班次，「尚未簽到」列出所有活動人員。'}忘記打卡請到出勤明細補登。</p>
       </div></div>`);
   on('.tab', 'click', (ev, b) => go('#/today/' + b.dataset.id));
   $('full').onclick = () => showQr(e);
@@ -689,6 +849,15 @@ async function openPerson(id) {
   $('reset').onclick = async () => { const r2 = await rpc('admin_reset_password', { p_person: id }); $('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>'; };
 }
 
+async function viewDoc(personId, kind) {
+  const win = window.open('', '_blank');
+  try {
+    const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: personId, kind }) });
+    const j = await res.json();
+    if (j.ok) { if (win) win.location = j.url; else location.href = j.url; } else if (win) win.close();
+  } catch (err) { if (win) win.close(); }
+}
+
 /* ---------- 薪資發放 ---------- */
 function viewPayouts() {
   const t = today();
@@ -732,7 +901,22 @@ async function viewSettings(tab) {
       <label for="wd">生效日</label><input id="wd" type="date" required><label for="wh">每小時最低工資</label><input id="wh" type="text" inputmode="decimal" required>
       <label for="wm">每月最低工資</label><input id="wm" type="text" inputmode="numeric" required><div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form></div>`;
   } else {
-    body = `<div class="card pad" style="max-width:560px"><p>目前登入：<b>${esc(S.user)}</b></p><p class="sub" style="margin-top:8px">新增管理員需要一次性的設定碼，請向系統維護人員索取。拿到後在登入頁按「第一次使用？用設定碼建立管理員」。</p></div>`;
+    const r = await rpc('admin_list_admins');
+    const ts = v => v ? new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(v)) : '—';
+    body = `<div class="split" style="grid-template-columns:minmax(0,1fr) minmax(300px,380px)"><div>
+      <div class="card tablebox"><table><thead><tr><th>帳號</th><th>建立</th><th>最近登入</th><th></th></tr></thead>
+      <tbody>${r.admins.map(a => `<tr><td><b>${esc(a.username)}</b>${a.is_self ? ' <span class="badge ok">你</span>' : ''}${a.locked ? ' <span class="badge warn">鎖定中</span>' : ''}${a.created_by ? '<div class="dim">由 ' + esc(a.created_by) + ' 新增</div>' : ''}</td>
+        <td>${esc(d(a.created_at))}</td><td>${esc(ts(a.last_login))}</td>
+        <td class="r">${a.is_self ? '' : `<button class="link" data-reset="${esc(a.username)}">重設密碼</button>　<button class="link" style="color:var(--danger)" data-rm="${esc(a.username)}">移除</button>`}</td></tr>`).join('')}</tbody></table></div>
+      <div id="am" style="margin-top:12px"></div>
+      <form id="cpf" class="card pad" style="margin-top:16px;max-width:460px"><b>更改我的密碼</b>
+        <label for="op">目前的密碼</label><input id="op" type="password" autocomplete="current-password" required>
+        <label for="np">新密碼（至少 10 個字）</label><input id="np" type="password" autocomplete="new-password" minlength="10" required>
+        <div id="cm" style="margin-top:12px"></div><button class="btn block">更改密碼</button></form></div>
+      <form id="af" class="card pad"><b>新增管理員</b><p class="sub" style="margin:4px 0 0">建立後把帳號和密碼私下交給對方，請對方登入後到這裡更改密碼。管理員可以看到所有人員的個資與證件。</p>
+        <label for="nu">帳號</label><input id="nu" type="text" autocapitalize="none" autocomplete="off" placeholder="amy 或 amy@example.com" required>
+        <label for="npw">初始密碼（至少 10 個字）</label><div class="row" style="align-items:center"><input id="npw" type="text" autocomplete="off" class="grow" style="width:auto;min-width:160px" required><button type="button" class="btn ghost sm" id="gen">產生</button></div>
+        <div id="nm" style="margin-top:12px"></div><button class="btn block">新增管理員</button></form></div>`;
   }
   shell('settings', `<div class="head"><div><h1>設定</h1></div></div>
     <div class="tabs" role="tablist">${TABS.map(([k, t]) => `<button class="tab" role="tab" aria-selected="${k === tab}" data-t="${k}">${t}</button>`).join('')}</div>${body}`);
@@ -742,6 +926,33 @@ async function viewSettings(tab) {
   if (f('hf')) {
     f('hf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_holidays', { p_set: { day: $('hd').value, name: $('hn').value.trim() } }); if (r.ok === false) { $('dm').innerHTML = '<div class="msg err">日期或名稱有誤。</div>'; return; } flash('ok', '已新增。'); viewSettings('holidays'); };
     on('[data-del]', 'click', async (ev, b) => { await rpc('admin_holidays', { p_set: { day: b.dataset.del, name: '' } }); flash('ok', '已刪除 ' + d(b.dataset.del) + '。'); viewSettings('holidays'); });
+  }
+  if (f('af')) {
+    const rnd = () => { const c = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const a = new Uint32Array(14); crypto.getRandomValues(a); return [...a].map(x => c[x % c.length]).join(''); };
+    $('gen').onclick = () => { $('npw').value = rnd(); };
+    $('af').onsubmit = async ev => {
+      ev.preventDefault();
+      const r = await rpc('admin_create_admin', { p_username: $('nu').value, p_password: $('npw').value });
+      if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + ({ bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 10 個字。', taken: '這個帳號已經存在。' }[r.error] || '新增失敗。') + '</div>'; return; }
+      flash('ok', '已新增管理員 ' + $('nu').value.trim().toLowerCase() + '。請把帳號與初始密碼私下交給對方。'); viewSettings('admins');
+    };
+    $('cpf').onsubmit = async ev => {
+      ev.preventDefault();
+      const r = await rpc('admin_change_password', { p_old: $('op').value, p_new: $('np').value });
+      $('cm').innerHTML = r.ok ? '<div class="msg ok">密碼已更改，其他裝置上的登入已登出。</div>' : '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 10 個字。' : '目前的密碼不正確。') + '</div>';
+      if (r.ok) { $('op').value = ''; $('np').value = ''; }
+    };
+    on('[data-rm]', 'click', async (ev, b) => {
+      if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = '確定移除？'; return; }
+      const r = await rpc('admin_remove_admin', { p_username: b.dataset.rm });
+      if (!r.ok) { $('am').innerHTML = '<div class="msg err">' + ({ self: '不能移除自己。', last: '至少要保留一位管理員。' }[r.error] || '移除失敗。') + '</div>'; return; }
+      flash('ok', '已移除 ' + b.dataset.rm + '。'); viewSettings('admins');
+    });
+    on('[data-reset]', 'click', async (ev, b) => {
+      const pw = rnd();
+      const r = await rpc('admin_reset_admin', { p_username: b.dataset.reset, p_password: pw });
+      $('am').innerHTML = r.ok ? '<div class="msg ok">' + esc(b.dataset.reset) + ' 的新密碼：<b style="font-family:var(--num)">' + esc(pw) + '</b>　請私下交給對方，這個密碼只會顯示這一次。</div>' : '<div class="msg err">重設失敗。</div>';
+    });
   }
   if (f('wf')) f('wf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_min_wages', { p_set: { effective_from: $('wd').value, hourly: $('wh').value, monthly: $('wm').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">請確認日期與金額。</div>'; return; } flash('ok', '最低工資已儲存。'); viewSettings('wages'); };
 }
