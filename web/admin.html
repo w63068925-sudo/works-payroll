@@ -6,89 +6,135 @@
 <meta name="robots" content="noindex">
 <title>薪資管理｜沃克思</title>
 <style>
-:root{--paper:#f5f2ec;--card:#fffdf9;--ink:#1d1c1a;--muted:#6f6b63;--line:#e3ded3;--accent:#1f5c4a;--accent-soft:#e4efe9;--warn:#8a5a00;--warn-soft:#fbf1d9;--danger:#a3271f;--danger-soft:#fbe6e3;--num:"SF Mono","Roboto Mono",ui-monospace,Menlo,monospace}
+:root{--paper:#f5f2ec;--card:#fffdf9;--ink:#1d1c1a;--muted:#6f6b63;--line:#e3ded3;--soft:#efebe3;--accent:#1f5c4a;--accent-soft:#e4efe9;--warn:#8a5a00;--warn-soft:#fbf1d9;--danger:#a3271f;--danger-soft:#fbe6e3;--num:"SF Mono","Roboto Mono",ui-monospace,Menlo,monospace}
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
 button,input,select,textarea{font:inherit;color:inherit}
-.wrap{max-width:1180px;margin:0 auto;padding:20px 16px 80px}
-.narrow{max-width:440px}
-.bar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px}
-.brand b{font-size:15px;letter-spacing:.18em}.brand span{font-size:13px;color:var(--muted);margin-left:10px}
-h1{font-size:22px;margin:0}
-h2{font-size:12.5px;font-weight:600;color:var(--muted);letter-spacing:.12em;margin:22px 0 8px}
+a{color:inherit}
+/* 外框：左側主選單＋內容 */
+.shell{display:grid;grid-template-columns:212px minmax(0,1fr);min-height:100vh}
+.side{position:sticky;top:0;height:100vh;border-right:1px solid var(--line);background:var(--card);padding:20px 12px;display:flex;flex-direction:column;gap:2px}
+.logo{padding:0 12px 18px}.logo b{font-size:15px;letter-spacing:.2em;display:block}.logo span{font-size:12px;color:var(--muted)}
+.nav{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-radius:9px;color:var(--muted);text-decoration:none;white-space:nowrap}
+.nav:hover{background:var(--soft);color:var(--ink)}
+.nav.on{background:var(--soft);color:var(--ink);font-weight:600}
+.nav .cnt{font-size:12px;min-width:20px;padding:0 6px;border-radius:99px;background:var(--warn-soft);color:var(--warn);text-align:center;font-weight:600}
+.side .me{margin-top:auto;padding:12px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.main{padding:26px 32px 90px;min-width:0;max-width:1240px}
+@media (max-width:880px){
+  .shell{grid-template-columns:1fr}
+  .side{position:sticky;top:0;z-index:6;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px 10px;border-right:0;border-bottom:1px solid var(--line);scrollbar-width:none}
+  .side::-webkit-scrollbar{display:none}
+  .logo,.side .me{display:none}
+  .nav{padding:8px 12px}
+  .main{padding:18px 16px 90px}
+}
+/* 基本元件 */
+h1{font-size:23px;margin:0;line-height:1.3}
+h2{font-size:12.5px;font-weight:600;color:var(--muted);letter-spacing:.12em;margin:26px 0 10px}
+.crumb{font-size:13px;color:var(--muted);margin-bottom:4px}.crumb a{text-decoration:none}.crumb a:hover{text-decoration:underline}
+.head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+.sub{color:var(--muted);font-size:13.5px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px}
-.pad{padding:16px}
+.pad{padding:16px 18px}
+.row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.grow{flex:1}
 label{display:block;font-size:13px;color:var(--muted);margin:14px 0 5px}
-input[type=text],input[type=password],input[type=date],select,textarea{width:100%;height:44px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff;outline:none}
-textarea{height:72px;padding:10px 12px;resize:vertical}
+.row label{margin-top:0}
+input[type=text],input[type=password],input[type=date],input[type=datetime-local],input[type=search],select,textarea{width:100%;height:42px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff;outline:none}
+textarea{height:70px;padding:10px 12px;resize:vertical}
 input:focus,select:focus,textarea:focus{border-color:var(--ink);box-shadow:0 0 0 3px rgba(29,28,26,.08)}
 .btn{height:40px;padding:0 16px;border:0;border-radius:8px;background:var(--ink);color:#fff;font-weight:600;cursor:pointer;white-space:nowrap}
-.btn.ghost{background:none;color:var(--ink);border:1px solid var(--line);font-weight:500}
+.btn.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line);font-weight:500}
+.btn.ghost:hover{border-color:#cfc8b9}
 .btn.block{display:block;width:100%;height:46px;margin-top:18px}
+.btn.sm{height:34px;padding:0 12px;font-size:13.5px}
 .btn:disabled{opacity:.45;cursor:default}
-.link{background:none;border:0;padding:6px 0;color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:14px}
-.msg{margin-top:12px;padding:10px 12px;border-radius:8px;font-size:14px}
+.link{background:none;border:0;padding:4px 0;color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:13.5px}
+.msg{margin:0 0 14px;padding:10px 12px;border-radius:8px;font-size:14px}
 .msg.err{background:var(--danger-soft);color:var(--danger)}.msg.warn{background:var(--warn-soft);color:var(--warn)}.msg.ok{background:var(--accent-soft);color:var(--accent)}
-.sub{color:var(--muted);font-size:13.5px}
-/* 活動切換：選取項目有深色底線，下方表格同步 */
-.events{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:thin}
-.ev{flex:0 0 auto;min-width:190px;text-align:left;background:none;border:0;border-bottom:3px solid transparent;margin-bottom:-1px;padding:12px 14px;cursor:pointer;border-radius:8px 8px 0 0}
-.ev:hover{background:rgba(29,28,26,.04)}
-.ev[aria-selected=true]{border-bottom-color:var(--ink);background:var(--card)}
-.ev .n{font-weight:600;display:block;white-space:nowrap}
-.ev[aria-selected=false] .n{color:var(--muted)}
-.ev .m{font-size:12.5px;color:var(--muted);display:block;margin-top:2px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:16px}
-.stat{padding:12px 14px}.stat .k{font-size:12px;color:var(--muted);letter-spacing:.06em}.stat .v{font-family:var(--num);font-size:20px;font-weight:600;margin-top:2px}
-.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:18px 0 10px}
-.chip{height:34px;padding:0 12px;border-radius:99px;border:1px solid var(--line);background:none;cursor:pointer;font-size:13.5px}
-.chip[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
-.grow{flex:1}
-.tablebox{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
-th{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.05em;background:rgba(29,28,26,.025)}
-tbody tr{cursor:pointer}tbody tr:hover{background:rgba(29,28,26,.035)}
-tbody tr.open{background:var(--accent-soft)}
-tr:last-child td{border-bottom:0}
-.r{text-align:right;font-family:var(--num)}
-.badge{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
-.badge.published{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.badge{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.badge.published,.badge.ok{background:var(--accent-soft);color:var(--accent);border-color:transparent}
 .badge.void{text-decoration:line-through}
 .badge.error{background:var(--danger-soft);color:var(--danger);border-color:transparent}
 .badge.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
-.drawer{position:fixed;top:0;right:0;bottom:0;width:min(460px,100%);background:var(--card);border-left:1px solid var(--line);box-shadow:-12px 0 32px rgba(0,0,0,.08);overflow-y:auto;padding:18px 18px 40px;z-index:5}
-.drawer table td,.drawer table th{padding:8px 0;white-space:normal}
+.badge.dark{background:var(--ink);color:#fff;border-color:transparent}
+.empty{padding:40px 18px;text-align:center;color:var(--muted)}
+.skeleton{height:120px;border-radius:12px;background:linear-gradient(90deg,#ece8df,#f4f1ea,#ece8df);background-size:200% 100%;animation:sh 1.2s infinite;margin-bottom:12px}
+@keyframes sh{to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.skeleton{animation:none}}
+/* 分頁（點選有深色底線，下方內容同步） */
+.tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none;margin-bottom:14px}
+.tabs::-webkit-scrollbar{display:none}
+.tab{background:none;border:0;border-bottom:3px solid transparent;margin-bottom:-1px;padding:10px 0;color:var(--muted);cursor:pointer;white-space:nowrap}
+.tab[aria-selected=true]{color:var(--ink);font-weight:700;border-bottom-color:var(--ink)}
+/* 流程進度條 */
+.steps{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid var(--line);margin:4px 0 18px}
+.step{background:none;border:0;border-bottom:3px solid transparent;margin-bottom:-1px;padding:10px 12px 12px 0;text-align:left;cursor:pointer;min-width:0}
+.step .n{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.step .n i{font-style:normal;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+.step.done .n i{background:var(--accent);border-color:var(--accent);color:#fff}
+.step b{display:block;font-size:15.5px;margin-top:2px}
+.step .s{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.step .s.attn{color:var(--warn)}
+.step[aria-selected=true]{border-bottom-color:var(--ink)}
+.step[aria-selected=false] b{color:var(--muted);font-weight:500}
+@media (max-width:640px){.steps{display:flex;overflow-x:auto;scrollbar-width:none}.step{flex:0 0 118px}}
+/* 表格 */
+.tablebox{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.04em;background:rgba(29,28,26,.025)}
+tr:last-child td{border-bottom:0}
+tbody tr[data-k]{cursor:pointer}
+tbody tr[data-k]:hover{background:rgba(29,28,26,.03)}
+tbody tr.on{background:var(--accent-soft)}
+.r{text-align:right;font-family:var(--num)}
+.dim{color:var(--muted);font-size:12.5px}
+/* 左右分割 */
+.split{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(330px,1fr);gap:16px;align-items:start}
+.detail{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow:auto;padding:16px 18px}
+.detail .x{float:right}
+@media (max-width:1080px){.split{grid-template-columns:1fr}.detail{position:static;max-height:none}}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:14px;margin:0}.kv dt{color:var(--muted)}.kv dd{margin:0;text-align:right;word-break:break-all}
+.detail table td{padding:8px 0;white-space:normal}
 .issue{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
 .issue:last-child{border-bottom:0}.issue.done{opacity:.5}
-.dim{color:var(--muted);font-size:12.5px}
-.subtabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin-top:20px}
-.subtab{background:none;border:0;border-bottom:3px solid transparent;margin-bottom:-1px;padding:10px 0;color:var(--muted);cursor:pointer}
-.subtab[aria-selected=true]{color:var(--ink);font-weight:700;border-bottom-color:var(--ink)}
-.ev.add{min-width:0;color:var(--muted);align-self:center;padding:12px 16px}
+/* 統計 */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px}
+.stat{padding:12px 14px}.stat .k{font-size:12px;color:var(--muted)}.stat .v{font-family:var(--num);font-size:22px;font-weight:600;margin-top:2px}
+/* 批次操作列 */
+.bulk{position:sticky;bottom:14px;margin-top:12px;padding:10px 12px 10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--ink);color:#fff;border-radius:12px;z-index:3}
+.bulk .btn{background:#fff;color:var(--ink);height:34px}.bulk .btn.ghost{background:none;color:#fff;border-color:rgba(255,255,255,.4)}
+/* 今日現場 */
+.live{display:grid;grid-template-columns:minmax(260px,360px) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:880px){.live{grid-template-columns:1fr}}
+.qrbox{background:#fff;padding:14px;border-radius:12px;border:1px solid var(--line)}
+.qrbox svg{display:block;width:100%;height:auto}
 .qrscreen{position:fixed;inset:0;background:var(--paper);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
-.qrbox{background:#fff;padding:18px;border-radius:16px;border:1px solid var(--line)}
-.qrbox svg{display:block;width:min(70vw,60vh,420px);height:auto}
-.confirm{position:sticky;bottom:12px;margin-top:14px;padding:12px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--ink);color:#fff;border-radius:12px}
-.confirm .btn{background:#fff;color:var(--ink)}.confirm .btn.ghost{background:none;color:#fff;border-color:rgba(255,255,255,.4)}
+.qrscreen .qrbox svg{width:min(72vw,62vh,440px)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.chip{height:34px;padding:0 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);cursor:pointer;font-size:13.5px}
+.chip[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.authwrap{max-width:420px;margin:60px auto;padding:0 16px}
 </style>
 </head>
 <body>
-<div class="wrap" id="app"></div>
-<div id="drawer"></div>
+<div id="root"></div>
 <div id="overlay"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script>
 const API = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/rest/v1/rpc/';
 const FN = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/docs';
 const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
-const app = document.getElementById('app'), drawer = document.getElementById('drawer');
-const S = { token: null, ov: null, eventId: null, slips: [], eventIssues: [], filter: 'all', tab: 'slips', att: null, sel: new Set(), openId: null, pending: null, flash: null };
+const root = document.getElementById('root'), overlay = document.getElementById('overlay');
+const S = { token: null, user: null, ov: null, flash: null, cache: {}, sel: new Set(), filter: {}, detail: null, confirm: null, timers: [] };
 try { S.token = sessionStorage.getItem('payroll_admin_token'); } catch (e) {}
 function saveToken(t) { S.token = t; try { t ? sessionStorage.setItem('payroll_admin_token', t) : sessionStorage.removeItem('payroll_admin_token'); } catch (e) {} }
+
+const NO_TOKEN = ['admin_setup', 'admin_login'];
 async function rpc(name, body) {
-  const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(NO_TOKEN.includes(name) ? (body || {}) : Object.assign({ p_token: S.token }, body || {})) });
   if (!res.ok) throw new Error('連線失敗（' + res.status + '）');
   const j = await res.json();
   if (j && j.ok === false && j.error === 'session') { saveToken(null); viewAuth('login', '登入已逾時，請重新登入。'); throw new Error('session'); }
@@ -96,433 +142,611 @@ async function rpc(name, body) {
 }
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
-const d = s => s ? s.replace(/-/g, '/') : '—';
+const d = s => s ? String(s).slice(0, 10).replace(/-/g, '/') : '—';
+const md = s => s ? String(s).slice(5, 10).replace('-', '/') : '—';
+const hm = t => t ? String(t).slice(11, 16) : '—';
+const dur = m => m == null ? '—' : Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0');
+const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date());
 const STATUS = { draft: '草稿', published: '已發布', void: '作廢' };
-const openIssues = s => s.issues.filter(i => !i.resolved && i.severity !== 'info');
-const worst = s => openIssues(s).some(i => i.severity === 'error') ? 'error' : 'warn';
+const SRC = { qr: 'QR 打卡', manual: '人工', legacy: '舊資料' };
+const openIssues = list => (list || []).filter(i => !i.resolved && i.severity !== 'info');
+const $ = id => document.getElementById(id);
+function on(sel, ev, fn) { root.querySelectorAll(sel).forEach(el => el.addEventListener(ev, e => fn(e, el))); }
+function clearTimers() { S.timers.forEach(t => clearTimeout(t)); S.timers = []; }
+function flash(type, text) { S.flash = { type, text }; }
+function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
 
+/* ---------- 登入 ---------- */
 function viewAuth(mode, message) {
-  drawer.innerHTML = '';
+  clearTimers(); overlay.innerHTML = '';
   const setup = mode === 'setup';
-  app.className = 'wrap narrow';
-  app.innerHTML = `<div class="brand" style="margin:8px 0 26px"><b>WORKS</b><span>薪資管理</span></div>
+  root.innerHTML = `<div class="authwrap">
+    <div class="logo" style="padding:0 0 26px"><b>WORKS</b><span>沃克思 薪資管理</span></div>
     <h1>${setup ? '首次設定管理員' : '管理員登入'}</h1>
     <form id="f" class="card pad" style="margin-top:18px">
       ${setup ? '<label for="code" style="margin-top:0">設定碼</label><input id="code" type="text" autocomplete="off" required>' : ''}
       <label for="u" ${setup ? '' : 'style="margin-top:0"'}>帳號</label><input id="u" type="text" autocomplete="username" autocapitalize="none" required>
       <label for="p">密碼${setup ? '（至少 10 個字）' : ''}</label><input id="p" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required>
-      <div id="m">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
+      <div id="m" style="margin-top:12px">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
       <button class="btn block">${setup ? '建立管理員' : '登入'}</button>
     </form>
-    <button class="link" id="sw" style="margin-top:10px">${setup ? '已經有帳號，回到登入' : '第一次使用？用設定碼建立管理員'}</button>`;
-  document.getElementById('sw').onclick = () => viewAuth(setup ? 'login' : 'setup');
-  document.getElementById('f').onsubmit = async e => {
-    e.preventDefault(); const m = document.getElementById('m'); m.innerHTML = '';
-    const u = document.getElementById('u').value, p = document.getElementById('p').value;
+    <button class="link" id="sw" style="margin-top:10px">${setup ? '已經有帳號，回到登入' : '第一次使用？用設定碼建立管理員'}</button></div>`;
+  $('sw').onclick = () => viewAuth(setup ? 'login' : 'setup');
+  $('f').onsubmit = async e => {
+    e.preventDefault(); const m = $('m'); m.innerHTML = '';
+    const u = $('u').value, p = $('p').value;
     try {
       if (setup) {
-        const r = await rpc('admin_setup', { p_code: document.getElementById('code').value, p_username: u, p_password: p });
+        const r = await rpc('admin_setup', { p_code: $('code').value, p_username: u, p_password: p });
         if (!r.ok) { m.innerHTML = '<div class="msg err">' + ({ bad_code: '設定碼不正確、已用過或已過期。', bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 10 個字。', taken: '這個帳號已經存在。' }[r.error] || '建立失敗') + '</div>'; return; }
       }
       const r = await rpc('admin_login', { p_username: u, p_password: p });
-      if (r.ok) { saveToken(r.token); return load(); }
+      if (r.ok) { saveToken(r.token); S.user = r.username; S.ov = null; return route(); }
       m.innerHTML = '<div class="msg err">' + (r.error === 'locked' ? '錯誤次數過多，請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。' : '帳號或密碼不正確。' + (r.attempts_left != null ? '還可以再試 ' + esc(r.attempts_left) + ' 次。' : '')) + '</div>';
     } catch (err) { if (err.message !== 'session') m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
   };
 }
 
-async function load(keepEvent) {
-  app.className = 'wrap';
-  if (!S.ov) app.innerHTML = '<p class="sub">載入中…</p>';
-  try {
-    const r = await rpc('admin_overview', { p_token: S.token });
-    S.ov = r;
-    if (!keepEvent || !r.events.some(e => e.id === S.eventId)) S.eventId = r.events.length ? r.events[0].id : null;
-    await loadEvent();
-  } catch (err) { if (err.message !== 'session') app.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+/* ---------- 外框與路由 ---------- */
+const NAV = [['today', '今日現場'], ['events', '活動'], ['people', '人員'], ['payouts', '薪資發放'], ['settings', '設定']];
+function activeEvents() { const t = today(); return (S.ov ? S.ov.events : []).filter(e => e.start_date && e.start_date <= t && (e.end_date || e.start_date) >= addDays(t, -1)); }
+function addDays(s, n) { const x = new Date(s + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
+function shell(section, html) {
+  const badges = { today: activeEvents().length, events: (S.ov ? S.ov.events : []).reduce((a, e) => a + Number(e.open_issues || 0), 0) };
+  root.innerHTML = `<div class="shell">
+    <nav class="side" aria-label="主選單">
+      <div class="logo"><b>WORKS</b><span>沃克思 薪資管理</span></div>
+      ${NAV.map(([k, t]) => `<a class="nav ${section === k ? 'on' : ''}" href="#/${k}" ${section === k ? 'aria-current="page"' : ''}><span>${t}</span>${badges[k] ? '<span class="cnt">' + badges[k] + '</span>' : ''}</a>`).join('')}
+      <div class="me"><span>${esc(S.user || '')}</span><button class="link" id="logout">登出</button></div>
+    </nav>
+    <main class="main" id="main">${S.flash ? '<div class="msg ' + S.flash.type + '">' + esc(S.flash.text) + '</div>' : ''}${html}</main></div>`;
+  S.flash = null;
+  $('logout').onclick = async () => { try { await rpc('admin_logout'); } catch (e) {} saveToken(null); S.ov = null; viewAuth('login'); };
 }
-async function loadEvent() {
-  if (S.eventId) {
-    const r = await rpc('admin_event', { p_token: S.token, p_event: S.eventId });
-    S.slips = r.payslips; S.eventIssues = r.event_issues;
-    if (S.tab === 'att') S.att = await rpc('admin_attendance', { p_token: S.token, p_event: S.eventId });
-  } else { S.slips = []; S.eventIssues = []; }
-  S.sel = new Set([...S.sel].filter(id => S.slips.some(s => s.id === id)));
-  render();
+async function loadOverview() { const r = await rpc('admin_overview'); S.ov = r; S.user = r.username; return r; }
+
+async function route() {
+  clearTimers(); overlay.innerHTML = '';
+  if (!S.token) return viewAuth('login');
+  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const sec = parts[0] || 'events';
+  try {
+    if (!S.ov || sec === 'events' || sec === 'payouts' || sec === 'today') await loadOverview();
+    if (sec === 'today') return viewToday(parts[1]);
+    if (sec === 'events' && parts[1]) return viewEvent(parts[1], parts[2]);
+    if (sec === 'events') return viewEvents();
+    if (sec === 'people') return viewPeople(parts[1]);
+    if (sec === 'payouts') return viewPayouts();
+    if (sec === 'settings') return viewSettings();
+    go('#/events');
+  } catch (err) { if (err.message !== 'session') shell(sec, '<div class="msg err">' + esc(err.message) + '</div>'); }
+}
+window.addEventListener('hashchange', () => { S.sel = new Set(); S.detail = null; S.confirm = null; route(); });
+
+/* ---------- 活動清單 ---------- */
+function eventState(e) {
+  const t = today(), end = e.end_date || e.start_date;
+  if (e.start_date && e.start_date <= t && end >= addDays(t, -1)) return ['進行中', 'dark'];
+  if (e.start_date && e.start_date > t) return ['即將開始', ''];
+  if (e.total > 0 && e.published === e.total - e.void && e.pay_date && e.pay_date <= t) return ['已結案', 'ok'];
+  return ['待發薪', 'warn'];
+}
+function viewEvents() {
+  const f = S.filter.events || 'all', q = (S.filter.eventsQ || '').trim();
+  const list = S.ov.events.filter(e => (f === 'all' || eventState(e)[0] === f) && (!q || e.name.includes(q)));
+  const counts = k => S.ov.events.filter(e => eventState(e)[0] === k).length;
+  shell('events', `
+    <div class="head"><div><h1>活動</h1><p class="sub">共 ${S.ov.events.length} 場</p></div><button class="btn" id="new">新增活動</button></div>
+    <div id="newbox"></div>
+    <div class="row" style="margin-bottom:12px;align-items:center">
+      <div class="chips" style="margin:0">${[['all', '全部', S.ov.events.length], ['進行中', '進行中', counts('進行中')], ['即將開始', '即將開始', counts('即將開始')], ['待發薪', '待發薪', counts('待發薪')], ['已結案', '已結案', counts('已結案')]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
+      <span class="grow"></span><input id="q" type="search" placeholder="搜尋活動名稱" value="${esc(q)}" style="width:220px" aria-label="搜尋活動">
+    </div>
+    <div class="card tablebox"><table>
+      <thead><tr><th>活動</th><th>日期</th><th>狀態</th><th class="r">薪資單</th><th class="r">已發布</th><th class="r">待處理</th><th>發薪日</th><th class="r">實發合計</th></tr></thead>
+      <tbody>${list.map(e => { const [st, cls] = eventState(e); return `<tr data-k="${esc(e.id)}">
+        <td><b>${esc(e.name)}</b></td><td>${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(md(e.end_date)) : ''}</td>
+        <td><span class="badge ${cls}">${st}</span></td><td class="r">${e.total}</td><td class="r">${e.published}</td>
+        <td class="r">${e.open_issues ? '<span class="badge warn">' + e.open_issues + '</span>' : '—'}</td>
+        <td>${e.pay_date ? esc(d(e.pay_date)) : '<span class="dim">未設</span>'}</td><td class="r">${money(e.net_sum)}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">沒有符合的活動</td></tr>'}</tbody>
+    </table></div>`);
+  on('tbody tr[data-k]', 'click', (e, tr) => go('#/events/' + tr.dataset.k));
+  on('.chip', 'click', (e, b) => { S.filter.events = b.dataset.f; viewEvents(); });
+  $('q').oninput = e => { S.filter.eventsQ = e.target.value; const pos = e.target.selectionStart; viewEvents(); const i = $('q'); i.focus(); i.setSelectionRange(pos, pos); };
+  $('new').onclick = () => {
+    $('newbox').innerHTML = `<form id="nf" class="card pad" style="margin-bottom:16px">
+      <div class="row"><div class="grow" style="min-width:200px"><label for="en">活動名稱</label><input id="en" type="text" placeholder="12 月校園巡迴" required></div>
+      <div><label for="es">開始日</label><input id="es" type="date" required></div><div><label for="ee">結束日（單日可留空）</label><input id="ee" type="date"></div></div>
+      <div class="row" style="margin-top:12px"><div><label for="eh">預設時薪</label><input id="eh" type="text" inputmode="decimal" placeholder="200" style="width:120px"></div>
+      <div><label for="eb">滿 4 小時扣休息（分）</label><input id="eb" type="text" inputmode="numeric" value="30" style="width:150px"></div>
+      <div><label for="ed">活動後幾天內發薪</label><input id="ed" type="text" inputmode="numeric" placeholder="30" style="width:140px"></div>
+      <span class="grow"></span><button type="button" class="btn ghost" id="nc">取消</button><button class="btn">建立活動</button></div><div id="nm" style="margin-top:12px"></div></form>`;
+    $('en').focus();
+    $('nc').onclick = () => { $('newbox').innerHTML = ''; };
+    $('nf').onsubmit = async ev => {
+      ev.preventDefault();
+      const r = await rpc('admin_create_event', { p_patch: { name: $('en').value, start_date: $('es').value, end_date: $('ee').value, default_break_minutes: $('eb').value, pay_within_days: $('ed').value } });
+      if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + (r.error === 'bad_name' ? '請填活動名稱。' : '請確認日期，結束日不能早於開始日。') + '</div>'; return; }
+      if ($('eh').value) await rpc('admin_update_event', { p_id: r.id, p_patch: { default_hourly_rate: $('eh').value } });
+      flash('ok', '活動已建立。接著把新人報名連結傳給工讀生。'); go('#/events/' + r.id + '/staff');
+    };
+  };
 }
 
-function visible() {
-  return S.slips.filter(s => S.filter === 'all' || (S.filter === 'issues' ? openIssues(s).length : s.status === S.filter));
+/* ---------- 單場活動 ---------- */
+const STEPS = [['staff', '人員'], ['att', '出勤'], ['review', '核對'], ['publish', '發布'], ['payout', '匯款']];
+async function loadEventData(id) {
+  const [ev, att, st] = await Promise.all([rpc('admin_event', { p_event: id }), rpc('admin_attendance', { p_event: id }), rpc('admin_event_staff', { p_event: id })]);
+  S.cache = { id, slips: ev.payslips, eventIssues: ev.event_issues, att: att.rows, settings: att.settings || {}, staff: st.staff, signupOpen: st.signup_open };
 }
-function render() {
-  const ev = S.ov.events.find(e => e.id === S.eventId), em = S.ov.employer || {};
-  const rows = visible(), cnt = k => S.slips.filter(s => k === 'issues' ? openIssues(s).length : s.status === k).length;
-  const selIds = [...S.sel];
-  app.innerHTML = `
-    <div class="bar">
-      <div class="brand"><b>WORKS</b><span>薪資管理</span></div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span class="sub">${esc(S.ov.username)}</span>
-        <button class="btn ghost" id="ppl">人員</button>
-        <button class="btn ghost" id="hol">國定假日</button>
-        <button class="btn ghost" id="emp">公司資料${em.legal_name && em.tax_id ? '' : '（未填）'}</button>
-        <button class="btn ghost" id="out">登出</button>
-      </div>
-    </div>
-    ${S.flash ? '<div class="msg ' + S.flash.type + '" style="margin:0 0 14px">' + esc(S.flash.text) + '</div>' : ''}
-    <div class="events" role="tablist" aria-label="活動">
-      ${S.ov.events.map(e => `<button class="ev" role="tab" aria-selected="${e.id === S.eventId}" data-id="${esc(e.id)}">
-        <span class="n">${esc(e.name)}</span>
-        <span class="m">${esc(d(e.start_date))}　已發布 ${e.published}/${e.total}${e.open_issues ? '　待處理 ' + e.open_issues : ''}</span></button>`).join('')}
-      <button class="ev add" id="newev">＋ 新增活動</button>
-    </div>
-    ${ev ? `
-    <div class="stats">
-      <div class="card stat"><div class="k">薪資單</div><div class="v">${ev.total}</div></div>
-      <div class="card stat"><div class="k">已發布</div><div class="v">${ev.published}</div></div>
-      <div class="card stat"><div class="k">草稿</div><div class="v">${ev.draft}</div></div>
-      <div class="card stat"><div class="k">實發合計</div><div class="v">${money(ev.net_sum)}</div></div>
-      <div class="card stat"><div class="k">發薪日</div><div class="v" style="font-size:16px;margin-top:6px">${esc(d(ev.pay_date))}</div></div>
-    </div>
-    <div class="subtabs" role="tablist" aria-label="檢視">
-      <button class="subtab" role="tab" aria-selected="${S.tab === 'slips'}" data-t="slips">薪資單</button>
-      <button class="subtab" role="tab" aria-selected="${S.tab === 'att'}" data-t="att">出勤與簽到</button>
-    </div>
-    ${S.tab === 'att' ? attHtml() : `
-    <div class="card pad" style="margin-top:14px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-      <div><label for="pd" style="margin-top:0">設定這場活動的發薪日</label><input id="pd" type="date" value="${esc(ev.pay_date || '')}" style="width:190px"></div>
-      <button class="btn ghost" id="pdsave">儲存並套用到全部薪資單</button>
-      <span class="sub grow">薪資單上必須顯示發薪日，建議發布前先填。</span>
-    </div>
-    ${S.eventIssues.length ? '<h2>這場活動的注意事項</h2><div class="card pad" style="padding-top:6px;padding-bottom:6px">' + S.eventIssues.map(issueRow).join('') + '</div>' : ''}
-    <div class="tools">
-      ${[['all', '全部', S.slips.length], ['draft', '草稿', cnt('draft')], ['published', '已發布', cnt('published')], ['issues', '有問題', cnt('issues')]].map(([k, t, n]) => `<button class="chip" aria-pressed="${S.filter === k}" data-f="${k}">${t} ${n}</button>`).join('')}
-      <span class="grow"></span>
-      <span class="sub">已選 ${selIds.length} 筆</span>
-      <button class="btn" id="pub" ${selIds.length ? '' : 'disabled'}>發布所選</button>
-      <button class="btn ghost" id="unpub" ${selIds.length ? '' : 'disabled'}>取消發布</button>
-    </div>
-    <div class="card tablebox"><table>
-      <thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${rows.length && rows.every(s => S.sel.has(s.id)) ? 'checked' : ''}></th><th>姓名</th><th>崗位</th><th>性質</th><th class="r">應發</th><th class="r">津貼</th><th class="r">扣款</th><th class="r">實發</th><th>狀態</th><th>問題</th></tr></thead>
-      <tbody>${rows.map(s => `<tr data-id="${esc(s.id)}" class="${s.id === S.openId ? 'open' : ''}">
-        <td><input type="checkbox" class="ck" data-id="${esc(s.id)}" aria-label="選取 ${esc(s.name)}" ${S.sel.has(s.id) ? 'checked' : ''}></td>
-        <td>${esc(s.name)}</td><td>${esc(s.role || '—')}</td><td>${s.relation === 'contract' ? '勞務報酬' : '僱傭'}</td>
-        <td class="r">${money(s.gross)}</td><td class="r">${Number(s.allowances) ? money(s.allowances) : ''}</td><td class="r">${Number(s.deductions) ? money(s.deductions) : ''}</td><td class="r"><b>${money(s.net)}</b></td>
-        <td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td>
-        <td>${openIssues(s).length ? '<span class="badge ' + worst(s) + '">' + openIssues(s).length + ' 項</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="sub" style="text-align:center;padding:28px">沒有符合的薪資單</td></tr>'}</tbody>
-    </table></div>
-    ${S.pending ? `<div class="confirm"><span class="grow">${S.pending === 'published' ? '確定發布 ' + selIds.length + ' 筆？發布後工讀生登入就看得到。' : '確定把 ' + selIds.length + ' 筆改回草稿？工讀生將看不到。'}</span><button class="btn" id="yes">確定</button><button class="btn ghost" id="no">取消</button></div>` : ''}`}`
-    : '<button class="btn" id="newev2" style="margin-top:20px">新增第一場活動</button><p class="sub" style="margin-top:20px">還沒有任何活動。</p>'}`;
-  S.flash = null;
-  app.querySelectorAll('.ev:not(.add)').forEach(b => b.onclick = async () => { S.eventId = b.dataset.id; S.sel.clear(); S.openId = null; S.pending = null; S.filter = 'all'; drawer.innerHTML = ''; render(); await loadEvent(); });
-  app.querySelectorAll('.subtab').forEach(b => b.onclick = async () => { S.tab = b.dataset.t; S.pending = null; drawer.innerHTML = ''; S.openId = null; await loadEvent(); });
-  app.querySelectorAll('tr[data-att]').forEach(tr => tr.onclick = () => openAtt(tr.dataset.att));
-  app.querySelectorAll('.chip').forEach(b => b.onclick = () => { S.filter = b.dataset.f; render(); });
-  app.querySelectorAll('.ck').forEach(c => { c.onclick = e => e.stopPropagation(); c.onchange = () => { c.checked ? S.sel.add(c.dataset.id) : S.sel.delete(c.dataset.id); S.pending = null; render(); }; });
-  const all = document.getElementById('all'); if (all) all.onchange = () => { rows.forEach(s => all.checked ? S.sel.add(s.id) : S.sel.delete(s.id)); S.pending = null; render(); };
-  app.querySelectorAll('tbody tr[data-id]').forEach(tr => tr.onclick = () => openSlip(tr.dataset.id));
-  app.querySelectorAll('[data-issue]').forEach(bindIssue);
-  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
-  on('out', async () => { try { await rpc('admin_logout', { p_token: S.token }); } catch (e) {} saveToken(null); S.ov = null; viewAuth('login'); });
-  on('emp', openEmployer);
-  on('newev', openNewEvent); on('newev2', openNewEvent);
-  on('showqr', showQr);
-  on('brsave', async () => {
-    const r = await rpc('admin_update_event', { p_token: S.token, p_id: S.eventId, p_patch: { default_break_minutes: document.getElementById('br').value, default_hourly_rate: document.getElementById('hr').value, insured_salary: document.getElementById('ins').value } });
-    S.flash = r.ok ? { type: 'ok', text: '設定已儲存。休息時間於之後簽退時套用；時薪與投保薪資於重新產生薪資單時套用。' } : { type: 'err', text: '儲存失敗，請確認都是數字。' }; await load(true);
-  });
-  on('gen', async () => {
-    const r = await rpc('admin_generate_payslips', { p_token: S.token, p_event: S.eventId });
-    const sk = (r.skipped || []).map(x => x.name + '（' + x.reason + '）').join('、');
-    S.flash = { type: sk ? 'warn' : 'ok', text: '已產生 ' + r.created + ' 張、重算 ' + r.replaced + ' 張薪資單（草稿）。' + (sk ? '未處理：' + sk : '') };
-    S.tab = 'slips'; S.filter = 'all'; await load(true);
-  });
-  on('addatt', openAddAtt);
-  on('hol', openHolidays);
-  on('ppl', () => openPeople(''));
-  on('joinlink', openJoin);
-  on('pub', () => { S.pending = 'published'; render(); });
-  on('unpub', () => { S.pending = 'draft'; render(); });
-  on('no', () => { S.pending = null; render(); });
-  on('yes', async () => {
-    const status = S.pending; S.pending = null;
-    const r = await rpc('admin_set_status', { p_token: S.token, p_ids: selIds, p_status: status });
-    S.flash = { type: r.skipped_no_amount ? 'warn' : 'ok', text: (status === 'published' ? '已發布 ' : '已改回草稿 ') + r.updated + ' 筆。' + (r.skipped_no_amount ? '另有 ' + r.skipped_no_amount + ' 筆沒有金額，無法發布。' : '') };
-    S.sel.clear(); await load(true);
-  });
-  on('pdsave', async () => {
-    await rpc('admin_update_event', { p_token: S.token, p_id: S.eventId, p_patch: { pay_date: document.getElementById('pd').value, apply_to_payslips: true } });
-    S.flash = { type: 'ok', text: '發薪日已更新並套用到這場活動的全部薪資單。' }; await load(true);
-  });
-}
-const hm = t => t ? t.slice(11) : '—';
-const dur = m => m == null ? '—' : Math.floor(m / 60) + ' 時 ' + String(m % 60).padStart(2, '0') + ' 分';
-const SRC = { qr: 'QR 打卡', manual: '人工修改', legacy: '舊資料' };
-function attHtml() {
-  const a = S.att || { rows: [], settings: {} }, cfg = a.settings || {};
-  const payOf = r => { const st = r.staff || {}; const rate = st.rate != null ? st.rate : (st.pay_type === 'daily' ? null : cfg.default_hourly_rate); return st.relation === 'contract' ? '承攬' : rate == null ? '<span class="badge warn">未設定</span>' : (st.pay_type === 'daily' ? '日薪 ' : '時薪 ') + money(rate); };
-  const open = a.rows.filter(r => r.clock_in && !r.clock_out).length;
-  return `
-    <div class="card pad" style="margin-top:14px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-      <button class="btn" id="showqr">顯示簽到 QR 碼</button>
-      <span class="sub grow">QR 碼每分鐘更換，請在現場用手機或平板顯示給工讀生掃描。</span>
-      <button class="btn ghost" id="joinlink">新人報名連結</button>
-      <button class="btn ghost" id="addatt">補登出勤</button>
-    </div>
-    <div class="card pad" style="margin-top:10px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-      <div><label for="hr" style="margin-top:0">預設時薪</label><input id="hr" type="text" inputmode="decimal" value="${esc(cfg.default_hourly_rate == null ? '' : Number(cfg.default_hourly_rate))}" placeholder="例如 200" style="width:120px"></div>
-      <div><label for="br" style="margin-top:0">滿 4 小時扣休息（分）</label><input id="br" type="text" inputmode="numeric" value="${esc(cfg.default_break_minutes)}" style="width:150px"></div>
-      <div><label for="ins" style="margin-top:0">勞保月投保薪資</label><input id="ins" type="text" inputmode="numeric" value="${esc(Number(cfg.insured_salary))}" style="width:140px"></div>
-      <button class="btn ghost" id="brsave">儲存設定</button>
-      <span class="grow"></span>
-      <button class="btn" id="gen">依出勤產生薪資單</button>
-    </div>
-    <p class="sub" style="margin:16px 0 10px">共 ${a.rows.length} 筆出勤${open ? '，其中 ' + open + ' 筆尚未簽退' : ''}。點任一列可以修改時間。</p>
-    <div class="card tablebox"><table>
-      <thead><tr><th>姓名</th><th>日期</th><th>上班</th><th>下班</th><th class="r">休息</th><th class="r">工時</th><th>計薪</th><th>來源</th><th>備註</th></tr></thead>
-      <tbody>${a.rows.map(r => `<tr data-att="${esc(r.id)}" class="${r.id === S.openId ? 'open' : ''}">
-        <td>${esc(r.name)}</td><td>${esc(d(r.work_date))}${r.holiday ? ' <span class="badge published">' + esc(r.holiday) + '</span>' : ''}</td><td>${esc(hm(r.clock_in))}</td>
-        <td>${r.clock_in && !r.clock_out ? '<span class="badge warn">未簽退</span>' : esc(hm(r.clock_out))}</td>
-        <td class="r">${r.clock_in ? esc(r.break_minutes) + ' 分' : ''}</td><td class="r">${esc(dur(r.minutes))}</td><td>${payOf(r)}</td>
-        <td>${esc(SRC[r.source] || r.source)}</td><td class="dim">${esc(r.note || r.scheduled_text || '')}</td></tr>`).join('') || '<tr><td colspan="9" class="sub" style="text-align:center;padding:28px">還沒有出勤紀錄</td></tr>'}</tbody>
-    </table></div>`;
-}
-function openAtt(id) {
-  const r = S.att.rows.find(x => x.id === id); if (!r) return;
-  const st = r.staff || {};
-  S.openId = id; app.querySelectorAll('tr[data-att]').forEach(tr => tr.classList.toggle('open', tr.dataset.att === id));
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="修改出勤">
-    <div class="bar" style="margin-bottom:10px"><h1>${esc(r.name)}</h1><button class="btn ghost" id="close">關閉</button></div>
-    <p class="sub">${esc(d(r.work_date))}　${esc(SRC[r.source] || '')}</p>
-    <label for="ain">上班時間</label><input id="ain" type="datetime-local" value="${esc(r.clock_in || '')}" style="width:100%;height:44px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff">
-    <label for="aout">下班時間</label><input id="aout" type="datetime-local" value="${esc(r.clock_out || '')}" style="width:100%;height:44px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff">
-    <label for="abr">休息分鐘</label><input id="abr" type="text" inputmode="numeric" value="${esc(r.break_minutes)}">
-    <label for="anote">修改原因（建議填寫）</label><textarea id="anote">${esc(r.note || '')}</textarea>
-    <div id="dm"></div><button class="btn block" id="save">儲存出勤</button>
-    <p class="sub" style="margin-top:12px">修改會留下紀錄，來源會改標為「人工修改」。</p>
-    <h2>這個人在這場活動的計薪方式</h2>
-    <label for="srel" style="margin-top:0">性質</label>
-    <select id="srel"><option value="employment" ${st.relation !== 'contract' ? 'selected' : ''}>僱傭（自動算薪）</option><option value="contract" ${st.relation === 'contract' ? 'selected' : ''}>承攬（不自動算薪）</option></select>
-    <label for="stype">計薪方式</label>
-    <select id="stype"><option value="hourly" ${st.pay_type !== 'daily' ? 'selected' : ''}>時薪</option><option value="daily" ${st.pay_type === 'daily' ? 'selected' : ''}>日薪（8 小時內給全額，超過另計加班）</option></select>
-    <label for="srate">金額（留空＝使用活動的預設時薪）</label><input id="srate" type="text" inputmode="decimal" value="${esc(st.rate == null ? '' : Number(st.rate))}">
-    <label for="srole">崗位</label><input id="srole" type="text" value="${esc(st.role || '')}" placeholder="例如 PT、PG">
-    <label for="sins">勞保月投保薪資（留空＝使用活動設定）</label><input id="sins" type="text" inputmode="numeric" value="${esc(st.insured_salary == null ? '' : Number(st.insured_salary))}">
-    <label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:14px"><input id="sded" type="checkbox" ${st.deduct_insurance === false ? '' : 'checked'}> 從薪資扣勞保自付額</label>
-    <div id="dm2"></div><button class="btn ghost" id="staffsave" style="width:100%;margin-top:14px;height:46px">儲存計薪方式</button></div>`;
-  document.getElementById('staffsave').onclick = async () => {
-    const r3 = await rpc('admin_set_staff', { p_token: S.token, p_event: S.eventId, p_person: r.person_id, p_patch: { relation: document.getElementById('srel').value, pay_type: document.getElementById('stype').value, rate: document.getElementById('srate').value, role: document.getElementById('srole').value, insured_salary: document.getElementById('sins').value, deduct_insurance: document.getElementById('sded').checked } });
-    if (!r3.ok) { document.getElementById('dm2').innerHTML = '<div class="msg err">金額格式不正確。</div>'; return; }
-    drawer.innerHTML = ''; S.openId = null; S.flash = { type: 'ok', text: '計薪方式已儲存。重新產生薪資單後生效。' }; await load(true);
-  };
-  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; S.openId = null; app.querySelectorAll('tr.open').forEach(tr => tr.classList.remove('open')); };
-  document.getElementById('save').onclick = async () => {
-    const r2 = await rpc('admin_set_attendance', { p_token: S.token, p_id: id, p_patch: { clock_in: document.getElementById('ain').value, clock_out: document.getElementById('aout').value, break_minutes: document.getElementById('abr').value, note: document.getElementById('anote').value } });
-    if (!r2.ok) { document.getElementById('dm').innerHTML = '<div class="msg err">' + (r2.error === 'out_before_in' ? '下班時間必須晚於上班時間。' : '輸入的內容有誤，請檢查。') + '</div>'; return; }
-    drawer.innerHTML = ''; S.openId = null; S.flash = { type: 'ok', text: '出勤紀錄已更新。' }; await load(true);
+function stepInfo(e) {
+  const c = S.cache, t = today();
+  const live = c.slips.filter(s => s.status !== 'void');
+  const issues = openIssues(c.eventIssues).length + live.reduce((a, s) => a + openIssues(s.issues).length, 0);
+  const openAtt = c.att.filter(r => r.clock_in && !r.clock_out).length;
+  const pub = live.filter(s => s.status === 'published').length;
+  return {
+    staff: { done: c.staff.length > 0, s: c.staff.length + ' 人' },
+    att: { done: c.att.length > 0 && !openAtt, s: openAtt ? openAtt + ' 筆未簽退' : c.att.length + ' 筆紀錄', attn: openAtt > 0 },
+    review: { done: live.length > 0 && !issues, s: issues ? '剩 ' + issues + ' 件' : live.length ? '完成' : '尚無薪資單', attn: issues > 0 },
+    publish: { done: live.length > 0 && pub === live.length, s: pub + ' / ' + live.length, attn: live.length > 0 && pub < live.length },
+    payout: { done: !!e.pay_date && e.pay_date <= t && live.length > 0 && pub === live.length, s: e.pay_date ? '發薪日 ' + md(e.pay_date) : '發薪日未設', attn: !e.pay_date }
   };
 }
-function openNewEvent() {
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="新增活動">
-    <div class="bar" style="margin-bottom:10px"><h1>新增活動</h1><button class="btn ghost" id="close">關閉</button></div>
-    <label for="en">活動名稱</label><input id="en" type="text" placeholder="例如：12 月校園巡迴">
-    <label for="es">開始日</label><input id="es" type="date">
-    <label for="ee">結束日（單日活動可留空）</label><input id="ee" type="date">
-    <label for="eb">工作滿 4 小時自動扣除的休息分鐘</label><input id="eb" type="text" inputmode="numeric" value="30">
-    <label for="ed">活動結束後幾天內發薪</label><input id="ed" type="text" inputmode="numeric" placeholder="例如：30">
-    <div id="dm"></div><button class="btn block" id="save">建立</button>
-    <p class="sub" style="margin-top:12px">只有在開始日到結束日隔天之間，工讀生才能掃碼簽到退。</p></div>`;
-  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; };
-  document.getElementById('save').onclick = async () => {
-    const r = await rpc('admin_create_event', { p_token: S.token, p_patch: { name: document.getElementById('en').value, start_date: document.getElementById('es').value, end_date: document.getElementById('ee').value, default_break_minutes: document.getElementById('eb').value, pay_within_days: document.getElementById('ed').value } });
-    if (!r.ok) { document.getElementById('dm').innerHTML = '<div class="msg err">' + (r.error === 'bad_name' ? '請填活動名稱。' : '請確認日期，結束日不能早於開始日。') + '</div>'; return; }
-    drawer.innerHTML = ''; S.eventId = r.id; S.tab = 'att'; S.flash = { type: 'ok', text: '活動已建立。' }; await load(true);
+async function viewEvent(id, step) {
+  const e = S.ov.events.find(x => x.id === id);
+  if (!e) return go('#/events');
+  if (S.cache.id !== id || !step || S.cache.stale) { shell('events', '<div class="skeleton"></div><div class="skeleton"></div>'); await loadEventData(id); }
+  S.cache.stale = false;
+  const info = stepInfo(e);
+  if (!step) { step = (STEPS.find(([k]) => !info[k].done) || STEPS[3])[0]; history.replaceState(null, '', '#/events/' + id + '/' + step); }
+  const [st] = eventState(e);
+  const body = { staff: stepStaff, att: stepAtt, review: stepReview, publish: stepPublish, payout: stepPayout }[step] || stepPublish;
+  shell('events', `
+    <div class="crumb"><a href="#/events">活動</a> / ${esc(e.name)}</div>
+    <div class="head"><div><h1>${esc(e.name)}</h1><p class="sub">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(d(e.end_date)) : ''}　${st}</p></div>
+      <div class="row"><button class="btn ghost" id="join">新人報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
+    <div class="steps" role="tablist" aria-label="流程">
+      ${STEPS.map(([k, t], i) => `<button class="step ${info[k].done ? 'done' : ''}" role="tab" aria-selected="${k === step}" data-s="${k}">
+        <span class="n"><i>${info[k].done ? '✓' : i + 1}</i>${['一', '二', '三', '四', '五'][i]}</span><b>${t}</b><span class="s ${info[k].attn ? 'attn' : ''}">${esc(info[k].s)}</span></button>`).join('')}
+    </div>
+    <div id="joinbox"></div>
+    <div id="stepbody">${body.html(e)}</div>`);
+  on('.step', 'click', (ev, b) => { S.sel = new Set(); S.detail = null; S.confirm = null; go('#/events/' + id + '/' + b.dataset.s); });
+  $('qr').onclick = () => showQr(e);
+  $('join').onclick = () => toggleJoin(e);
+  body.bind(e);
+  if (S.detail) openDetail(S.detail.kind, S.detail.key, e, true);
+}
+async function refreshEvent(e, step) { await loadOverview(); S.cache.stale = true; return viewEvent(e.id, step || location.hash.split('/')[3]); }
+
+function toggleJoin(e) {
+  const box = $('joinbox');
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  rpc('admin_signup_code', { p_event: e.id }).then(r => {
+    const url = new URL('./', location.href).href + '?join=' + r.code;
+    const q = qrcode(0, 'M'); q.addData(url); q.make();
+    box.innerHTML = `<div class="card pad" style="margin-bottom:18px;display:flex;gap:18px;align-items:center;flex-wrap:wrap">
+      <div style="width:120px" class="qrbox">${q.createSvgTag({ cellSize: 3, margin: 1, scalable: true })}</div>
+      <div class="grow" style="min-width:240px"><b>新人報名連結</b><p class="sub" style="margin:4px 0 10px">傳給第一次合作的工讀生，讓他們自己填基本資料與上傳證件。已經有資料的人直接登入即可。${r.open ? '' : '<br><span style="color:var(--warn)">這場活動已結束，連結目前無法使用。</span>'}</p>
+        <div class="row" style="align-items:center"><input id="ju" type="text" readonly value="${esc(url)}" class="grow" style="min-width:200px;width:auto"><button class="btn" id="copy">複製</button></div></div></div>`;
+    $('copy').onclick = async () => { $('ju').select(); try { await navigator.clipboard.writeText(url); } catch (err) { document.execCommand('copy'); } $('copy').textContent = '已複製'; };
+  });
+}
+
+function payOf(st, cfg) {
+  st = st || {};
+  if (st.relation === 'contract') return '<span class="badge">承攬</span>';
+  const rate = st.rate != null ? st.rate : (st.pay_type === 'daily' ? null : cfg.default_hourly_rate);
+  return rate == null ? '<span class="badge warn">未設定</span>' : (st.pay_type === 'daily' ? '日薪 ' : '時薪 ') + money(rate) + (st.rate == null ? ' <span class="dim">預設</span>' : '');
+}
+function splitWrap(listHtml) { return `<div class="split"><div>${listHtml}</div><aside class="card detail" id="detail" aria-live="polite"><p class="empty" style="padding:30px 0">點左側一筆查看明細</p></aside></div>`; }
+
+/* 步驟一：人員 */
+const stepStaff = {
+  html: () => {
+    const c = S.cache;
+    return splitWrap(`
+      <div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">這場活動的工作人員。新人用報名連結登錄後會自動出現在這裡；舊人員打卡後也會加入。</p><button class="btn ghost sm" id="addatt">補登出勤</button></div>
+      <div class="card tablebox"><table>
+        <thead><tr><th>姓名</th><th>計薪</th><th class="r">出勤</th><th class="r">證件</th><th>薪資單</th></tr></thead>
+        <tbody>${c.staff.map(p => `<tr data-k="${esc(p.person_id)}" class="${S.detail && S.detail.key === p.person_id ? 'on' : ''}"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge ok">新登錄</span>' : ''}<div class="dim">${esc(p.national_id)}</div></td>
+          <td>${payOf(p.staff, c.settings)}</td><td class="r">${p.days} 天${p.open ? ' <span class="badge warn">未簽退</span>' : ''}</td>
+          <td class="r">${p.docs}/3${p.has_bank ? '' : ' <span class="badge warn">無帳戶</span>'}</td>
+          <td>${p.slip ? '<span class="badge ' + esc(p.slip.status) + '">' + STATUS[p.slip.status] + '</span>' : '<span class="dim">—</span>'}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">還沒有人員。按右上角「新人報名連結」傳給工讀生。</td></tr>'}</tbody>
+      </table></div>`);
+  },
+  bind: e => { on('tbody tr[data-k]', 'click', (ev, tr) => openDetail('staff', tr.dataset.k, e)); $('addatt').onclick = () => openDetail('addatt', 'new', e); }
+};
+
+/* 步驟二：出勤 */
+const stepAtt = {
+  html: () => {
+    const c = S.cache, cfg = c.settings;
+    const open = c.att.filter(r => r.clock_in && !r.clock_out).length;
+    return `<div class="card pad" style="margin-bottom:14px"><div class="row">
+        <div><label for="hr">預設時薪</label><input id="hr" type="text" inputmode="decimal" value="${esc(cfg.default_hourly_rate == null ? '' : Number(cfg.default_hourly_rate))}" placeholder="200" style="width:110px"></div>
+        <div><label for="br">滿 4 小時扣休息（分）</label><input id="br" type="text" inputmode="numeric" value="${esc(cfg.default_break_minutes)}" style="width:150px"></div>
+        <div><label for="ins">勞保月投保薪資</label><input id="ins" type="text" inputmode="numeric" value="${esc(Number(cfg.insured_salary))}" style="width:130px"></div>
+        <button class="btn ghost" id="cfgsave">儲存設定</button><span class="grow"></span>
+        <button class="btn ghost" id="addatt">補登出勤</button><button class="btn" id="gen">依出勤產生薪資單</button></div></div>
+      ${splitWrap(`<p class="sub" style="margin-bottom:10px">共 ${c.att.length} 筆${open ? '，<b style="color:var(--warn)">' + open + ' 筆尚未簽退</b>，產生薪資單前請先補上下班時間' : ''}。點任一列可修改。</p>
+        <div class="card tablebox"><table>
+        <thead><tr><th>姓名</th><th>日期</th><th>上班</th><th>下班</th><th class="r">休息</th><th class="r">工時</th><th>來源</th></tr></thead>
+        <tbody>${c.att.map(r => `<tr data-k="${esc(r.id)}" class="${S.detail && S.detail.key === r.id ? 'on' : ''}"><td>${esc(r.name)}</td><td>${esc(md(r.work_date))}${r.holiday ? ' <span class="badge ok">' + esc(r.holiday) + '</span>' : ''}</td>
+          <td>${esc(hm(r.clock_in))}</td><td>${r.clock_in && !r.clock_out ? '<span class="badge warn">未簽退</span>' : esc(hm(r.clock_out))}</td>
+          <td class="r">${r.clock_in ? esc(r.break_minutes) + '分' : ''}</td><td class="r">${esc(dur(r.minutes))}</td><td>${esc(SRC[r.source] || r.source)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">還沒有出勤紀錄。活動當天到「今日現場」顯示簽到 QR 碼。</td></tr>'}</tbody>
+      </table></div>`)}`;
+  },
+  bind: e => {
+    on('tbody tr[data-k]', 'click', (ev, tr) => openDetail('att', tr.dataset.k, e));
+    $('addatt').onclick = () => openDetail('addatt', 'new', e);
+    $('cfgsave').onclick = async () => {
+      const r = await rpc('admin_update_event', { p_id: e.id, p_patch: { default_break_minutes: $('br').value, default_hourly_rate: $('hr').value, insured_salary: $('ins').value } });
+      flash(r.ok ? 'ok' : 'err', r.ok ? '設定已儲存。時薪與投保薪資在重新產生薪資單時套用。' : '儲存失敗，請確認都是數字。'); refreshEvent(e, 'att');
+    };
+    $('gen').onclick = async () => {
+      const r = await rpc('admin_generate_payslips', { p_event: e.id });
+      const sk = (r.skipped || []).map(x => x.name + '（' + x.reason + '）').join('、');
+      flash(sk ? 'warn' : 'ok', '已產生 ' + r.created + ' 張、重算 ' + r.replaced + ' 張薪資單草稿。' + (sk ? '未處理：' + sk : ''));
+      refreshEvent(e, 'review');
+    };
+  }
+};
+
+/* 步驟三：核對 */
+const stepReview = {
+  html: () => {
+    const c = S.cache, all = S.filter.reviewAll;
+    const rows = c.slips.filter(s => s.status !== 'void' && (all || openIssues(s.issues).length));
+    return `${c.eventIssues.length ? '<div class="card pad" style="padding-top:6px;padding-bottom:6px;margin-bottom:14px">' + c.eventIssues.map(issueRow).join('') + '</div>' : ''}
+      ${splitWrap(`<div class="chips"><button class="chip" aria-pressed="${!all}" data-f="0">待處理 ${c.slips.filter(s => s.status !== 'void' && openIssues(s.issues).length).length}</button><button class="chip" aria-pressed="${!!all}" data-f="1">全部 ${c.slips.filter(s => s.status !== 'void').length}</button></div>
+        <div class="card tablebox"><table>
+        <thead><tr><th>姓名</th><th>問題</th><th class="r">實發</th></tr></thead>
+        <tbody>${rows.map(s => { const oi = openIssues(s.issues); return `<tr data-k="${esc(s.id)}" class="${S.detail && S.detail.key === s.id ? 'on' : ''}"><td>${esc(s.name)}<div class="dim">${esc(s.role || '')}${s.relation === 'contract' ? '・承攬' : ''}</div></td>
+          <td style="white-space:normal">${oi.length ? oi.slice(0, 2).map(i => '<span class="badge ' + esc(i.severity) + '">' + esc(issueShort(i)) + '</span>').join(' ') + (oi.length > 2 ? ' <span class="dim">+' + (oi.length - 2) + '</span>' : '') : '<span class="dim">—</span>'}</td>
+          <td class="r">${money(s.net)}</td></tr>`; }).join('') || '<tr><td colspan="3" class="empty">' + (all ? '沒有薪資單' : '都處理完了，可以到「發布」。') + '</td></tr>'}</tbody>
+      </table></div>`)}`;
+  },
+  bind: e => {
+    on('tbody tr[data-k]', 'click', (ev, tr) => openDetail('slip', tr.dataset.k, e));
+    on('.chip', 'click', (ev, b) => { S.filter.reviewAll = b.dataset.f === '1'; viewEvent(e.id, 'review'); });
+    bindIssues(e);
+  }
+};
+const SHORT = { net_mismatch: '金額不符', missing_pay: '沒有金額', items_mismatch: '明細不符', payee_not_self: '戶名非本人', no_bank_account: '無帳戶', no_ins_deduction: '未扣勞保', ins_days_gt_worked: '勞保天數', relation_unconfirmed: '僱傭或承攬', invalid_national_id: '身分證有誤', birth_unparsed: '生日不明', consecutive_days: '連續出勤', below_min_wage: '低於最低工資', over_12h: '超過12小時', no_break: '休息不足', rest_day: '休息日', regular_leave_work: '例假出勤', week_over_40: '週超40時', nhi_supplement: '補充保費', no_pay_date: '無發薪日', new_registration: '新登錄', minor: '未成年', bank_changed: '改帳戶', contract_with_ins: '承攬有勞保' };
+const issueShort = i => SHORT[i.code] || i.code;
+
+/* 步驟四：發布 */
+const stepPublish = {
+  html: () => {
+    const c = S.cache, f = S.filter.pub || 'all';
+    const live = c.slips.filter(s => s.status !== 'void');
+    const rows = live.filter(s => f === 'all' || s.status === f);
+    const sel = [...S.sel];
+    return splitWrap(`<div class="chips">${[['all', '全部', live.length], ['draft', '草稿', live.filter(s => s.status === 'draft').length], ['published', '已發布', live.filter(s => s.status === 'published').length]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
+      <div class="card tablebox"><table>
+      <thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${rows.length && rows.every(s => S.sel.has(s.id)) ? 'checked' : ''}></th><th>姓名</th><th class="r">應發</th><th class="r">扣款</th><th class="r">實發</th><th>狀態</th></tr></thead>
+      <tbody>${rows.map(s => `<tr data-k="${esc(s.id)}" class="${S.detail && S.detail.key === s.id ? 'on' : ''}"><td><input type="checkbox" class="ck" data-id="${esc(s.id)}" aria-label="選取 ${esc(s.name)}" ${S.sel.has(s.id) ? 'checked' : ''}></td>
+        <td>${esc(s.name)}${openIssues(s.issues).length ? ' <span class="badge warn">' + openIssues(s.issues).length + '</span>' : ''}<div class="dim">${esc(s.role || '')}${s.relation === 'contract' ? '・承攬' : ''}</div></td>
+        <td class="r">${money(s.gross)}</td><td class="r">${Number(s.deductions) ? money(s.deductions) : ''}</td><td class="r"><b>${money(s.net)}</b></td>
+        <td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">沒有薪資單。到「出勤」按「依出勤產生薪資單」。</td></tr>'}</tbody>
+      </table></div>
+      ${sel.length ? `<div class="bulk">${S.confirm ? `<span class="grow">${S.confirm === 'published' ? '確定發布 ' + sel.length + ' 筆？發布後工讀生登入就看得到。' : '確定把 ' + sel.length + ' 筆改回草稿？'}</span><button class="btn" id="yes">確定</button><button class="btn ghost" id="no">取消</button>`
+        : `<span class="grow">已選 ${sel.length} 筆</span><button class="btn" id="pub">發布</button><button class="btn ghost" id="unpub">改回草稿</button><button class="btn ghost" id="clr">取消選取</button>`}</div>` : ''}`);
+  },
+  bind: e => {
+    on('tbody tr[data-k]', 'click', (ev, tr) => { if (ev.target.closest('input')) return; openDetail('slip', tr.dataset.k, e); });
+    on('.chip', 'click', (ev, b) => { S.filter.pub = b.dataset.f; viewEvent(e.id, 'publish'); });
+    on('.ck', 'change', (ev, c) => { c.checked ? S.sel.add(c.dataset.id) : S.sel.delete(c.dataset.id); S.confirm = null; viewEvent(e.id, 'publish'); });
+    const all = $('all'); if (all) all.onchange = () => { const f = S.filter.pub || 'all'; S.cache.slips.filter(s => s.status !== 'void' && (f === 'all' || s.status === f)).forEach(s => all.checked ? S.sel.add(s.id) : S.sel.delete(s.id)); S.confirm = null; viewEvent(e.id, 'publish'); };
+    const b = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+    b('pub', () => { S.confirm = 'published'; viewEvent(e.id, 'publish'); });
+    b('unpub', () => { S.confirm = 'draft'; viewEvent(e.id, 'publish'); });
+    b('clr', () => { S.sel = new Set(); viewEvent(e.id, 'publish'); });
+    b('no', () => { S.confirm = null; viewEvent(e.id, 'publish'); });
+    b('yes', async () => {
+      const status = S.confirm; S.confirm = null;
+      const r = await rpc('admin_set_status', { p_ids: [...S.sel], p_status: status });
+      flash(r.skipped_no_amount ? 'warn' : 'ok', (status === 'published' ? '已發布 ' : '已改回草稿 ') + r.updated + ' 筆。' + (r.skipped_no_amount ? '另有 ' + r.skipped_no_amount + ' 筆沒有金額，無法發布。' : ''));
+      S.sel = new Set(); refreshEvent(e, 'publish');
+    });
+  }
+};
+
+/* 步驟五：匯款 */
+const stepPayout = {
+  html: e => {
+    const live = S.cache.slips.filter(s => s.status !== 'void' && s.relation !== 'contract');
+    const pub = live.filter(s => s.status === 'published');
+    const noAcct = pub.filter(s => !s.pay_account).length;
+    return `<div class="card pad" style="margin-bottom:14px"><div class="row">
+        <div><label for="pd">發薪日</label><input id="pd" type="date" value="${esc(e.pay_date || '')}" style="width:180px"></div>
+        <div><label for="pw">活動後幾天內發薪</label><input id="pw" type="text" inputmode="numeric" value="${esc(e.pay_within_days == null ? '' : e.pay_within_days)}" style="width:140px"></div>
+        <button class="btn ghost" id="pdsave">儲存並套用到全部薪資單</button><span class="grow"></span>
+        <button class="btn" id="csv" ${pub.length ? '' : 'disabled'}>下載匯款清單（CSV）</button></div>
+        <p class="sub" style="margin-top:10px">薪資單上必須顯示發薪日。匯款清單只含已發布、屬於僱傭的薪資單，可直接在 Excel 開啟後交給銀行或會計。</p></div>
+      <div class="stats"><div class="card stat"><div class="k">已發布</div><div class="v">${pub.length} / ${live.length}</div></div>
+        <div class="card stat"><div class="k">匯款總額</div><div class="v">${money(pub.reduce((a, s) => a + Number(s.net || 0), 0))}</div></div>
+        <div class="card stat"><div class="k">缺匯款帳戶</div><div class="v" style="${noAcct ? 'color:var(--warn)' : ''}">${noAcct}</div></div></div>
+      <div class="card tablebox"><table>
+      <thead><tr><th>姓名</th><th>銀行</th><th>戶名</th><th>帳號</th><th class="r">實發</th><th>狀態</th></tr></thead>
+      <tbody>${live.map(s => `<tr><td>${esc(s.name)}</td><td>${esc([s.pay_bank_code, s.pay_bank_branch].filter(Boolean).join(' ') || '—')}</td><td>${esc(s.pay_account_name || '—')}</td>
+        <td>${s.pay_account ? esc(s.pay_account) : '<span class="badge warn">缺</span>'}</td><td class="r">${money(s.net)}</td><td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">沒有薪資單</td></tr>'}</tbody>
+      </table></div>`;
+  },
+  bind: e => {
+    $('pdsave').onclick = async () => {
+      const r = await rpc('admin_update_event', { p_id: e.id, p_patch: { pay_date: $('pd').value, pay_within_days: $('pw').value, apply_to_payslips: true } });
+      flash(r.ok ? 'ok' : 'err', r.ok ? '發薪日已套用到 ' + r.payslips_updated + ' 張薪資單。' : '儲存失敗。'); refreshEvent(e, 'payout');
+    };
+    const c = $('csv'); if (c) c.onclick = () => {
+      const pub = S.cache.slips.filter(s => s.status === 'published' && s.relation !== 'contract');
+      const cell = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [['姓名', '身分證字號', '銀行代碼', '分行', '戶名', '帳號', '實發金額', '發薪日'].map(cell).join(',')]
+        .concat(pub.map(s => [cell(s.name), cell(s.national_id), '="' + (s.pay_bank_code || '') + '"', cell(s.pay_bank_branch), cell(s.pay_account_name), '="' + (s.pay_account || '') + '"', s.net, cell(e.pay_date || '')].join(',')));
+      const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = e.name.replace(/[\\/:*?"<>|]/g, '') + '-匯款清單.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    };
+  }
+};
+
+/* ---------- 右側明細 ---------- */
+function issueRow(i) {
+  return `<div class="issue ${i.resolved ? 'done' : ''}"><div><span class="badge ${esc(i.severity)}">${{ error: '須處理', warn: '請確認', info: '說明' }[i.severity]}</span> ${esc(i.detail)}</div>${i.severity === 'info' ? '' : `<button class="link" style="padding:0;white-space:nowrap" data-issue="${esc(i.id)}" data-to="${!i.resolved}">${i.resolved ? '重新開啟' : '標為已處理'}</button>`}</div>`;
+}
+function bindIssues(e) {
+  document.querySelectorAll('[data-issue]').forEach(b => b.onclick = async () => {
+    await rpc('admin_resolve_issue', { p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' });
+    if (e) refreshEvent(e); else route();
+  });
+}
+async function openDetail(kind, key, e, keepScroll) {
+  S.detail = { kind, key };
+  document.querySelectorAll('tbody tr[data-k]').forEach(tr => tr.classList.toggle('on', tr.dataset.k === key));
+  const box = $('detail'); if (!box) return;
+  const close = '<button class="link x" id="dx">關閉</button>';
+  const bindClose = () => { $('dx').onclick = () => { S.detail = null; box.innerHTML = '<p class="empty" style="padding:30px 0">點左側一筆查看明細</p>'; document.querySelectorAll('tbody tr.on').forEach(tr => tr.classList.remove('on')); }; };
+  if (kind === 'addatt') {
+    box.innerHTML = `${close}<h1 style="font-size:19px">補登出勤</h1><p class="sub" style="margin-top:4px">給忘記掃碼簽到的人。建立後再填上下班時間。</p>
+      <label for="xid">身分證字號</label><input id="xid" type="text" maxlength="10" autocapitalize="characters">
+      <label for="xd">日期</label><input id="xd" type="date" value="${esc(e.start_date || '')}"><div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">建立</button>`;
+    bindClose();
+    $('save').onclick = async () => {
+      const r = await rpc('admin_add_attendance', { p_event: e.id, p_national_id: $('xid').value, p_date: $('xd').value || null });
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + ({ no_person: '找不到這個身分證字號，請先用新人報名連結登錄。', exists: '這個人當天已經有出勤紀錄。' }[r.error] || '請確認日期。') + '</div>'; return; }
+      S.detail = { kind: 'att', key: r.id }; refreshEvent(e, 'att');
+    };
+    return;
+  }
+  if (kind === 'att') {
+    const r = S.cache.att.find(x => x.id === key); if (!r) return;
+    box.innerHTML = `${close}<h1 style="font-size:19px">${esc(r.name)}</h1><p class="sub" style="margin-top:4px">${esc(d(r.work_date))}　${esc(SRC[r.source] || '')}${r.scheduled_text ? '　原排定 ' + esc(r.scheduled_text) : ''}</p>
+      <label for="ain">上班時間</label><input id="ain" type="datetime-local" value="${esc(r.clock_in || '')}">
+      <label for="aout">下班時間</label><input id="aout" type="datetime-local" value="${esc(r.clock_out || '')}">
+      <label for="abr">休息分鐘</label><input id="abr" type="text" inputmode="numeric" value="${esc(r.break_minutes)}">
+      <label for="anote">修改原因</label><textarea id="anote" placeholder="忘記簽退，依現場負責人確認">${esc(r.note || '')}</textarea>
+      <div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">儲存</button>
+      <p class="sub" style="margin-top:10px">修改會留下紀錄，來源改標為「人工」。</p>`;
+    bindClose();
+    $('save').onclick = async () => {
+      const r2 = await rpc('admin_set_attendance', { p_id: key, p_patch: { clock_in: $('ain').value, clock_out: $('aout').value, break_minutes: $('abr').value, note: $('anote').value } });
+      if (!r2.ok) { $('dm').innerHTML = '<div class="msg err">' + (r2.error === 'out_before_in' ? '下班時間必須晚於上班時間。' : '輸入的內容有誤。') + '</div>'; return; }
+      flash('ok', '出勤已更新。'); refreshEvent(e, 'att');
+    };
+    return;
+  }
+  if (kind === 'staff') {
+    const p = S.cache.staff.find(x => x.person_id === key); if (!p) return;
+    const st = p.staff || {};
+    box.innerHTML = `${close}<h1 style="font-size:19px">${esc(p.name)}</h1><p class="sub" style="margin-top:4px">${esc(p.national_id)}　${esc(p.phone || '')}</p>
+      <h2>在這場活動的計薪方式</h2>
+      <label for="srel" style="margin-top:0">性質</label><select id="srel"><option value="employment" ${st.relation !== 'contract' ? 'selected' : ''}>僱傭（自動算薪）</option><option value="contract" ${st.relation === 'contract' ? 'selected' : ''}>承攬（不自動算薪）</option></select>
+      <label for="stype">計薪方式</label><select id="stype"><option value="hourly" ${st.pay_type !== 'daily' ? 'selected' : ''}>時薪</option><option value="daily" ${st.pay_type === 'daily' ? 'selected' : ''}>日薪（8 小時內全額，超過另計加班）</option></select>
+      <label for="srate">金額（留空＝活動預設時薪）</label><input id="srate" type="text" inputmode="decimal" value="${esc(st.rate == null ? '' : Number(st.rate))}">
+      <label for="srole">崗位</label><input id="srole" type="text" value="${esc(st.role || '')}" placeholder="PT">
+      <label for="sins">勞保月投保薪資（留空＝活動設定）</label><input id="sins" type="text" inputmode="numeric" value="${esc(st.insured_salary == null ? '' : Number(st.insured_salary))}">
+      <label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:14px;margin-top:14px"><input id="sded" type="checkbox" ${st.deduct_insurance === false ? '' : 'checked'}> 從薪資扣勞保自付額</label>
+      <div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">儲存</button>
+      <button class="link" id="toperson" style="margin-top:12px">查看完整人員資料與證件</button>`;
+    bindClose();
+    $('toperson').onclick = () => go('#/people/' + key);
+    $('save').onclick = async () => {
+      const r = await rpc('admin_set_staff', { p_event: e.id, p_person: key, p_patch: { relation: $('srel').value, pay_type: $('stype').value, rate: $('srate').value, role: $('srole').value, insured_salary: $('sins').value, deduct_insurance: $('sded').checked } });
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">金額格式不正確。</div>'; return; }
+      flash('ok', p.name + ' 的計薪方式已儲存，重新產生薪資單後生效。'); refreshEvent(e, 'staff');
+    };
+    return;
+  }
+  if (kind === 'slip') {
+    box.innerHTML = '<p class="sub">載入中…</p>';
+    const r = await rpc('admin_payslip', { p_id: key }); if (!r.ok || !S.detail || S.detail.key !== key) return;
+    const p = r.payslip;
+    box.innerHTML = `${close}<h1 style="font-size:19px">${esc(p.person.name)}</h1>
+      <p class="sub" style="margin:4px 0 12px">${esc(p.person.national_id)}　<span class="badge ${esc(p.status)}">${STATUS[p.status]}</span></p>
+      ${p.issues.length ? p.issues.map(issueRow).join('') : ''}
+      <h2>金額</h2>
+      <table>${p.items.map(i => `<tr><td>${esc(i.label)}${i.work_date ? '<div class="dim">' + esc(md(i.work_date)) + (i.hours != null ? '　' + Number(i.hours) + ' 小時 × ' + money(i.rate) : '') + '</div>' : ''}</td><td class="r">${i.kind === 'deduction' ? '−' : ''}${money(i.amount)}</td></tr>`).join('')}
+        <tr><td><b>實發</b></td><td class="r"><b>${money(p.net)}</b></td></tr></table>
+      ${p.attendance.length ? '<h2>出勤</h2><table>' + p.attendance.map(a => `<tr><td>${esc(md(a.work_date))}</td><td class="r">${a.clock_in ? esc(a.clock_in) + '–' + esc(a.clock_out || '') : '<span class="dim">' + esc(a.scheduled_text || '無時間') + '</span>'}</td></tr>`).join('') + '</table>' : ''}
+      <h2>匯款</h2><dl class="kv"><dt>帳戶</dt><dd>${esc([p.pay_bank_code, p.pay_bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.pay_account_name || '')} ${esc(p.pay_account || '')}</dd><dt>發薪日</dt><dd>${esc(d(p.pay_date))}</dd></dl>
+      <h2>設定</h2>
+      <label for="rel" style="margin-top:0">性質</label><select id="rel"><option value="employment" ${p.relation === 'employment' ? 'selected' : ''}>僱傭（適用勞基法）</option><option value="contract" ${p.relation === 'contract' ? 'selected' : ''}>承攬（勞務報酬）</option></select>
+      <label for="pdate">發薪日</label><input id="pdate" type="date" value="${esc(p.pay_date || '')}">
+      <label for="note">備註（工讀生看得到）</label><textarea id="note">${esc(p.note || '')}</textarea>
+      <div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">儲存</button>
+      <button class="link" id="toperson" style="margin-top:12px">查看人員資料與證件</button>`;
+    bindClose(); bindIssues(e);
+    $('toperson').onclick = () => go('#/people/' + p.person.id);
+    $('save').onclick = async () => {
+      const r2 = await rpc('admin_update_payslip', { p_id: key, p_patch: { relation: $('rel').value, pay_date: $('pdate').value, note: $('note').value } });
+      if (r2.ok) { flash('ok', '已儲存。'); refreshEvent(e); }
+    };
+  }
+}
+
+/* ---------- 今日現場 ---------- */
+async function viewToday(pick) {
+  const evs = activeEvents();
+  if (!evs.length) {
+    shell('today', `<div class="head"><div><h1>今日現場</h1><p class="sub">${esc(d(today()))}</p></div></div>
+      <div class="card empty">今天沒有進行中的活動。<br><a href="#/events">到活動清單建立或查看活動</a></div>`);
+    return;
+  }
+  const e = evs.find(x => x.id === pick) || evs[0];
+  const [att, st] = await Promise.all([rpc('admin_attendance', { p_event: e.id }), rpc('admin_event_staff', { p_event: e.id })]);
+  const t = today(), rows = att.rows.filter(r => r.work_date === t || (r.clock_in && !r.clock_out));
+  const working = rows.filter(r => r.clock_in && !r.clock_out), done = rows.filter(r => r.clock_out);
+  const seen = new Set(rows.map(r => r.person_id));
+  const notYet = st.staff.filter(p => !seen.has(p.person_id) && (!p.staff || p.staff.relation !== 'contract'));
+  const list = (title, items, fn) => `<h2>${title}（${items.length}）</h2><div class="card">${items.length ? '<table>' + items.map(fn).join('') + '</table>' : '<p class="empty" style="padding:18px">—</p>'}</div>`;
+  shell('today', `
+    <div class="head"><div><h1>今日現場</h1><p class="sub">${esc(d(t))}　每 30 秒自動更新</p></div><a class="btn ghost" style="display:inline-flex;align-items:center;text-decoration:none" href="#/events/${esc(e.id)}/att">到出勤明細</a></div>
+    ${evs.length > 1 ? '<div class="tabs" role="tablist">' + evs.map(x => `<button class="tab" role="tab" aria-selected="${x.id === e.id}" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join('') + '</div>' : '<p style="margin:-6px 0 16px;font-weight:600">' + esc(e.name) + '</p>'}
+    <div class="live">
+      <div class="card pad" style="text-align:center"><p class="sub">掃描簽到／簽退</p><div class="qrbox" id="qr" style="margin-top:10px"><p class="sub">產生中…</p></div>
+        <p class="sub" style="margin-top:10px">每分鐘自動更換</p><button class="btn block" id="full" style="margin-top:12px">全螢幕顯示</button></div>
+      <div>
+        <div class="stats"><div class="card stat"><div class="k">上班中</div><div class="v">${working.length}</div></div><div class="card stat"><div class="k">已簽退</div><div class="v">${done.length}</div></div><div class="card stat"><div class="k">尚未簽到</div><div class="v" style="${notYet.length ? 'color:var(--warn)' : ''}">${notYet.length}</div></div></div>
+        ${list('上班中', working, r => `<tr><td>${esc(r.name)}</td><td class="r">${esc(hm(r.clock_in))} 簽到${r.work_date !== t ? ' <span class="badge warn">' + esc(md(r.work_date)) + ' 未簽退</span>' : ''}</td></tr>`)}
+        ${list('尚未簽到', notYet, p => `<tr><td>${esc(p.name)}</td><td class="r"><span class="dim">${esc(p.phone || '')}</span></td></tr>`)}
+        ${list('已簽退', done, r => `<tr><td>${esc(r.name)}</td><td class="r">${esc(hm(r.clock_in))}–${esc(hm(r.clock_out))}　${esc(dur(r.minutes))}</td></tr>`)}
+        <p class="sub" style="margin-top:10px">「尚未簽到」是這場活動已登錄、但今天還沒打卡的人。忘記打卡請到出勤明細補登。</p>
+      </div></div>`);
+  on('.tab', 'click', (ev, b) => go('#/today/' + b.dataset.id));
+  $('full').onclick = () => showQr(e);
+  const tick = async () => {
+    const box = $('qr'); if (!box) return;
+    try {
+      const r = await rpc('admin_checkin_code', { p_event: e.id });
+      const url = new URL('./', location.href).href + '?k=' + r.code;
+      const q = qrcode(0, 'M'); q.addData(url); q.make();
+      box.innerHTML = q.createSvgTag({ cellSize: 5, margin: 2, scalable: true });
+      S.timers.push(setTimeout(tick, (Number(r.refresh_in) + 1) * 1000));
+    } catch (err) { if (err.message !== 'session') S.timers.push(setTimeout(tick, 5000)); }
   };
+  tick();
+  S.timers.push(setTimeout(() => { if (location.hash.startsWith('#/today') && !overlay.innerHTML) route(); }, 30000));
 }
-function openAddAtt() {
-  const ev = S.ov.events.find(e => e.id === S.eventId);
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="補登出勤">
-    <div class="bar" style="margin-bottom:10px"><h1>補登出勤</h1><button class="btn ghost" id="close">關閉</button></div>
-    <p class="sub">給忘記掃碼簽到的人用。建立後再點該列填上下班時間。</p>
-    <label for="xid">身分證字號</label><input id="xid" type="text" maxlength="10" autocapitalize="characters">
-    <label for="xd">日期</label><input id="xd" type="date" value="${esc(ev.start_date || '')}">
-    <div id="dm"></div><button class="btn block" id="save">建立</button></div>`;
-  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; };
-  document.getElementById('save').onclick = async () => {
-    const r = await rpc('admin_add_attendance', { p_token: S.token, p_event: S.eventId, p_national_id: document.getElementById('xid').value, p_date: document.getElementById('xd').value || null });
-    if (!r.ok) { document.getElementById('dm').innerHTML = '<div class="msg err">' + ({ no_person: '找不到這個身分證字號，這個人還沒有建檔。', exists: '這個人當天已經有出勤紀錄。' }[r.error] || '請確認日期。') + '</div>'; return; }
-    drawer.innerHTML = ''; await load(true); openAtt(r.id);
+function showQr(e) {
+  let timer = null;
+  overlay.innerHTML = `<div class="qrscreen"><p class="sub">掃描簽到／簽退</p><h1 style="margin:4px 0 18px">${esc(e.name)}</h1>
+    <div class="qrbox" id="bigqr"><p class="sub">產生中…</p></div><p class="sub" style="margin-top:14px">每分鐘自動更換，請工讀生用手機相機掃描後登入。</p>
+    <button class="btn ghost" id="qrclose" style="margin-top:18px">關閉</button></div>`;
+  const stop = () => { clearTimeout(timer); overlay.innerHTML = ''; };
+  $('qrclose').onclick = stop;
+  const tick = async () => {
+    if (!$('bigqr')) return;
+    try {
+      const r = await rpc('admin_checkin_code', { p_event: e.id });
+      const url = new URL('./', location.href).href + '?k=' + r.code;
+      const q = qrcode(0, 'M'); q.addData(url); q.make();
+      $('bigqr').innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+      timer = setTimeout(tick, (Number(r.refresh_in) + 1) * 1000);
+    } catch (err) { if (err.message === 'session') return stop(); timer = setTimeout(tick, 5000); }
   };
+  tick();
 }
-async function openHolidays(set) {
-  const r = await rpc('admin_holidays', { p_token: S.token, p_set: set && set.day ? set : null });
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="國定假日">
-    <div class="bar" style="margin-bottom:10px"><h1>國定假日</h1><button class="btn ghost" id="close">關閉</button></div>
-    <p class="sub">這些日期出勤會自動加倍計薪。請對照行政院人事行政總處公告核對，尤其是農曆節日。</p>
-    ${r.ok === false ? '<div class="msg err">日期或名稱有誤。</div>' : ''}
-    <table style="margin-top:10px">${(r.holidays || []).map(h => `<tr><td>${esc(d(h.day))}</td><td>${esc(h.name)}</td><td class="r"><button class="link" style="padding:0" data-del="${esc(h.day)}">刪除</button></td></tr>`).join('')}</table>
-    <h2>新增</h2>
-    <label for="hd" style="margin-top:0">日期</label><input id="hd" type="date">
-    <label for="hn">名稱</label><input id="hn" type="text" placeholder="例如：國慶日">
-    <button class="btn block" id="save">新增</button></div>`;
-  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; if (S.tab === 'att') load(true); };
-  drawer.querySelectorAll('[data-del]').forEach(b => b.onclick = () => openHolidays({ day: b.dataset.del, name: '' }));
-  document.getElementById('save').onclick = () => { const day = document.getElementById('hd').value, name = document.getElementById('hn').value.trim(); if (day && name) openHolidays({ day, name }); };
+
+/* ---------- 人員 ---------- */
+async function viewPeople(id) {
+  const q = S.filter.peopleQ || '';
+  const r = await rpc('admin_people', { p_q: q });
+  shell('people', `<div class="head"><div><h1>人員</h1><p class="sub">共 ${r.total} 人${q ? '，符合 ' + r.people.length + ' 人' : '，顯示最近建立的 ' + r.people.length + ' 人'}</p></div>
+      <form id="pf" class="row" style="align-items:center"><input id="pq" type="search" value="${esc(q)}" placeholder="姓名、身分證字號或電話" aria-label="搜尋人員" style="width:260px"><button class="btn ghost">搜尋</button></form></div>
+    ${splitWrap(`<div class="card tablebox"><table><thead><tr><th>姓名</th><th>電話</th><th class="r">證件</th><th class="r">待確認</th></tr></thead>
+      <tbody>${r.people.map(p => `<tr data-k="${esc(p.id)}" class="${p.id === id ? 'on' : ''}"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge ok">自行登錄</span>' : ''}<div class="dim">${esc(p.national_id)}</div></td>
+        <td>${esc(p.phone || '—')}</td><td class="r">${p.docs}/3</td><td class="r">${p.open_issues ? '<span class="badge warn">' + p.open_issues + '</span>' : '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">找不到符合的人</td></tr>'}</tbody></table></div>`)}`);
+  $('pf').onsubmit = ev => { ev.preventDefault(); S.filter.peopleQ = $('pq').value; viewPeople(); };
+  on('tbody tr[data-k]', 'click', (ev, tr) => { history.replaceState(null, '', '#/people/' + tr.dataset.k); openPerson(tr.dataset.k); });
+  if (id) openPerson(id);
 }
-async function openJoin() {
-  const r = await rpc('admin_signup_code', { p_token: S.token, p_event: S.eventId });
-  const url = new URL('./', location.href).href + '?join=' + r.code;
-  const q = qrcode(0, 'M'); q.addData(url); q.make();
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="新人報名連結">
-    <div class="bar" style="margin-bottom:10px"><h1>新人報名連結</h1><button class="btn ghost" id="close">關閉</button></div>
-    <p class="sub">傳給第一次合作的工讀生，讓他們自己填基本資料和上傳證件。已經有資料的人不用填，直接登入即可。</p>
-    ${r.open ? '' : '<div class="msg warn">這場活動已經結束，連結目前無法使用。</div>'}
-    <label for="ju">連結</label><input id="ju" type="text" readonly value="${esc(url)}">
-    <button class="btn block" id="copy">複製連結</button>
-    <div style="margin-top:18px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;max-width:260px">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>
-    <p class="sub" style="margin-top:12px">連結在活動結束隔天後失效。請只傳給這場活動的人員，不要公開張貼。</p></div>`;
-  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; };
-  document.getElementById('copy').onclick = async () => { const i = document.getElementById('ju'); i.select(); try { await navigator.clipboard.writeText(url); } catch (e) { document.execCommand('copy'); } document.getElementById('copy').textContent = '已複製'; };
-}
-async function openPeople(q) {
-  const r = await rpc('admin_people', { p_token: S.token, p_q: q });
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="人員">
-    <div class="bar" style="margin-bottom:10px"><h1>人員</h1><button class="btn ghost" id="close">關閉</button></div>
-    <form id="pf" style="display:flex;gap:8px"><input id="pq" type="text" value="${esc(q)}" placeholder="姓名、身分證字號或電話" aria-label="搜尋人員"><button class="btn">搜尋</button></form>
-    <p class="sub" style="margin:10px 0 4px">共 ${r.total} 人${q ? '，符合 ' + r.people.length + ' 人' : '，顯示最近建立的 ' + r.people.length + ' 人'}</p>
-    <table>${r.people.map(p => `<tr data-p="${esc(p.id)}" style="cursor:pointer"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge published">自行登錄</span>' : p.source === 'test' ? ' <span class="badge">測試</span>' : ''}<div class="dim">${esc(p.national_id)}　${esc(p.phone || '')}</div></td>
-      <td class="r">${p.open_issues ? '<span class="badge warn">' + p.open_issues + ' 項</span> ' : ''}<span class="dim">證件 ${p.docs}/3</span></td></tr>`).join('') || '<tr><td class="sub">找不到符合的人</td></tr>'}</table></div>`;
-  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; };
-  document.getElementById('pf').onsubmit = e => { e.preventDefault(); openPeople(document.getElementById('pq').value); };
-  drawer.querySelectorAll('tr[data-p]').forEach(tr => tr.onclick = () => openPerson(tr.dataset.p, q));
-}
-async function openPerson(id, q) {
-  const r = await rpc('admin_person', { p_token: S.token, p_id: id }); if (!r.ok) return;
+async function openPerson(id) {
+  document.querySelectorAll('tbody tr[data-k]').forEach(tr => tr.classList.toggle('on', tr.dataset.k === id));
+  const box = $('detail'); box.innerHTML = '<p class="sub">載入中…</p>';
+  const r = await rpc('admin_person', { p_id: id }); if (!r.ok) { box.innerHTML = '<p class="empty">找不到這個人</p>'; return; }
   const p = r.person, DOCS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="人員資料">
-    <div class="bar" style="margin-bottom:10px"><h1>${esc(p.name)}</h1><button class="btn ghost" id="backp">返回名單</button></div>
-    <dl class="kv">
-      <dt>身分證字號</dt><dd>${esc(p.national_id)}</dd><dt>生日</dt><dd>${esc(p.birth_date ? d(p.birth_date) : '無法辨識（' + (p.birth_raw || '空白') + '）')}</dd>
-      <dt>電話</dt><dd>${esc(p.phone || '—')}</dd><dt>Email</dt><dd>${esc(p.email || '—')}</dd>
-      <dt>戶籍地址</dt><dd>${esc(p.address || '—')}</dd>
+  box.innerHTML = `<h1 style="font-size:19px">${esc(p.name)}</h1><p class="sub" style="margin:4px 0 12px">${{ self: '自行登錄', legacy: '舊表匯入', test: '測試資料' }[p.source] || esc(p.source)}　建檔 ${esc(d(p.created_at))}</p>
+    <dl class="kv"><dt>身分證字號</dt><dd>${esc(p.national_id)}</dd><dt>生日</dt><dd>${esc(p.birth_date ? d(p.birth_date) : '無法辨識（' + (p.birth_raw || '空白') + '）')}</dd>
+      <dt>電話</dt><dd>${esc(p.phone || '—')}</dd><dt>Email</dt><dd>${esc(p.email || '—')}</dd><dt>戶籍地址</dt><dd>${esc(p.address || '—')}</dd>
       <dt>匯款帳戶</dt><dd>${esc([p.bank_code, p.bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.bank_account_name || '')} ${esc(p.bank_account || '')}</dd>
-      <dt>建檔</dt><dd>${esc(d(String(p.created_at).slice(0, 10)))}　${{ self: '自行登錄', legacy: '舊表匯入', test: '測試資料' }[p.source] || esc(p.source)}</dd>
-      <dt>個資同意</dt><dd>${p.consent_at ? esc(d(String(p.consent_at).slice(0, 10))) : '無紀錄（舊資料）'}</dd>
-    </dl>
-    <h2>證件影本</h2>
-    ${DOCS.map(([k, t]) => `<div class="issue"><div>${t}<div class="dim">${p.documents[k] ? '上傳於 ' + esc(d(String(p.documents[k]).slice(0, 10))) : '尚未上傳'}</div></div>${p.documents[k] ? `<button class="btn ghost" data-doc="${k}">開啟</button>` : ''}</div>`).join('')}
-    <p class="sub" style="margin-top:6px">開啟的連結 2 分鐘後失效，每次調閱都會留下紀錄。</p>
-    ${p.issues.length ? '<h2>問題</h2>' + p.issues.map(issueRow).join('') : ''}
+      <dt>個資同意</dt><dd>${p.consent_at ? esc(d(p.consent_at)) : '無紀錄（舊資料）'}</dd></dl>
+    <h2>證件影本</h2>${DOCS.map(([k, t]) => `<div class="issue"><div>${t}<div class="dim">${p.documents[k] ? '上傳於 ' + esc(d(p.documents[k])) : '尚未上傳'}</div></div>${p.documents[k] ? `<button class="btn ghost sm" data-doc="${k}">開啟</button>` : ''}</div>`).join('')}
+    <p class="dim" style="margin-top:6px">連結 2 分鐘後失效，每次調閱都會留下紀錄。</p>
+    ${p.issues.length ? '<h2>待確認</h2>' + p.issues.map(issueRow).join('') : ''}
     ${p.payslips.length ? '<h2>薪資單</h2><table>' + p.payslips.map(x => `<tr><td>${esc(x.event)}<div class="dim">${esc(d(x.period_start))}</div></td><td class="r">${money(x.net)} <span class="badge ${esc(x.status)}">${STATUS[x.status]}</span></td></tr>`).join('') + '</table>' : ''}
-    <h2>帳號</h2>
-    <p class="sub">${p.has_password ? (p.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
-    <div id="dm"></div><button class="btn ghost" id="reset" style="margin-top:8px" ${p.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button></div>`;
-  document.getElementById('backp').onclick = () => openPeople(q || '');
-  drawer.querySelectorAll('[data-doc]').forEach(b => b.onclick = async () => {
+    <h2>帳號</h2><p class="sub">${p.has_password ? (p.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
+    <div id="dm" style="margin-top:10px"></div><button class="btn ghost" id="reset" ${p.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button>`;
+  box.querySelectorAll('[data-issue]').forEach(b => b.onclick = async () => { await rpc('admin_resolve_issue', { p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' }); openPerson(id); });
+  box.querySelectorAll('[data-doc]').forEach(b => b.onclick = async () => {
     const win = window.open('', '_blank');
     try {
       const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: id, kind: b.dataset.doc }) });
       const j = await res.json();
-      if (j.ok) { if (win) win.location = j.url; else location.href = j.url; b.dataset.opened = '1'; } else { if (win) win.close(); document.getElementById('dm').innerHTML = '<div class="msg err">無法開啟檔案。</div>'; }
-    } catch (e) { if (win) win.close(); document.getElementById('dm').innerHTML = '<div class="msg err">無法開啟檔案。</div>'; }
+      if (j.ok) { if (win) win.location = j.url; else location.href = j.url; } else { if (win) win.close(); $('dm').innerHTML = '<div class="msg err">無法開啟檔案。</div>'; }
+    } catch (err) { if (win) win.close(); $('dm').innerHTML = '<div class="msg err">無法開啟檔案。</div>'; }
   });
-  drawer.querySelectorAll('[data-issue]').forEach(b => b.onclick = async () => { await rpc('admin_resolve_issue', { p_token: S.token, p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' }); openPerson(id, q); });
-  document.getElementById('reset').onclick = async () => {
-    const r2 = await rpc('admin_reset_password', { p_token: S.token, p_person: id });
-    document.getElementById('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>';
-  };
-}
-let qrTimer = null;
-function showQr() {
-  const overlay = document.getElementById('overlay'), ev = S.ov.events.find(e => e.id === S.eventId);
-  overlay.innerHTML = `<div class="qrscreen"><p class="sub">掃描簽到／簽退</p><h1 style="margin:4px 0 18px">${esc(ev.name)}</h1>
-    <div class="qrbox" id="qr"><p class="sub">產生中…</p></div>
-    <p class="sub" id="qrt" style="margin-top:14px"></p>
-    <button class="btn ghost" id="qrclose" style="margin-top:18px">關閉</button></div>`;
-  const stop = () => { clearTimeout(qrTimer); qrTimer = null; overlay.innerHTML = ''; if (S.tab === 'att') load(true); };
-  document.getElementById('qrclose').onclick = stop;
-  const tick = async () => {
-    if (!document.getElementById('qr')) return;
-    try {
-      const r = await rpc('admin_checkin_code', { p_token: S.token, p_event: S.eventId });
-      if (!r.ok) return stop();
-      const url = new URL('./', location.href).href + '?k=' + r.code;
-      const q = qrcode(0, 'M'); q.addData(url); q.make();
-      document.getElementById('qr').innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
-      document.getElementById('qr').dataset.url = url;
-      document.getElementById('qrt').textContent = '每分鐘自動更換，請工讀生用手機相機掃描後登入。';
-      qrTimer = setTimeout(tick, (Number(r.refresh_in) + 1) * 1000);
-    } catch (err) { if (err.message === 'session') return stop(); document.getElementById('qrt').textContent = '網路中斷，重新連線中…'; qrTimer = setTimeout(tick, 5000); }
-  };
-  tick();
-}
-function issueRow(i) {
-  return `<div class="issue ${i.resolved ? 'done' : ''}"><div><span class="badge ${esc(i.severity)}">${{ error: '須處理', warn: '請確認', info: '說明' }[i.severity]}</span> ${esc(i.detail)}</div>${i.severity === 'info' ? '' : `<button class="link" style="padding:0;white-space:nowrap" data-issue="${esc(i.id)}" data-to="${!i.resolved}">${i.resolved ? '重新開啟' : '標為已處理'}</button>`}</div>`;
-}
-function bindIssue(b) {
-  b.onclick = async () => { await rpc('admin_resolve_issue', { p_token: S.token, p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' }); await load(true); if (S.openId) openSlip(S.openId); };
+  $('reset').onclick = async () => { const r2 = await rpc('admin_reset_password', { p_person: id }); $('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>'; };
 }
 
-async function openSlip(id) {
-  S.openId = id; app.querySelectorAll('tbody tr').forEach(tr => tr.classList.toggle('open', tr.dataset.id === id));
-  drawer.innerHTML = '<div class="drawer"><p class="sub">載入中…</p></div>';
-  const r = await rpc('admin_payslip', { p_token: S.token, p_id: id });
-  if (!r.ok) { drawer.innerHTML = ''; return; }
-  const p = r.payslip;
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="薪資單明細">
-    <div class="bar" style="margin-bottom:10px"><h1>${esc(p.person.name)}</h1><button class="btn ghost" id="close">關閉</button></div>
-    <dl class="kv">
-      <dt>身分證字號</dt><dd>${esc(p.person.national_id)}</dd><dt>電話</dt><dd>${esc(p.person.phone || '—')}</dd>
-      <dt>狀態</dt><dd><span class="badge ${esc(p.status)}">${STATUS[p.status]}</span></dd>
-      <dt>工作日（原填）</dt><dd>${esc(p.work_dates_text || '—')}</dd>
-      <dt>計薪區間</dt><dd>${esc(d(p.period_start))} – ${esc(d(p.period_end))}</dd>
-      <dt>匯款帳戶</dt><dd>${esc([p.pay_bank_code, p.pay_bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.pay_account_name || '')} ${esc(p.pay_account || '')}</dd>
-    </dl>
-    <h2>金額</h2>
-    <table>${p.items.map(i => `<tr><td>${esc(i.label)}${i.work_date ? '<div class="dim">' + esc(d(i.work_date)) + (i.hours != null ? '　' + Number(i.hours) + ' 小時 × ' + money(i.rate) : '') + '</div>' : ''}</td><td class="r">${i.kind === 'deduction' ? '−' : ''}${money(i.amount)}</td></tr>`).join('')}
-      <tr><td><b>實發</b></td><td class="r"><b>${money(p.net)}</b></td></tr></table>
-    ${p.attendance.length ? '<h2>出勤</h2><table>' + p.attendance.map(a => `<tr><td>${esc(d(a.work_date))}</td><td class="r">${a.clock_in ? esc(a.clock_in) + ' – ' + esc(a.clock_out || '') : '<span class="dim">' + esc(a.scheduled_text || '無時間紀錄') + '</span>'}</td></tr>`).join('') + '</table>' : ''}
-    ${p.issues.length ? '<h2>問題</h2>' + p.issues.map(issueRow).join('') : ''}
-    <h2>設定</h2>
-    <label for="rel" style="margin-top:0">性質</label>
-    <select id="rel"><option value="employment" ${p.relation === 'employment' ? 'selected' : ''}>僱傭（適用勞基法）</option><option value="contract" ${p.relation === 'contract' ? 'selected' : ''}>承攬（勞務報酬）</option></select>
-    <label for="pdate">發薪日</label><input id="pdate" type="date" value="${esc(p.pay_date || '')}">
-    <label for="note">備註（工讀生看得到）</label><textarea id="note">${esc(p.note || '')}</textarea>
-    <div id="dm"></div>
-    <button class="btn block" id="save">儲存</button>
-    <h2>帳號</h2>
-    <p class="sub">${p.person.has_password ? (p.person.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.person.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
-    <button class="btn ghost" id="reset" style="margin-top:8px" ${p.person.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button>
-  </div>`;
-  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; S.openId = null; app.querySelectorAll('tbody tr.open').forEach(tr => tr.classList.remove('open')); };
-  drawer.querySelectorAll('[data-issue]').forEach(bindIssue);
-  document.getElementById('save').onclick = async () => {
-    const r2 = await rpc('admin_update_payslip', { p_token: S.token, p_id: id, p_patch: { relation: document.getElementById('rel').value, pay_date: document.getElementById('pdate').value, note: document.getElementById('note').value } });
-    if (r2.ok) { await load(true); await openSlip(id); document.getElementById('dm').innerHTML = '<div class="msg ok">已儲存。</div>'; }
-  };
-  document.getElementById('reset').onclick = async () => {
-    const r2 = await rpc('admin_reset_password', { p_token: S.token, p_person: p.person.id });
-    document.getElementById('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>';
-  };
+/* ---------- 薪資發放 ---------- */
+function viewPayouts() {
+  const t = today();
+  const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => (a.pay_date || '9999') < (b.pay_date || '9999') ? -1 : 1);
+  const todo = evs.filter(e => !e.pay_date || e.published < e.total - e.void);
+  shell('payouts', `<div class="head"><div><h1>薪資發放</h1><p class="sub">依發薪日排序。未設發薪日或尚未全部發布的活動排在待辦。</p></div></div>
+    <div class="stats"><div class="card stat"><div class="k">待辦活動</div><div class="v" style="${todo.length ? 'color:var(--warn)' : ''}">${todo.length}</div></div>
+      <div class="card stat"><div class="k">未發布薪資單</div><div class="v">${evs.reduce((a, e) => a + (e.total - e.void - e.published), 0)}</div></div>
+      <div class="card stat"><div class="k">30 天內應發總額</div><div class="v">${money(evs.filter(e => e.pay_date && e.pay_date >= t && e.pay_date <= addDays(t, 30)).reduce((a, e) => a + Number(e.net_sum || 0), 0))}</div></div></div>
+    <div class="card tablebox"><table><thead><tr><th>發薪日</th><th>活動</th><th class="r">已發布</th><th class="r">實發合計</th><th>狀態</th></tr></thead>
+      <tbody>${evs.map(e => { const pending = e.total - e.void - e.published; const late = e.pay_date && e.pay_date < t && pending > 0;
+        return `<tr data-k="${esc(e.id)}"><td>${e.pay_date ? esc(d(e.pay_date)) : '<span class="badge warn">未設</span>'}</td><td><b>${esc(e.name)}</b></td><td class="r">${e.published} / ${e.total - e.void}</td><td class="r">${money(e.net_sum)}</td>
+        <td>${late ? '<span class="badge error">已過發薪日仍有未發布</span>' : pending ? '<span class="badge warn">尚有 ' + pending + ' 張未發布</span>' : !e.pay_date ? '<span class="badge warn">待設發薪日</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || '<tr><td colspan="5" class="empty">還沒有薪資單</td></tr>'}</tbody></table></div>`);
+  on('tbody tr[data-k]', 'click', (ev, tr) => go('#/events/' + tr.dataset.k + '/payout'));
 }
 
-function openEmployer() {
-  const em = S.ov.employer || {};
-  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="公司資料">
-    <div class="bar" style="margin-bottom:10px"><h1>公司資料</h1><button class="btn ghost" id="close">關閉</button></div>
-    <p class="sub">這些資料會顯示在每張薪資單的「雇主」欄。</p>
-    <label for="ln">公司全名</label><input id="ln" type="text" value="${esc(em.legal_name || '')}" placeholder="例如：○○有限公司">
-    <label for="tx">統一編號（8 碼）</label><input id="tx" type="text" inputmode="numeric" maxlength="8" value="${esc(em.tax_id || '')}">
-    <div id="dm"></div><button class="btn block" id="save">儲存</button></div>`;
-  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; };
-  document.getElementById('save').onclick = async () => {
-    const r = await rpc('admin_update_employer', { p_token: S.token, p_patch: { legal_name: document.getElementById('ln').value, tax_id: document.getElementById('tx').value } });
-    if (!r.ok) { document.getElementById('dm').innerHTML = '<div class="msg err">統一編號必須是 8 個數字。</div>'; return; }
-    drawer.innerHTML = ''; S.flash = { type: 'ok', text: '公司資料已更新。' }; await load(true);
-  };
+/* ---------- 設定 ---------- */
+async function viewSettings(tab) {
+  tab = tab || S.filter.settings || 'company';
+  S.filter.settings = tab;
+  const TABS = [['company', '公司資料'], ['holidays', '國定假日'], ['wages', '最低工資'], ['admins', '管理員']];
+  let body = '';
+  if (tab === 'company') {
+    const em = S.ov.employer || {};
+    body = `<form id="cf" class="card pad" style="max-width:520px"><p class="sub" style="margin:0">顯示在每張薪資單的「雇主」欄。</p>
+      <label for="ln">公司全名</label><input id="ln" type="text" value="${esc(em.legal_name || '')}" placeholder="○○有限公司">
+      <label for="tx">統一編號（8 碼）</label><input id="tx" type="text" inputmode="numeric" maxlength="8" value="${esc(em.tax_id || '')}">
+      <div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form>`;
+  } else if (tab === 'holidays') {
+    const r = await rpc('admin_holidays', { p_set: null });
+    body = `<div class="split" style="grid-template-columns:minmax(0,1fr) minmax(280px,360px)"><div class="card tablebox"><table><thead><tr><th>日期</th><th>名稱</th><th></th></tr></thead>
+      <tbody>${r.holidays.map(h => `<tr><td>${esc(d(h.day))}</td><td>${esc(h.name)}</td><td class="r"><button class="link" data-del="${esc(h.day)}">刪除</button></td></tr>`).join('')}</tbody></table></div>
+      <form id="hf" class="card pad"><b>新增</b><p class="sub" style="margin:4px 0 0">這些日期出勤會自動加倍計薪。請對照<a href="https://www.dgpa.gov.tw/informationlist?uid=30" target="_blank" rel="noopener">人事行政總處辦公日曆表</a>核對，補假日也要加。</p>
+      <label for="hd">日期</label><input id="hd" type="date" required><label for="hn">名稱</label><input id="hn" type="text" placeholder="國慶日" required>
+      <div id="dm" style="margin-top:12px"></div><button class="btn block">新增</button></form></div>`;
+  } else if (tab === 'wages') {
+    const r = await rpc('admin_min_wages', { p_set: null });
+    body = `<div class="split" style="grid-template-columns:minmax(0,1fr) minmax(280px,360px)"><div class="card tablebox"><table><thead><tr><th>生效日</th><th class="r">每小時</th><th class="r">每月</th></tr></thead>
+      <tbody>${r.rows.map(w => `<tr><td>${esc(d(w.effective_from))}</td><td class="r">${money(w.hourly)}</td><td class="r">${money(w.monthly)}</td></tr>`).join('')}</tbody></table></div>
+      <form id="wf" class="card pad"><b>新增或修改</b><p class="sub" style="margin:4px 0 0">依勞動部公告填寫。算薪時會用工作日當天適用的金額檢查時薪。</p>
+      <label for="wd">生效日</label><input id="wd" type="date" required><label for="wh">每小時最低工資</label><input id="wh" type="text" inputmode="decimal" required>
+      <label for="wm">每月最低工資</label><input id="wm" type="text" inputmode="numeric" required><div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form></div>`;
+  } else {
+    body = `<div class="card pad" style="max-width:560px"><p>目前登入：<b>${esc(S.user)}</b></p><p class="sub" style="margin-top:8px">新增管理員需要一次性的設定碼，請向系統維護人員索取。拿到後在登入頁按「第一次使用？用設定碼建立管理員」。</p></div>`;
+  }
+  shell('settings', `<div class="head"><div><h1>設定</h1></div></div>
+    <div class="tabs" role="tablist">${TABS.map(([k, t]) => `<button class="tab" role="tab" aria-selected="${k === tab}" data-t="${k}">${t}</button>`).join('')}</div>${body}`);
+  on('.tab', 'click', (ev, b) => viewSettings(b.dataset.t));
+  const f = id => $(id);
+  if (f('cf')) f('cf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_update_employer', { p_patch: { legal_name: $('ln').value, tax_id: $('tx').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">統一編號必須是 8 個數字。</div>'; return; } await loadOverview(); flash('ok', '公司資料已更新。'); viewSettings('company'); };
+  if (f('hf')) {
+    f('hf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_holidays', { p_set: { day: $('hd').value, name: $('hn').value.trim() } }); if (r.ok === false) { $('dm').innerHTML = '<div class="msg err">日期或名稱有誤。</div>'; return; } flash('ok', '已新增。'); viewSettings('holidays'); };
+    on('[data-del]', 'click', async (ev, b) => { await rpc('admin_holidays', { p_set: { day: b.dataset.del, name: '' } }); flash('ok', '已刪除 ' + d(b.dataset.del) + '。'); viewSettings('holidays'); });
+  }
+  if (f('wf')) f('wf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_min_wages', { p_set: { effective_from: $('wd').value, hourly: $('wh').value, monthly: $('wm').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">請確認日期與金額。</div>'; return; } flash('ok', '最低工資已儲存。'); viewSettings('wages'); };
 }
 
-S.token ? load() : viewAuth('login');
+route();
 </script>
 </body>
 </html>
