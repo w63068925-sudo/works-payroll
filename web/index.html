@@ -171,7 +171,7 @@ async function viewList() {
   document.title = '我的薪資｜沃克思';
   app.innerHTML = brand + '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
   let r;
-  try { const both = await Promise.all([rpc('payroll_my_payslips', { p_token: state.token }), rpc('payroll_my_events', { p_token: state.token })]); r = both[0]; state.myEvents = both[1].ok ? both[1].events : []; }
+  try { const both = await Promise.all([rpc('payroll_my_payslips', { p_token: state.token }), rpc('payroll_my_events', { p_token: state.token }), rpc('payroll_line_status', { p_token: state.token })]); r = both[0]; state.myEvents = both[1].ok ? both[1].events : []; state.line = both[2].ok ? both[2] : null; }
   catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewList()">重新載入</button>'; return; }
   if (!r.ok) { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
   state.person = r.person; state.payslips = r.payslips;
@@ -192,6 +192,7 @@ function renderList() {
         <button class="btn ghost small" id="out">登出</button>
       </div>
     </div>
+    ${state.line && state.line.basic_id && !state.line.linked ? '<div class="msg warn" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span>綁定 LINE，錄取、上班前一天提醒和薪資單都會直接通知你。</span><button class="btn small" id="tolink" style="height:36px;margin:0">綁定 LINE</button></div>' : ''}
     ${scheduleBlock()}
     ${state.person.default_password ? '<div class="msg warn">你還在使用預設密碼（生日）。為了保護薪資資料，建議按右上角「我的資料」→「更改密碼」換一組。</div>' : ''}
     ${state.payslips.length ? `
@@ -208,6 +209,7 @@ function renderList() {
     <p class="foot">薪資明細依勞動基準法第 23 條提供，可隨時查詢與列印。金額有疑問請聯絡沃克思的活動窗口。</p>`;
   app.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { state.year = b.dataset.y; renderList(); }));
   app.querySelectorAll('.slip').forEach(b => b.addEventListener('click', () => viewSlip(b.dataset.id)));
+  const tl = document.getElementById('tolink'); if (tl) tl.addEventListener('click', () => viewProfile(null, true));
   app.querySelectorAll('[data-contract]').forEach(b => b.addEventListener('click', () => viewContract(b.dataset.contract)));
   app.querySelectorAll('[data-join]').forEach(b => b.addEventListener('click', () => { saveJoin(b.dataset.join); viewRecruit(); }));
   document.getElementById('out').addEventListener('click', async () => { try { await rpc('payroll_logout', { p_token: state.token }); } catch (e) {} saveToken(null); viewLogin(); });
@@ -394,7 +396,7 @@ function viewDocs(message) {
   bindDocs();
   document.getElementById('done').addEventListener('click', () => state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList());
 }
-async function viewProfile(message) {
+async function viewProfile(message, focusLine) {
   document.title = '我的資料｜沃克思';
   app.innerHTML = brand + '<div class="skeleton" style="height:200px"></div>';
   let r;
@@ -411,11 +413,14 @@ async function viewProfile(message) {
       <div id="m"></div><button class="btn" id="go">儲存</button>
     </form>
     <h2>證件影本</h2>${docsBlock(p.documents || {})}
+    <h2 id="lineh">LINE 通知</h2><div class="card pad" id="linebox"><p class="sub">載入中…</p></div>
     <button class="btn ghost" id="cp">更改密碼</button>
     <p class="foot">姓名、身分證字號或生日有誤無法自行修改，請聯絡沃克思的活動窗口。更改匯款帳戶後請重新上傳存摺封面。</p>`;
   bindDocs();
   document.getElementById('back').addEventListener('click', viewList);
   document.getElementById('cp').addEventListener('click', viewPassword);
+  renderLine();
+  if (focusLine) document.getElementById('lineh').scrollIntoView({ block: 'start' });
   document.getElementById('f').addEventListener('submit', async e => {
     e.preventDefault(); const m = document.getElementById('m'); m.innerHTML = '';
     try {
@@ -533,6 +538,34 @@ async function viewContract(appId) {
     if (r2.ok) return viewContract(appId);
     document.getElementById('m').innerHTML = '<div class="msg err">確認失敗，請重新整理後再試。</div>'; go.disabled = false;
   });
+}
+
+async function renderLine(code) {
+  const box = document.getElementById('linebox'); if (!box) return;
+  let st;
+  try { st = await rpc('payroll_line_status', { p_token: state.token }); } catch (err) { box.innerHTML = '<p class="sub">' + esc(err.message) + '</p>'; return; }
+  if (!st.ok) return;
+  const id = st.basic_id;
+  if (!id) { box.innerHTML = '<p class="sub">LINE 通知尚未開放。</p>'; return; }
+  if (st.linked) {
+    box.innerHTML = `<p style="color:var(--accent);font-weight:600">已綁定 LINE</p><p class="sub" style="margin-top:4px">錄取、上班前一天提醒、忘記簽退和薪資單發布都會傳到 LINE。</p><button class="link" id="unlink" style="margin-top:8px">解除綁定</button>`;
+    const u = document.getElementById('unlink');
+    u.addEventListener('click', async () => { if (!u.dataset.sure) { u.dataset.sure = '1'; u.textContent = '確定解除？再按一次'; return; } await rpc('payroll_line_unlink', { p_token: state.token }); renderLine(); });
+    return;
+  }
+  if (!code) {
+    box.innerHTML = `<p class="sub">綁定後，錄取通知、上班前一天提醒和薪資單發布都會直接傳到你的 LINE。</p><button class="btn" id="mkcode">開始綁定</button>`;
+    document.getElementById('mkcode').addEventListener('click', async () => { const r = await rpc('payroll_line_code', { p_token: state.token }); if (r.ok) renderLine(r.code); });
+    return;
+  }
+  const enc = encodeURIComponent(id);
+  box.innerHTML = `<p class="sub">你的綁定碼（15 分鐘內有效）</p>
+    <div style="font-family:var(--num);font-size:40px;font-weight:700;letter-spacing:.18em;margin:4px 0 14px">${esc(code)}</div>
+    <a class="btn ghost" style="display:flex;align-items:center;justify-content:center;text-decoration:none;margin-top:0" href="https://line.me/R/ti/p/${enc}" target="_blank" rel="noopener">1. 加入沃克思 LINE 好友（${esc(id)}）</a>
+    <a class="btn" style="display:flex;align-items:center;justify-content:center;text-decoration:none;margin-top:10px" href="https://line.me/R/oaMessage/${enc}/?${encodeURIComponent('綁定 ' + code)}" target="_blank" rel="noopener">2. 把綁定碼傳給官方帳號</a>
+    <p class="hint">在 LINE 收到「綁定完成」後，回到這頁按下面的按鈕。</p>
+    <button class="btn ghost" id="recheck">我已經傳送了，重新檢查</button>`;
+  document.getElementById('recheck').addEventListener('click', async () => { const r = await rpc('payroll_line_status', { p_token: state.token }); if (r.linked) renderLine(); else document.querySelector('#linebox .hint').textContent = '還沒收到綁定碼。請確認已加入好友，並把 ' + code + ' 傳給官方帳號。'; });
 }
 
 async function viewCheckin(action) {

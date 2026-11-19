@@ -126,6 +126,8 @@ tbody tr.on{background:var(--accent-soft)}
 <script>
 const API = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/rest/v1/rpc/';
 const FN = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/docs';
+const LINE_FN = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/line';
+async function lineCall(action) { const res = await fetch(LINE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action, admin_token: S.token }) }); return res.json(); }
 const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
 const root = document.getElementById('root'), overlay = document.getElementById('overlay');
 const S = { token: null, user: null, ov: null, flash: null, cache: {}, sel: new Set(), filter: {}, detail: null, confirm: null, timers: [] };
@@ -878,7 +880,7 @@ function viewPayouts() {
 async function viewSettings(tab) {
   tab = tab || S.filter.settings || 'company';
   S.filter.settings = tab;
-  const TABS = [['company', '公司資料'], ['holidays', '國定假日'], ['wages', '最低工資'], ['admins', '管理員']];
+  const TABS = [['company', '公司資料'], ['line', 'LINE 通知'], ['holidays', '國定假日'], ['wages', '最低工資'], ['admins', '管理員']];
   let body = '';
   if (tab === 'company') {
     const em = S.ov.employer || {};
@@ -900,6 +902,43 @@ async function viewSettings(tab) {
       <form id="wf" class="card pad"><b>新增或修改</b><p class="sub" style="margin:4px 0 0">依勞動部公告填寫。算薪時會用工作日當天適用的金額檢查時薪。</p>
       <label for="wd">生效日</label><input id="wd" type="date" required><label for="wh">每小時最低工資</label><input id="wh" type="text" inputmode="decimal" required>
       <label for="wm">每月最低工資</label><input id="wm" type="text" inputmode="numeric" required><div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form></div>`;
+  } else if (tab === 'line') {
+    const [ov, st] = await Promise.all([rpc('admin_line_overview'), lineCall('status').catch(() => ({ ok: false }))]);
+    const KIND = { accepted: '錄取', reminder: '前一天提醒', checkout: '未簽退', payslip: '薪資單', test: '測試' };
+    const NST = { sent: ['已送出', 'ok'], pending: ['等待中', ''], skipped: ['未送', 'warn'], failed: ['失敗', 'error'] };
+    const WHY = { not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退' };
+    const hook = LINE_FN;
+    const conn = !st.ok ? '<div class="msg err">無法檢查連線狀態。</div>'
+      : !st.configured ? `<div class="msg warn">還沒設定 LINE 金鑰（${st.has_secret ? '已有' : '缺少'} Channel secret、${st.has_token ? '已有' : '缺少'} Channel access token）。請照下方步驟設定。</div>`
+      : !st.valid ? '<div class="msg err">LINE 金鑰無效（' + esc(st.error) + '）。請重新發行 Channel access token 並更新。</div>'
+      : `<div class="msg ok">已連線：${esc(st.name)}（${esc(st.basic_id)}）${st.quota != null ? '　本月已用 ' + st.used + ' / ' + st.quota + ' 則' : st.quota_type === 'none' ? '　本月已用 ' + st.used + ' 則（無上限）' : ''}</div>`;
+    body = `${conn}
+      <div class="stats"><div class="card stat"><div class="k">已綁定人數</div><div class="v">${ov.linked} / ${ov.people}</div></div>
+        <div class="card stat"><div class="k">本月已送出</div><div class="v">${ov.month.sent}</div></div>
+        <div class="card stat"><div class="k">本月未送（未綁定等）</div><div class="v">${ov.month.skipped}</div></div>
+        <div class="card stat"><div class="k">等待發送</div><div class="v">${ov.pending}</div></div></div>
+      <div class="split" style="grid-template-columns:minmax(0,1fr) minmax(300px,380px)"><div>
+        <div class="card tablebox"><table><thead><tr><th>時間</th><th>類型</th><th>對象</th><th>狀態</th></tr></thead>
+        <tbody>${ov.recent.map(n => `<tr title="${esc(n.body || '')}"><td>${esc(d(n.at))} ${esc(new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(n.at)))}</td><td>${esc(KIND[n.kind] || n.kind)}</td>
+          <td>${esc(n.name)}${n.event ? '<div class="dim">' + esc(n.event) + '</div>' : ''}</td><td><span class="badge ${NST[n.status][1]}">${NST[n.status][0]}</span>${n.error ? '<div class="dim">' + esc(WHY[n.error] || n.error) + '</div>' : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">還沒有通知紀錄</td></tr>'}</tbody></table></div>
+        <div class="card pad" style="margin-top:16px"><b>系統會自動發送</b><p class="sub" style="margin-top:6px;line-height:1.8">錄取：錄取後約 2 分鐘（同一人連續錄取多班會合併成一則）<br>前一天提醒：每天 18:00 通知隔天有班的人<br>未簽退：班次結束 30 分鐘後仍未簽退（沒有班次則上班 10 小時後）<br>薪資單：發布後約 2 分鐘<br>沒有綁定 LINE 的人不會收到，紀錄會顯示「本人未綁定」。</p></div>
+      </div><div>
+        <form id="lf" class="card pad"><b>設定</b>
+          <label for="bid">官方帳號 ID（@ 開頭）</label><input id="bid" type="text" autocapitalize="none" value="${esc(ov.basic_id || '')}" placeholder="@123abcde">
+          <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin-top:14px"><input type="checkbox" id="len" ${ov.enabled ? 'checked' : ''}> 啟用自動通知</label>
+          <div id="lm" style="margin-top:12px"></div><button class="btn block">儲存</button></form>
+        <form id="tf" class="card pad" style="margin-top:16px"><b>傳送測試訊息</b><p class="sub" style="margin:4px 0 0">對象必須已在網站綁定 LINE。建議先用你自己的工讀生帳號測試。</p>
+          <label for="tid">身分證字號</label><input id="tid" type="text" maxlength="10" autocapitalize="characters">
+          <div id="tm" style="margin-top:12px"></div><button class="btn ghost block">傳送</button></form>
+        <div class="card pad" style="margin-top:16px"><b>首次設定步驟</b>
+          <ol class="sub" style="padding-left:18px;margin:8px 0 0;line-height:1.9">
+            <li>LINE Official Account Manager → 設定 → 回應設定：關閉「自動回應訊息」，開啟「Webhook」。</li>
+            <li>LINE Developers → 你的 Messaging API channel → Messaging API 分頁 → Webhook URL 填入下方網址，按 Verify，再開啟 Use webhook。</li>
+            <li>同一頁最下方發行 Channel access token（long-lived）；Basic settings 分頁有 Channel secret。</li>
+            <li>到 Supabase 後台 → Edge Functions → Secrets，新增 <code>LINE_CHANNEL_SECRET</code> 與 <code>LINE_CHANNEL_ACCESS_TOKEN</code>。</li>
+            <li>回到這裡填官方帳號 ID 並儲存，頂端顯示「已連線」即完成。</li></ol>
+          <label for="hk">Webhook URL</label><div class="row" style="align-items:center"><input id="hk" type="text" readonly value="${esc(hook)}" class="grow" style="width:auto;min-width:160px"><button type="button" class="btn ghost sm" id="hkc">複製</button></div></div>
+      </div></div>`;
   } else {
     const r = await rpc('admin_list_admins');
     const ts = v => v ? new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(v)) : '—';
@@ -926,6 +965,14 @@ async function viewSettings(tab) {
   if (f('hf')) {
     f('hf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_holidays', { p_set: { day: $('hd').value, name: $('hn').value.trim() } }); if (r.ok === false) { $('dm').innerHTML = '<div class="msg err">日期或名稱有誤。</div>'; return; } flash('ok', '已新增。'); viewSettings('holidays'); };
     on('[data-del]', 'click', async (ev, b) => { await rpc('admin_holidays', { p_set: { day: b.dataset.del, name: '' } }); flash('ok', '已刪除 ' + d(b.dataset.del) + '。'); viewSettings('holidays'); });
+  }
+  if (f('lf')) {
+    $('lf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_line_settings', { p_patch: { basic_id: $('bid').value, enabled: $('len').checked } });
+      if (!r.ok) { $('lm').innerHTML = '<div class="msg err">官方帳號 ID 格式不正確，應像 @123abcde。</div>'; return; } flash('ok', 'LINE 設定已儲存。'); viewSettings('line'); };
+    $('tf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_line_test', { p_national_id: $('tid').value });
+      if (!r.ok) { $('tm').innerHTML = '<div class="msg err">' + ({ no_person: '找不到這個身分證字號。', not_linked: '這個人還沒有綁定 LINE。' }[r.error] || '傳送失敗。') + '</div>'; return; }
+      const fr = await lineCall('flush'); $('tm').innerHTML = fr.ok && fr.sent ? '<div class="msg ok">已傳給 ' + esc(r.name) + '，請檢查 LINE。</div>' : '<div class="msg err">已排入佇列但尚未送出：' + esc(fr.error === 'not_configured' ? 'LINE 金鑰還沒設定' : '請看下方紀錄') + '。</div>'; };
+    $('hkc').onclick = async () => { try { await navigator.clipboard.writeText($('hk').value); $('hkc').textContent = '已複製'; } catch (err) { $('hk').select(); } };
   }
   if (f('af')) {
     const rnd = () => { const c = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const a = new Uint32Array(14); crypto.getRandomValues(a); return [...a].map(x => c[x % c.length]).join(''); };
