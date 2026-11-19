@@ -81,6 +81,7 @@ tr:last-child td{border-bottom:0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script>
 const API = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/rest/v1/rpc/';
+const FN = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/docs';
 const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
 const app = document.getElementById('app'), drawer = document.getElementById('drawer');
 const S = { token: null, ov: null, eventId: null, slips: [], eventIssues: [], filter: 'all', tab: 'slips', att: null, sel: new Set(), openId: null, pending: null, flash: null };
@@ -162,6 +163,7 @@ function render() {
       <div class="brand"><b>WORKS</b><span>薪資管理</span></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <span class="sub">${esc(S.ov.username)}</span>
+        <button class="btn ghost" id="ppl">人員</button>
         <button class="btn ghost" id="hol">國定假日</button>
         <button class="btn ghost" id="emp">公司資料${em.legal_name && em.tax_id ? '' : '（未填）'}</button>
         <button class="btn ghost" id="out">登出</button>
@@ -237,6 +239,8 @@ function render() {
   });
   on('addatt', openAddAtt);
   on('hol', openHolidays);
+  on('ppl', () => openPeople(''));
+  on('joinlink', openJoin);
   on('pub', () => { S.pending = 'published'; render(); });
   on('unpub', () => { S.pending = 'draft'; render(); });
   on('no', () => { S.pending = null; render(); });
@@ -262,6 +266,7 @@ function attHtml() {
     <div class="card pad" style="margin-top:14px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
       <button class="btn" id="showqr">顯示簽到 QR 碼</button>
       <span class="sub grow">QR 碼每分鐘更換，請在現場用手機或平板顯示給工讀生掃描。</span>
+      <button class="btn ghost" id="joinlink">新人報名連結</button>
       <button class="btn ghost" id="addatt">補登出勤</button>
     </div>
     <div class="card pad" style="margin-top:10px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
@@ -363,6 +368,69 @@ async function openHolidays(set) {
   document.getElementById('close').onclick = () => { drawer.innerHTML = ''; if (S.tab === 'att') load(true); };
   drawer.querySelectorAll('[data-del]').forEach(b => b.onclick = () => openHolidays({ day: b.dataset.del, name: '' }));
   document.getElementById('save').onclick = () => { const day = document.getElementById('hd').value, name = document.getElementById('hn').value.trim(); if (day && name) openHolidays({ day, name }); };
+}
+async function openJoin() {
+  const r = await rpc('admin_signup_code', { p_token: S.token, p_event: S.eventId });
+  const url = new URL('./', location.href).href + '?join=' + r.code;
+  const q = qrcode(0, 'M'); q.addData(url); q.make();
+  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="新人報名連結">
+    <div class="bar" style="margin-bottom:10px"><h1>新人報名連結</h1><button class="btn ghost" id="close">關閉</button></div>
+    <p class="sub">傳給第一次合作的工讀生，讓他們自己填基本資料和上傳證件。已經有資料的人不用填，直接登入即可。</p>
+    ${r.open ? '' : '<div class="msg warn">這場活動已經結束，連結目前無法使用。</div>'}
+    <label for="ju">連結</label><input id="ju" type="text" readonly value="${esc(url)}">
+    <button class="btn block" id="copy">複製連結</button>
+    <div style="margin-top:18px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;max-width:260px">${q.createSvgTag({ cellSize: 4, margin: 2, scalable: true })}</div>
+    <p class="sub" style="margin-top:12px">連結在活動結束隔天後失效。請只傳給這場活動的人員，不要公開張貼。</p></div>`;
+  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; };
+  document.getElementById('copy').onclick = async () => { const i = document.getElementById('ju'); i.select(); try { await navigator.clipboard.writeText(url); } catch (e) { document.execCommand('copy'); } document.getElementById('copy').textContent = '已複製'; };
+}
+async function openPeople(q) {
+  const r = await rpc('admin_people', { p_token: S.token, p_q: q });
+  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="人員">
+    <div class="bar" style="margin-bottom:10px"><h1>人員</h1><button class="btn ghost" id="close">關閉</button></div>
+    <form id="pf" style="display:flex;gap:8px"><input id="pq" type="text" value="${esc(q)}" placeholder="姓名、身分證字號或電話" aria-label="搜尋人員"><button class="btn">搜尋</button></form>
+    <p class="sub" style="margin:10px 0 4px">共 ${r.total} 人${q ? '，符合 ' + r.people.length + ' 人' : '，顯示最近建立的 ' + r.people.length + ' 人'}</p>
+    <table>${r.people.map(p => `<tr data-p="${esc(p.id)}" style="cursor:pointer"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge published">自行登錄</span>' : p.source === 'test' ? ' <span class="badge">測試</span>' : ''}<div class="dim">${esc(p.national_id)}　${esc(p.phone || '')}</div></td>
+      <td class="r">${p.open_issues ? '<span class="badge warn">' + p.open_issues + ' 項</span> ' : ''}<span class="dim">證件 ${p.docs}/3</span></td></tr>`).join('') || '<tr><td class="sub">找不到符合的人</td></tr>'}</table></div>`;
+  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; };
+  document.getElementById('pf').onsubmit = e => { e.preventDefault(); openPeople(document.getElementById('pq').value); };
+  drawer.querySelectorAll('tr[data-p]').forEach(tr => tr.onclick = () => openPerson(tr.dataset.p, q));
+}
+async function openPerson(id, q) {
+  const r = await rpc('admin_person', { p_token: S.token, p_id: id }); if (!r.ok) return;
+  const p = r.person, DOCS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];
+  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="人員資料">
+    <div class="bar" style="margin-bottom:10px"><h1>${esc(p.name)}</h1><button class="btn ghost" id="backp">返回名單</button></div>
+    <dl class="kv">
+      <dt>身分證字號</dt><dd>${esc(p.national_id)}</dd><dt>生日</dt><dd>${esc(p.birth_date ? d(p.birth_date) : '無法辨識（' + (p.birth_raw || '空白') + '）')}</dd>
+      <dt>電話</dt><dd>${esc(p.phone || '—')}</dd><dt>Email</dt><dd>${esc(p.email || '—')}</dd>
+      <dt>戶籍地址</dt><dd>${esc(p.address || '—')}</dd>
+      <dt>匯款帳戶</dt><dd>${esc([p.bank_code, p.bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.bank_account_name || '')} ${esc(p.bank_account || '')}</dd>
+      <dt>建檔</dt><dd>${esc(d(String(p.created_at).slice(0, 10)))}　${{ self: '自行登錄', legacy: '舊表匯入', test: '測試資料' }[p.source] || esc(p.source)}</dd>
+      <dt>個資同意</dt><dd>${p.consent_at ? esc(d(String(p.consent_at).slice(0, 10))) : '無紀錄（舊資料）'}</dd>
+    </dl>
+    <h2>證件影本</h2>
+    ${DOCS.map(([k, t]) => `<div class="issue"><div>${t}<div class="dim">${p.documents[k] ? '上傳於 ' + esc(d(String(p.documents[k]).slice(0, 10))) : '尚未上傳'}</div></div>${p.documents[k] ? `<button class="btn ghost" data-doc="${k}">開啟</button>` : ''}</div>`).join('')}
+    <p class="sub" style="margin-top:6px">開啟的連結 2 分鐘後失效，每次調閱都會留下紀錄。</p>
+    ${p.issues.length ? '<h2>問題</h2>' + p.issues.map(issueRow).join('') : ''}
+    ${p.payslips.length ? '<h2>薪資單</h2><table>' + p.payslips.map(x => `<tr><td>${esc(x.event)}<div class="dim">${esc(d(x.period_start))}</div></td><td class="r">${money(x.net)} <span class="badge ${esc(x.status)}">${STATUS[x.status]}</span></td></tr>`).join('') + '</table>' : ''}
+    <h2>帳號</h2>
+    <p class="sub">${p.has_password ? (p.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
+    <div id="dm"></div><button class="btn ghost" id="reset" style="margin-top:8px" ${p.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button></div>`;
+  document.getElementById('backp').onclick = () => openPeople(q || '');
+  drawer.querySelectorAll('[data-doc]').forEach(b => b.onclick = async () => {
+    const win = window.open('', '_blank');
+    try {
+      const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: id, kind: b.dataset.doc }) });
+      const j = await res.json();
+      if (j.ok) { if (win) win.location = j.url; else location.href = j.url; b.dataset.opened = '1'; } else { if (win) win.close(); document.getElementById('dm').innerHTML = '<div class="msg err">無法開啟檔案。</div>'; }
+    } catch (e) { if (win) win.close(); document.getElementById('dm').innerHTML = '<div class="msg err">無法開啟檔案。</div>'; }
+  });
+  drawer.querySelectorAll('[data-issue]').forEach(b => b.onclick = async () => { await rpc('admin_resolve_issue', { p_token: S.token, p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' }); openPerson(id, q); });
+  document.getElementById('reset').onclick = async () => {
+    const r2 = await rpc('admin_reset_password', { p_token: S.token, p_person: id });
+    document.getElementById('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>';
+  };
 }
 let qrTimer = null;
 function showQr() {

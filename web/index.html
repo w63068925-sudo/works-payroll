@@ -57,6 +57,16 @@ input:focus{border-color:var(--ink);box-shadow:0 0 0 3px rgba(29,28,26,.08)}
 .hero{padding:22px 18px 20px;text-align:center}
 .hero .label{font-size:13px;color:var(--muted);letter-spacing:.12em}
 .hero .net{font-family:var(--num);font-size:44px;font-weight:700;line-height:1.15;margin-top:4px;letter-spacing:-.01em}
+select{width:100%;height:52px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:17px}
+input[type=date],input[type=tel],input[type=email]{width:100%;height:52px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:17px;outline:none}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:14px;color:var(--ink);margin-top:18px;line-height:1.6}
+.check input{width:20px;height:20px;margin-top:2px;flex:0 0 auto}
+.doc{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--line)}
+.doc:last-child{border-bottom:0}
+.doc .st{font-size:13px;color:var(--muted)}.doc .st.ok{color:var(--accent)}
+.filebtn{display:inline-flex;align-items:center;height:40px;padding:0 14px;border:1px solid var(--line);border-radius:10px;font-size:14px;cursor:pointer;white-space:nowrap;background:#fff}
+.filebtn input{position:absolute;width:1px;height:1px;opacity:0}
+.filebtn:focus-within{border-color:var(--ink);box-shadow:0 0 0 3px rgba(29,28,26,.08)}
 .clock{font-family:var(--num);font-size:56px;font-weight:700;line-height:1.1;letter-spacing:-.02em}
 .btn.big{height:64px;font-size:19px}
 .btn.out{background:var(--accent)}
@@ -90,11 +100,13 @@ th{font-size:12px;color:var(--muted);letter-spacing:.06em}
 <div class="wrap" id="app" aria-live="polite"></div>
 <script>
 const API = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/rest/v1/rpc/';
+const FN = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/docs';
 const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
 const app = document.getElementById('app');
-const state = { token: null, person: null, payslips: [], year: 'all', ticket: null };
+const state = { token: null, person: null, payslips: [], year: 'all', ticket: null, join: null };
 
-try { state.token = sessionStorage.getItem('payroll_token'); state.ticket = sessionStorage.getItem('payroll_ticket'); } catch (e) {}
+try { state.token = sessionStorage.getItem('payroll_token'); state.ticket = sessionStorage.getItem('payroll_ticket'); state.join = sessionStorage.getItem('payroll_join'); } catch (e) {}
+function saveJoin(j) { state.join = j; try { j ? sessionStorage.setItem('payroll_join', j) : sessionStorage.removeItem('payroll_join'); } catch (e) {} }
 function saveTicket(t) { state.ticket = t; try { t ? sessionStorage.setItem('payroll_ticket', t) : sessionStorage.removeItem('payroll_ticket'); } catch (e) {} }
 function saveToken(t) { state.token = t; try { t ? sessionStorage.setItem('payroll_token', t) : sessionStorage.removeItem('payroll_token'); } catch (e) {} }
 
@@ -127,7 +139,9 @@ function viewLogin(message) {
       <div id="m">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
       <button class="btn" id="go">登入</button>
     </form>
-    <p class="foot">連續輸入錯誤 5 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。</p>`;
+    ${state.join ? '<button class="btn ghost" id="toreg">第一次來？填寫基本資料</button>' : ''}
+    <p class="foot">連續輸入錯誤 5 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
+  if (state.join) document.getElementById('toreg').addEventListener('click', () => viewRegister());
   const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
   nid.addEventListener('input', () => { nid.value = nid.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
   document.getElementById('show').addEventListener('click', e => { const on = pw.type === 'password'; pw.type = on ? 'text' : 'password'; e.target.textContent = on ? '隱藏' : '顯示'; });
@@ -165,11 +179,11 @@ function renderList() {
     <div class="top">
       <div><h1>${esc(state.person.name)}</h1><p class="sub">${esc(state.person.national_id)}</p></div>
       <div class="no-print" style="display:flex;gap:8px">
-        <button class="btn ghost small" id="cp">改密碼</button>
+        <button class="btn ghost small" id="me">我的資料</button>
         <button class="btn ghost small" id="out">登出</button>
       </div>
     </div>
-    ${state.person.default_password ? '<div class="msg warn">你還在使用預設密碼（生日）。為了保護薪資資料，建議按右上角「改密碼」換一組。</div>' : ''}
+    ${state.person.default_password ? '<div class="msg warn">你還在使用預設密碼（生日）。為了保護薪資資料，建議按右上角「我的資料」→「更改密碼」換一組。</div>' : ''}
     ${state.payslips.length ? `
       <div class="tabs" role="tablist">
         ${['all', ...years].map(y => `<button class="tab" role="tab" aria-selected="${state.year === y}" data-y="${esc(y)}">${y === 'all' ? '全部' : esc(y) + ' 年'}</button>`).join('')}
@@ -185,7 +199,7 @@ function renderList() {
   app.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { state.year = b.dataset.y; renderList(); }));
   app.querySelectorAll('.slip').forEach(b => b.addEventListener('click', () => viewSlip(b.dataset.id)));
   document.getElementById('out').addEventListener('click', async () => { try { await rpc('payroll_logout', { p_token: state.token }); } catch (e) {} saveToken(null); viewLogin(); });
-  document.getElementById('cp').addEventListener('click', viewPassword);
+  document.getElementById('me').addEventListener('click', viewProfile);
 }
 
 async function viewSlip(id) {
@@ -247,7 +261,7 @@ async function viewSlip(id) {
 function viewPassword() {
   document.title = '更改密碼｜沃克思';
   app.innerHTML = brand + `
-    <button class="link" id="back">← 返回列表</button>
+    <button class="link" id="back">← 返回</button>
     <h1 style="margin-top:8px">更改密碼</h1>
     <form id="f" class="card pad" style="margin-top:18px">
       <label for="o" style="margin-top:0">目前的密碼</label><input id="o" type="password" autocomplete="current-password" required>
@@ -257,7 +271,7 @@ function viewPassword() {
       <button class="btn" id="go">儲存新密碼</button>
     </form>`;
   const m = document.getElementById('m'), go = document.getElementById('go');
-  document.getElementById('back').addEventListener('click', renderList);
+  document.getElementById('back').addEventListener('click', viewProfile);
   document.getElementById('f').addEventListener('submit', async e => {
     e.preventDefault(); m.innerHTML = '';
     const o = document.getElementById('o').value, n = document.getElementById('n').value, n2 = document.getElementById('n2').value;
@@ -265,11 +279,138 @@ function viewPassword() {
     go.disabled = true;
     try {
       const r = await rpc('payroll_change_password', { p_token: state.token, p_old: o, p_new: n });
-      if (r.ok) { state.person.default_password = false; renderList(); return; }
+      if (r.ok) { if (state.person) state.person.default_password = false; viewProfile('密碼已更新。'); return; }
       if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
       m.innerHTML = '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 8 個字。' : '目前的密碼不正確。') + '</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
     go.disabled = false;
+  });
+}
+
+const PERR = { bad_phone: '手機號碼請填 09 開頭的 10 碼。', bad_address: '請填完整的戶籍地址（含鄰里）。', bad_email: 'Email 格式不正確。', bad_bank_code: '銀行代碼是 3 個數字，例如 822。', bad_bank_account: '銀行帳號請只填數字（6 到 16 碼）。', payee_not_self: '戶名必須和本人姓名相同，薪資依法只能匯入本人帳戶。', bad_national_id: '身分證字號不正確，請再檢查一次。', bad_name: '請填寫姓名。', bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', exists: '這個身分證字號已經有資料了，請直接登入。', no_consent: '請勾選同意聲明。', bad_join: '報名連結已失效，請向活動負責人索取新的連結。' };
+const profileFields = (p, withName) => `
+  <label for="ph">手機</label><input id="ph" type="tel" inputmode="numeric" maxlength="10" value="${esc(p.phone || '')}" placeholder="0912345678" required>
+  <label for="em">Email（選填）</label><input id="em" type="email" value="${esc(p.email || '')}">
+  <label for="ad">戶籍地址（需與身分證相同，含鄰里）</label><input id="ad" type="text" value="${esc(p.address || '')}" required>
+  <h2>薪資匯款帳戶（須為本人帳戶）</h2>
+  <label for="bc" style="margin-top:0">銀行代碼（3 碼）</label><input id="bc" type="text" inputmode="numeric" maxlength="3" value="${esc(p.bank_code || '')}" placeholder="例如 822" required>
+  <label for="bb">分行名稱</label><input id="bb" type="text" value="${esc(p.bank_branch || '')}" placeholder="例如 中和分行">
+  ${withName ? '' : '<label for="bn">戶名</label><input id="bn" type="text" value="' + esc(p.bank_account_name || p.name || '') + '" required>'}
+  <label for="ba">銀行帳號</label><input id="ba" type="text" inputmode="numeric" maxlength="20" value="${esc(p.bank_account || '')}" required>`;
+const readProfile = name => ({ phone: document.getElementById('ph').value, email: document.getElementById('em').value, address: document.getElementById('ad').value, bank_code: document.getElementById('bc').value, bank_branch: document.getElementById('bb').value, bank_account_name: name || document.getElementById('bn').value, bank_account: document.getElementById('ba').value });
+
+async function viewRegister() {
+  document.title = '填寫基本資料｜沃克思';
+  app.innerHTML = brand + '<div class="skeleton" style="height:160px"></div>';
+  let info;
+  try { info = await rpc('payroll_join_info', { p_join: state.join }); } catch (err) { info = { ok: false }; }
+  if (!info.ok) { saveJoin(null); return viewLogin(PERR.bad_join); }
+  app.innerHTML = brand + `
+    <p class="sub">${esc(info.event)}</p>
+    <h1>填寫基本資料</h1>
+    <p class="sub">只需要填一次，之後每場活動都不用重填。</p>
+    <form id="f" class="card pad" style="margin-top:20px" autocomplete="on">
+      <label for="nm" style="margin-top:0">姓名（與身分證相同）</label><input id="nm" type="text" autocomplete="name" required>
+      <label for="nid">身分證字號</label><input id="nid" type="text" maxlength="10" autocapitalize="characters" spellcheck="false" required>
+      <label for="bd">生日</label><input id="bd" type="date" required>
+      ${profileFields({}, true)}
+      <p class="hint">戶名會自動使用你的姓名。</p>
+      <label class="check"><input id="ok" type="checkbox" required><span>我同意沃克思為了發放薪資、辦理勞工保險與就業保險加退保、所得稅扣繳申報，以及依勞動法令保存紀錄，蒐集、處理並使用以上資料與之後上傳的證件影本。資料依法保存 5 年，我可以隨時登入查閱與更正。</span></label>
+      <div id="m"></div>
+      <button class="btn" id="go">送出</button>
+    </form>
+    <button class="link" id="tologin" style="margin-top:10px">我已經有帳號，直接登入</button>`;
+  const nid = document.getElementById('nid'), m = document.getElementById('m'), go = document.getElementById('go');
+  nid.addEventListener('input', () => { nid.value = nid.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+  document.getElementById('tologin').addEventListener('click', () => viewLogin());
+  document.getElementById('f').addEventListener('submit', async e => {
+    e.preventDefault(); m.innerHTML = ''; go.disabled = true;
+    const name = document.getElementById('nm').value.trim(), bd = document.getElementById('bd').value;
+    try {
+      const r = await rpc('payroll_register', { p_join: state.join, p_data: Object.assign(readProfile(name), { name, national_id: nid.value, birth_date: bd, consent: document.getElementById('ok').checked }) });
+      if (r.ok) {
+        saveToken(r.token); saveJoin(null);
+        const [y, mo, d] = bd.split('-'); const pw = String(Number(y) - 1911).padStart(3, '0') + mo + d;
+        return viewDocs('基本資料已建立。之後登入的帳號是身分證字號，密碼是你的民國生日 7 碼（' + pw + '）。');
+      }
+      m.innerHTML = '<div class="msg err">' + esc(PERR[r.error] || '送出失敗，請再試一次。') + '</div>';
+    } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+    go.disabled = false;
+  });
+}
+
+const DOCS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];
+async function fnCall(body) { const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify(body) }); return res.json(); }
+async function prepFile(file) {
+  if (file.type === 'application/pdf') return file;
+  try {
+    const bmp = await createImageBitmap(file), k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    return await new Promise(r => c.toBlob(b => r(b || file), 'image/jpeg', 0.85));
+  } catch (e) { return file; }
+}
+async function uploadDoc(kind, file) {
+  const blob = await prepFile(file), type = blob.type || file.type;
+  const a = await fnCall({ action: 'upload_url', token: state.token, kind, content_type: type });
+  if (!a.ok) throw new Error(a.error === 'session' ? '登入已逾時，請重新登入。' : a.error === 'bad_type' ? '請上傳照片或 PDF。' : '無法上傳，請稍後再試。');
+  const put = await fetch(a.signed_url, { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
+  if (!put.ok) throw new Error(put.status === 413 ? '檔案太大（上限 8 MB）。' : '上傳失敗，請再試一次。');
+  const c = await fnCall({ action: 'confirm', token: state.token, kind, path: a.path });
+  if (!c.ok) throw new Error('上傳後確認失敗，請再試一次。');
+}
+function docsBlock(documents) {
+  return '<div class="card pad" style="padding-top:4px;padding-bottom:4px">' + DOCS.map(([k, t]) => `<div class="doc"><div><div>${t}</div><div class="st ${documents[k] ? 'ok' : ''}" id="st-${k}">${documents[k] ? '已上傳（' + esc(String(documents[k]).slice(0, 10).replace(/-/g, '/')) + '）' : '尚未上傳'}</div></div><label class="filebtn">${documents[k] ? '重新上傳' : '選擇檔案'}<input type="file" accept="image/*,application/pdf" data-doc="${k}"></label></div>`).join('') + '</div>';
+}
+function bindDocs(after) {
+  app.querySelectorAll('input[data-doc]').forEach(inp => inp.addEventListener('change', async () => {
+    const f = inp.files[0], st = document.getElementById('st-' + inp.dataset.doc); if (!f) return;
+    st.className = 'st'; st.textContent = '上傳中…';
+    try { await uploadDoc(inp.dataset.doc, f); st.className = 'st ok'; st.textContent = '已上傳'; if (after) after(); }
+    catch (err) { st.className = 'st'; st.style.color = 'var(--danger)'; st.textContent = err.message; }
+    inp.value = '';
+  }));
+}
+function viewDocs(message) {
+  document.title = '上傳證件｜沃克思';
+  app.innerHTML = brand + `<h1>上傳證件影本</h1>
+    <p class="sub">加保勞保和匯款需要核對。照片只有你本人和沃克思的管理人員看得到。</p>
+    ${message ? '<div class="msg ok">' + esc(message) + '</div>' : ''}
+    <h2>請拍照或選擇檔案</h2>${docsBlock({})}
+    <button class="btn" id="done">完成</button>
+    <p class="foot">存摺請拍封面（有戶名與帳號的那一頁），不要拍提款卡或信用卡。現在沒帶在身邊也可以先按完成，之後到「我的資料」補傳。</p>`;
+  bindDocs();
+  document.getElementById('done').addEventListener('click', () => state.ticket ? viewCheckin() : viewList());
+}
+async function viewProfile(message) {
+  document.title = '我的資料｜沃克思';
+  app.innerHTML = brand + '<div class="skeleton" style="height:200px"></div>';
+  let r;
+  try { r = await rpc('payroll_profile', { p_token: state.token }); } catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewList()">返回</button>'; return; }
+  if (!r.ok) { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
+  const p = r.profile;
+  app.innerHTML = brand + `
+    <button class="link" id="back">← 返回列表</button>
+    <h1 style="margin-top:8px">我的資料</h1>
+    <p class="sub">${esc(p.name)}　${esc(p.national_id)}　生日 ${esc(fmtDate(p.birth_date))}</p>
+    ${typeof message === 'string' ? '<div class="msg ok">' + esc(message) + '</div>' : ''}
+    <form id="f" class="card pad" style="margin-top:18px">
+      <div style="margin-top:-16px"></div>${profileFields(p, false)}
+      <div id="m"></div><button class="btn" id="go">儲存</button>
+    </form>
+    <h2>證件影本</h2>${docsBlock(p.documents || {})}
+    <button class="btn ghost" id="cp">更改密碼</button>
+    <p class="foot">姓名、身分證字號或生日有誤無法自行修改，請聯絡沃克思的活動窗口。更改匯款帳戶後請重新上傳存摺封面。</p>`;
+  bindDocs();
+  document.getElementById('back').addEventListener('click', viewList);
+  document.getElementById('cp').addEventListener('click', viewPassword);
+  document.getElementById('f').addEventListener('submit', async e => {
+    e.preventDefault(); const m = document.getElementById('m'); m.innerHTML = '';
+    try {
+      const r2 = await rpc('payroll_update_profile', { p_token: state.token, p_data: readProfile() });
+      m.innerHTML = r2.ok ? '<div class="msg ok">已儲存。</div>' : r2.error === 'session' ? '' : '<div class="msg err">' + esc(PERR[r2.error] || '儲存失敗。') + '</div>';
+      if (r2.error === 'session') { saveToken(null); viewLogin('登入已逾時，請重新登入。'); }
+    } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
   });
 }
 
@@ -310,8 +451,9 @@ async function viewCheckin(action) {
 }
 
 (async function boot() {
-  const code = new URLSearchParams(location.search).get('k');
+  const qs = new URLSearchParams(location.search), code = qs.get('k'), join = qs.get('join');
   let codeMsg = null;
+  if (join) { saveJoin(join); try { history.replaceState(null, '', location.pathname); } catch (e) {} }
   if (code) {
     try { history.replaceState(null, '', location.pathname); } catch (e) {}
     try {
@@ -320,6 +462,7 @@ async function viewCheckin(action) {
       else { saveTicket(null); codeMsg = r.error === 'expired' ? 'QR 碼已過期，請重新掃描現場的 QR 碼。' : 'QR 碼無法辨識，請重新掃描。'; }
     } catch (err) { codeMsg = '網路連線失敗，請重新掃描 QR 碼。'; }
   }
+  if (!state.token && join) return viewRegister();
   if (!state.token) return viewLogin(codeMsg || (state.ticket ? '請先登入，登入後就可以簽到。' : null));
   if (state.ticket && code) return viewCheckin();
   viewList();
