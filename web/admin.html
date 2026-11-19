@@ -906,7 +906,7 @@ async function viewSettings(tab) {
     const [ov, st] = await Promise.all([rpc('admin_line_overview'), lineCall('status').catch(() => ({ ok: false }))]);
     const KIND = { accepted: '錄取', reminder: '前一天提醒', checkout: '未簽退', payslip: '薪資單', test: '測試' };
     const NST = { sent: ['已送出', 'ok'], pending: ['等待中', ''], skipped: ['未送', 'warn'], failed: ['失敗', 'error'] };
-    const WHY = { not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退' };
+    const WHY = { not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退', expired: '過期未送' };
     const hook = LINE_FN;
     const conn = !st.ok ? '<div class="msg err">無法檢查連線狀態。</div>'
       : !st.configured ? `<div class="msg warn">還沒設定 LINE 金鑰（${st.has_secret ? '已有' : '缺少'} Channel secret、${st.has_token ? '已有' : '缺少'} Channel access token）。請照下方步驟設定。</div>`
