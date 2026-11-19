@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>薪資查詢｜沃克思</title>
+<style>
+:root{
+  --paper:#f5f2ec; --card:#fffdf9; --ink:#1d1c1a; --muted:#6f6b63; --line:#e3ded3;
+  --accent:#1f5c4a; --accent-soft:#e4efe9; --warn:#8a5a00; --warn-soft:#fbf1d9; --danger:#a3271f; --danger-soft:#fbe6e3;
+  --radius:14px; --num:"SF Mono","Roboto Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;
+  font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit}
+.wrap{max-width:560px;margin:0 auto;padding:20px 16px calc(40px + env(safe-area-inset-bottom))}
+.brand{display:flex;align-items:baseline;gap:10px;margin:8px 0 28px}
+.brand b{font-size:15px;letter-spacing:.18em}
+.brand span{font-size:13px;color:var(--muted)}
+h1{font-size:26px;line-height:1.25;margin:0 0 6px;font-weight:700;letter-spacing:.01em}
+h2{font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.12em;margin:28px 0 10px}
+p{margin:0}
+.sub{color:var(--muted);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
+.pad{padding:18px}
+label{display:block;font-size:13px;color:var(--muted);margin:16px 0 6px}
+.field{position:relative}
+input[type=text],input[type=password]{width:100%;height:52px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:17px;letter-spacing:.04em;outline:none}
+input:focus{border-color:var(--ink);box-shadow:0 0 0 3px rgba(29,28,26,.08)}
+.toggle{position:absolute;right:6px;top:6px;height:40px;padding:0 12px;border:0;background:none;color:var(--muted);font-size:14px;cursor:pointer;border-radius:8px}
+.btn{display:block;width:100%;height:52px;border:0;border-radius:10px;background:var(--ink);color:#fff;font-size:16px;font-weight:600;cursor:pointer;margin-top:22px}
+.btn:disabled{opacity:.5;cursor:default}
+.btn.ghost{background:none;color:var(--ink);border:1px solid var(--line);font-weight:500}
+.btn.small{height:40px;width:auto;padding:0 14px;font-size:14px;margin:0}
+.link{background:none;border:0;padding:8px 0;color:var(--muted);font-size:14px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.msg{margin-top:14px;padding:11px 13px;border-radius:10px;font-size:14px}
+.msg.err{background:var(--danger-soft);color:var(--danger)}
+.msg.warn{background:var(--warn-soft);color:var(--warn)}
+.msg.ok{background:var(--accent-soft);color:var(--accent)}
+.hint{font-size:13px;color:var(--muted);margin-top:8px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:22px}
+.tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin:22px 0 14px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{background:none;border:0;padding:10px 0;font-size:15px;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tab[aria-selected=true]{color:var(--ink);font-weight:700;border-bottom-color:var(--ink)}
+.slip{display:block;width:100%;text-align:left;padding:16px 18px;margin-bottom:10px;cursor:pointer}
+.slip:hover{border-color:#cfc8b9}
+.slip .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.slip .name{font-weight:600;font-size:16px}
+.slip .amt{font-family:var(--num);font-size:19px;font-weight:600;white-space:nowrap}
+.slip .meta{font-size:13px;color:var(--muted);margin-top:4px}
+.tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;background:var(--accent-soft);color:var(--accent);margin-left:6px;vertical-align:1px}
+.hero{padding:22px 18px 20px;text-align:center}
+.hero .label{font-size:13px;color:var(--muted);letter-spacing:.12em}
+.hero .net{font-family:var(--num);font-size:44px;font-weight:700;line-height:1.15;margin-top:4px;letter-spacing:-.01em}
+.hero .net small{font-size:18px;font-weight:500;margin-right:4px;color:var(--muted)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:14px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;text-align:right}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:10px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-weight:400}
+tr:last-child td{border-bottom:0}
+th{font-size:12px;color:var(--muted);letter-spacing:.06em}
+.r{text-align:right;font-family:var(--num);white-space:nowrap}
+.dim{color:var(--muted);font-size:12.5px}
+.total td{font-weight:700;border-top:1px solid var(--ink);border-bottom:0}
+.neg{color:var(--danger)}
+.foot{font-size:12.5px;color:var(--muted);margin-top:22px;line-height:1.7}
+.empty{padding:36px 18px;text-align:center;color:var(--muted)}
+.skeleton{height:74px;border-radius:var(--radius);background:linear-gradient(90deg,#ece8df,#f4f1ea,#ece8df);background-size:200% 100%;animation:sh 1.2s infinite;margin-bottom:10px}
+@keyframes sh{to{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.skeleton{animation:none}}
+@media print{
+  body{background:#fff}
+  .no-print{display:none!important}
+  .wrap{max-width:none;padding:0}
+  .card{border-color:#bbb;break-inside:avoid}
+  .hero .net{font-size:32px}
+}
+</style>
+</head>
+<body>
+<div class="wrap" id="app" aria-live="polite"></div>
+<script>
+const API = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/rest/v1/rpc/';
+const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
+const app = document.getElementById('app');
+const state = { token: null, person: null, payslips: [], year: 'all' };
+
+try { state.token = sessionStorage.getItem('payroll_token'); } catch (e) {}
+function saveToken(t) { state.token = t; try { t ? sessionStorage.setItem('payroll_token', t) : sessionStorage.removeItem('payroll_token'); } catch (e) {} }
+
+async function rpc(name, body) {
+  const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error('連線失敗（' + res.status + '）');
+  return res.json();
+}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
+const WD = ['日', '一', '二', '三', '四', '五', '六'];
+function fmtDate(s, withWd) { if (!s) return '—'; const [y, m, d] = s.split('-').map(Number); const w = withWd ? '（' + WD[new Date(y, m - 1, d).getDay()] + '）' : ''; return y + '/' + String(m).padStart(2, '0') + '/' + String(d).padStart(2, '0') + w; }
+function fmtPeriod(a, b) { if (!a) return '—'; return a === b || !b ? fmtDate(a) : fmtDate(a) + ' – ' + fmtDate(b).slice(5); }
+const brand = '<div class="brand no-print"><b>WORKS</b><span>沃克思 薪資查詢</span></div>';
+
+function viewLogin(message) {
+  document.title = '登入｜沃克思薪資查詢';
+  app.innerHTML = brand + `
+    <h1>查詢我的薪資</h1>
+    <p class="sub">登入後可隨時查看、列印每一筆薪資明細。</p>
+    <form id="f" class="card pad" style="margin-top:22px" autocomplete="off">
+      <label for="nid" style="margin-top:0">身分證字號</label>
+      <input id="nid" type="text" maxlength="10" autocapitalize="characters" autocomplete="username" spellcheck="false" placeholder="A123456789" required>
+      <label for="pw">密碼</label>
+      <div class="field">
+        <input id="pw" type="password" autocomplete="current-password" required>
+        <button type="button" class="toggle" id="show" aria-label="顯示密碼">顯示</button>
+      </div>
+      <p class="hint">第一次登入的密碼是民國生日 7 碼，例如民國 90 年 1 月 1 日請輸入 0900101。</p>
+      <div id="m">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
+      <button class="btn" id="go">登入</button>
+    </form>
+    <p class="foot">連續輸入錯誤 5 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。</p>`;
+  const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
+  nid.addEventListener('input', () => { nid.value = nid.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+  document.getElementById('show').addEventListener('click', e => { const on = pw.type === 'password'; pw.type = on ? 'text' : 'password'; e.target.textContent = on ? '隱藏' : '顯示'; });
+  f.addEventListener('submit', async e => {
+    e.preventDefault(); go.disabled = true; go.textContent = '登入中…'; m.innerHTML = '';
+    try {
+      const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
+      if (r.ok) { saveToken(r.token); return viewList(); }
+      if (r.error === 'locked') m.innerHTML = '<div class="msg err">輸入錯誤次數過多，帳號已暫時鎖定。請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。</div>';
+      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。' + (r.attempts_left != null ? '還可以再試 ' + esc(r.attempts_left) + ' 次。' : '') + '</div>';
+    } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
+    go.disabled = false; go.textContent = '登入'; pw.value = ''; pw.focus();
+  });
+  nid.focus();
+}
+
+async function viewList() {
+  document.title = '我的薪資｜沃克思';
+  app.innerHTML = brand + '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
+  let r;
+  try { r = await rpc('payroll_my_payslips', { p_token: state.token }); }
+  catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewList()">重新載入</button>'; return; }
+  if (!r.ok) { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
+  state.person = r.person; state.payslips = r.payslips;
+  renderList();
+}
+
+function slipYear(s) { return (s.pay_date || s.period_end || s.period_start || '').slice(0, 4) || '未定'; }
+function renderList() {
+  const years = [...new Set(state.payslips.map(slipYear))].sort().reverse();
+  if (state.year !== 'all' && !years.includes(state.year)) state.year = 'all';
+  const shown = state.payslips.filter(s => state.year === 'all' || slipYear(s) === state.year);
+  const total = shown.reduce((a, s) => a + Number(s.net || 0), 0);
+  app.innerHTML = brand + `
+    <div class="top">
+      <div><h1>${esc(state.person.name)}</h1><p class="sub">${esc(state.person.national_id)}</p></div>
+      <div class="no-print" style="display:flex;gap:8px">
+        <button class="btn ghost small" id="cp">改密碼</button>
+        <button class="btn ghost small" id="out">登出</button>
+      </div>
+    </div>
+    ${state.person.default_password ? '<div class="msg warn">你還在使用預設密碼（生日）。為了保護薪資資料，建議按右上角「改密碼」換一組。</div>' : ''}
+    ${state.payslips.length ? `
+      <div class="tabs" role="tablist">
+        ${['all', ...years].map(y => `<button class="tab" role="tab" aria-selected="${state.year === y}" data-y="${esc(y)}">${y === 'all' ? '全部' : esc(y) + ' 年'}</button>`).join('')}
+      </div>
+      <p class="sub" style="margin-bottom:12px">共 ${shown.length} 筆，實發合計 NT$ ${money(total)}</p>
+      ${shown.map(s => `
+        <button class="card slip" data-id="${esc(s.id)}">
+          <div class="row"><span class="name">${esc(s.event)}${s.relation === 'contract' ? '<span class="tag">勞務報酬</span>' : ''}</span><span class="amt">${money(s.net)}</span></div>
+          <div class="meta">工作日 ${esc(fmtPeriod(s.period_start, s.period_end))}　發薪日 ${esc(fmtDate(s.pay_date))}</div>
+        </button>`).join('')}`
+      : '<div class="card empty">目前還沒有已發布的薪資單。<br>活動結束、公司核對完成後就會出現在這裡。</div>'}
+    <p class="foot">薪資明細依勞動基準法第 23 條提供，可隨時查詢與列印。金額有疑問請聯絡沃克思的活動窗口。</p>`;
+  app.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { state.year = b.dataset.y; renderList(); }));
+  app.querySelectorAll('.slip').forEach(b => b.addEventListener('click', () => viewSlip(b.dataset.id)));
+  document.getElementById('out').addEventListener('click', async () => { try { await rpc('payroll_logout', { p_token: state.token }); } catch (e) {} saveToken(null); viewLogin(); });
+  document.getElementById('cp').addEventListener('click', viewPassword);
+}
+
+async function viewSlip(id) {
+  app.innerHTML = brand + '<div class="skeleton" style="height:150px"></div><div class="skeleton"></div>';
+  let r;
+  try { r = await rpc('payroll_payslip', { p_token: state.token, p_id: id }); }
+  catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="renderList()">返回</button>'; return; }
+  if (!r.ok) { if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); } renderList(); return; }
+  const p = r.payslip, contract = p.relation === 'contract';
+  document.title = p.event + '｜薪資單';
+  const by = k => p.items.filter(i => i.kind === k);
+  const rows = list => list.map(i => `<tr><td>${esc(i.label)}${i.work_date ? '<div class="dim">' + esc(fmtDate(i.work_date, true)) + (i.hours != null ? '　' + esc(Number(i.hours)) + ' 小時 × ' + money(i.rate) : '') + '</div>' : ''}</td><td class="r">${money(i.amount)}</td></tr>`).join('');
+  const hours = a => { if (!a.clock_in || !a.clock_out) return null; const [h1, m1] = a.clock_in.split(':').map(Number), [h2, m2] = a.clock_out.split(':').map(Number); return Math.round(((h2 * 60 + m2) - (h1 * 60 + m1) - (a.break_minutes || 0)) / 6) / 10; };
+  const payable = Number(p.gross || 0) + Number(p.allowances || 0);
+  app.innerHTML = brand + `
+    <button class="link no-print" id="back">← 返回列表</button>
+    <div class="card" style="margin-top:8px">
+      <div class="hero">
+        <div class="label">${contract ? '實領報酬' : '實發薪資'}</div>
+        <div class="net"><small>NT$</small>${money(p.net)}</div>
+        <p class="sub" style="margin-top:6px">${esc(p.event)}</p>
+      </div>
+      <div class="pad" style="border-top:1px solid var(--line)">
+        <dl class="kv">
+          <dt>${contract ? '給付單位' : '雇主'}</dt><dd>${esc(p.employer.legal_name || p.employer.name)}${p.employer.tax_id ? '（統編 ' + esc(p.employer.tax_id) + '）' : ''}</dd>
+          <dt>姓名</dt><dd>${esc(p.person.name)}　${esc(p.person.national_id)}</dd>
+          <dt>${contract ? '性質' : '崗位'}</dt><dd>${contract ? '勞務報酬（承攬）' : esc(p.role || '—')}</dd>
+          <dt>計薪區間</dt><dd>${esc(fmtPeriod(p.period_start, p.period_end))}</dd>
+          <dt>發薪日</dt><dd>${esc(fmtDate(p.pay_date))}</dd>
+          <dt>匯款帳戶</dt><dd>${p.pay_account.last4 ? esc(p.pay_account.bank_code || '') + ' ' + esc(p.pay_account.branch || '') + '　末四碼 ' + esc(p.pay_account.last4) : '—'}</dd>
+        </dl>
+      </div>
+    </div>
+    ${p.basis !== 'hourly' ? '<div class="msg warn">這一場的原始紀錄只有每日工資總額，沒有逐時明細。若需要時數與加班的計算方式，請向沃克思索取。</div>' : ''}
+    <h2>${contract ? '報酬項目' : '應發項目'}</h2>
+    <div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>
+      ${rows(by('earning'))}${rows(by('allowance'))}
+      <tr class="total"><td>${contract ? '報酬合計' : '應發合計'}</td><td class="r">${money(payable)}</td></tr>
+    </table></div>
+    <h2>應扣項目</h2>
+    <div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>
+      ${by('deduction').length ? rows(by('deduction')) : '<tr><td class="dim">沒有扣款</td><td></td></tr>'}
+      <tr class="total"><td>應扣合計</td><td class="r neg">${Number(p.deductions) ? '−' + money(p.deductions) : '0'}</td></tr>
+    </table></div>
+    ${by('employer').length ? '<h2>雇主負擔（不從薪資扣除）</h2><div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>' + rows(by('employer')) + '</table></div>' : ''}
+    ${p.attendance.length ? `<h2>出勤紀錄</h2>
+    <div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>
+      <tr><th>日期</th><th>上班</th><th>下班</th><th class="r">休息</th><th class="r">工時</th></tr>
+      ${p.attendance.map(a => `<tr><td>${esc(fmtDate(a.work_date, true).slice(5))}${a.source === 'legacy' && a.clock_in ? '<div class="dim">排定時段</div>' : ''}</td><td>${esc(a.clock_in || '—')}</td><td>${esc(a.clock_out || '—')}</td><td class="r">${a.clock_in ? esc(a.break_minutes) + ' 分' : '—'}</td><td class="r">${hours(a) != null ? hours(a) + ' 時' : '—'}</td></tr>`).join('')}
+    </table></div>` : ''}
+    ${p.note ? '<h2>備註</h2><div class="card pad">' + esc(p.note) + '</div>' : ''}
+    <button class="btn no-print" id="print">列印／存成 PDF</button>
+    <p class="foot">本明細依勞動基準法第 23 條及施行細則第 14 條之 1 提供，內容包含議定工資總額、各項目給付金額、得扣除項目金額及實際發給金額。出勤紀錄依同法第 30 條保存 5 年，如需書面副本可向沃克思申請。</p>`;
+  document.getElementById('back').addEventListener('click', renderList);
+  document.getElementById('print').addEventListener('click', () => window.print());
+  window.scrollTo(0, 0);
+}
+
+function viewPassword() {
+  document.title = '更改密碼｜沃克思';
+  app.innerHTML = brand + `
+    <button class="link" id="back">← 返回列表</button>
+    <h1 style="margin-top:8px">更改密碼</h1>
+    <form id="f" class="card pad" style="margin-top:18px">
+      <label for="o" style="margin-top:0">目前的密碼</label><input id="o" type="password" autocomplete="current-password" required>
+      <label for="n">新密碼（至少 8 個字）</label><input id="n" type="password" autocomplete="new-password" minlength="8" required>
+      <label for="n2">再輸入一次新密碼</label><input id="n2" type="password" autocomplete="new-password" minlength="8" required>
+      <div id="m"></div>
+      <button class="btn" id="go">儲存新密碼</button>
+    </form>`;
+  const m = document.getElementById('m'), go = document.getElementById('go');
+  document.getElementById('back').addEventListener('click', renderList);
+  document.getElementById('f').addEventListener('submit', async e => {
+    e.preventDefault(); m.innerHTML = '';
+    const o = document.getElementById('o').value, n = document.getElementById('n').value, n2 = document.getElementById('n2').value;
+    if (n !== n2) { m.innerHTML = '<div class="msg err">兩次輸入的新密碼不一樣。</div>'; return; }
+    go.disabled = true;
+    try {
+      const r = await rpc('payroll_change_password', { p_token: state.token, p_old: o, p_new: n });
+      if (r.ok) { state.person.default_password = false; renderList(); return; }
+      if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
+      m.innerHTML = '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 8 個字。' : '目前的密碼不正確。') + '</div>';
+    } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+    go.disabled = false;
+  });
+}
+
+state.token ? viewList() : viewLogin();
+</script>
+</body>
+</html>

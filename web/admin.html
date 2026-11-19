@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>薪資管理｜沃克思</title>
+<style>
+:root{--paper:#f5f2ec;--card:#fffdf9;--ink:#1d1c1a;--muted:#6f6b63;--line:#e3ded3;--accent:#1f5c4a;--accent-soft:#e4efe9;--warn:#8a5a00;--warn-soft:#fbf1d9;--danger:#a3271f;--danger-soft:#fbe6e3;--num:"SF Mono","Roboto Mono",ui-monospace,Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 16px 80px}
+.narrow{max-width:440px}
+.bar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+.brand b{font-size:15px;letter-spacing:.18em}.brand span{font-size:13px;color:var(--muted);margin-left:10px}
+h1{font-size:22px;margin:0}
+h2{font-size:12.5px;font-weight:600;color:var(--muted);letter-spacing:.12em;margin:22px 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px}
+.pad{padding:16px}
+label{display:block;font-size:13px;color:var(--muted);margin:14px 0 5px}
+input[type=text],input[type=password],input[type=date],select,textarea{width:100%;height:44px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff;outline:none}
+textarea{height:72px;padding:10px 12px;resize:vertical}
+input:focus,select:focus,textarea:focus{border-color:var(--ink);box-shadow:0 0 0 3px rgba(29,28,26,.08)}
+.btn{height:40px;padding:0 16px;border:0;border-radius:8px;background:var(--ink);color:#fff;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn.ghost{background:none;color:var(--ink);border:1px solid var(--line);font-weight:500}
+.btn.block{display:block;width:100%;height:46px;margin-top:18px}
+.btn:disabled{opacity:.45;cursor:default}
+.link{background:none;border:0;padding:6px 0;color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:14px}
+.msg{margin-top:12px;padding:10px 12px;border-radius:8px;font-size:14px}
+.msg.err{background:var(--danger-soft);color:var(--danger)}.msg.warn{background:var(--warn-soft);color:var(--warn)}.msg.ok{background:var(--accent-soft);color:var(--accent)}
+.sub{color:var(--muted);font-size:13.5px}
+/* 活動切換：選取項目有深色底線，下方表格同步 */
+.events{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:thin}
+.ev{flex:0 0 auto;min-width:190px;text-align:left;background:none;border:0;border-bottom:3px solid transparent;margin-bottom:-1px;padding:12px 14px;cursor:pointer;border-radius:8px 8px 0 0}
+.ev:hover{background:rgba(29,28,26,.04)}
+.ev[aria-selected=true]{border-bottom-color:var(--ink);background:var(--card)}
+.ev .n{font-weight:600;display:block;white-space:nowrap}
+.ev[aria-selected=false] .n{color:var(--muted)}
+.ev .m{font-size:12.5px;color:var(--muted);display:block;margin-top:2px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:16px}
+.stat{padding:12px 14px}.stat .k{font-size:12px;color:var(--muted);letter-spacing:.06em}.stat .v{font-family:var(--num);font-size:20px;font-weight:600;margin-top:2px}
+.tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:18px 0 10px}
+.chip{height:34px;padding:0 12px;border-radius:99px;border:1px solid var(--line);background:none;cursor:pointer;font-size:13.5px}
+.chip[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.grow{flex:1}
+.tablebox{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.05em;background:rgba(29,28,26,.025)}
+tbody tr{cursor:pointer}tbody tr:hover{background:rgba(29,28,26,.035)}
+tbody tr.open{background:var(--accent-soft)}
+tr:last-child td{border-bottom:0}
+.r{text-align:right;font-family:var(--num)}
+.badge{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.badge.published{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.badge.void{text-decoration:line-through}
+.badge.error{background:var(--danger-soft);color:var(--danger);border-color:transparent}
+.badge.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(460px,100%);background:var(--card);border-left:1px solid var(--line);box-shadow:-12px 0 32px rgba(0,0,0,.08);overflow-y:auto;padding:18px 18px 40px;z-index:5}
+.drawer table td,.drawer table th{padding:8px 0;white-space:normal}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:14px;margin:0}.kv dt{color:var(--muted)}.kv dd{margin:0;text-align:right;word-break:break-all}
+.issue{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.issue:last-child{border-bottom:0}.issue.done{opacity:.5}
+.dim{color:var(--muted);font-size:12.5px}
+.confirm{position:sticky;bottom:12px;margin-top:14px;padding:12px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--ink);color:#fff;border-radius:12px}
+.confirm .btn{background:#fff;color:var(--ink)}.confirm .btn.ghost{background:none;color:#fff;border-color:rgba(255,255,255,.4)}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<div id="drawer"></div>
+<script>
+const API = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/rest/v1/rpc/';
+const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
+const app = document.getElementById('app'), drawer = document.getElementById('drawer');
+const S = { token: null, ov: null, eventId: null, slips: [], eventIssues: [], filter: 'all', sel: new Set(), openId: null, pending: null, flash: null };
+try { S.token = sessionStorage.getItem('payroll_admin_token'); } catch (e) {}
+function saveToken(t) { S.token = t; try { t ? sessionStorage.setItem('payroll_admin_token', t) : sessionStorage.removeItem('payroll_admin_token'); } catch (e) {} }
+async function rpc(name, body) {
+  const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error('連線失敗（' + res.status + '）');
+  const j = await res.json();
+  if (j && j.ok === false && j.error === 'session') { saveToken(null); viewAuth('login', '登入已逾時，請重新登入。'); throw new Error('session'); }
+  return j;
+}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
+const d = s => s ? s.replace(/-/g, '/') : '—';
+const STATUS = { draft: '草稿', published: '已發布', void: '作廢' };
+const openIssues = s => s.issues.filter(i => !i.resolved && i.severity !== 'info');
+const worst = s => openIssues(s).some(i => i.severity === 'error') ? 'error' : 'warn';
+
+function viewAuth(mode, message) {
+  drawer.innerHTML = '';
+  const setup = mode === 'setup';
+  app.className = 'wrap narrow';
+  app.innerHTML = `<div class="brand" style="margin:8px 0 26px"><b>WORKS</b><span>薪資管理</span></div>
+    <h1>${setup ? '首次設定管理員' : '管理員登入'}</h1>
+    <form id="f" class="card pad" style="margin-top:18px">
+      ${setup ? '<label for="code" style="margin-top:0">設定碼</label><input id="code" type="text" autocomplete="off" required>' : ''}
+      <label for="u" ${setup ? '' : 'style="margin-top:0"'}>帳號</label><input id="u" type="text" autocomplete="username" autocapitalize="none" required>
+      <label for="p">密碼${setup ? '（至少 10 個字）' : ''}</label><input id="p" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required>
+      <div id="m">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
+      <button class="btn block">${setup ? '建立管理員' : '登入'}</button>
+    </form>
+    <button class="link" id="sw" style="margin-top:10px">${setup ? '已經有帳號，回到登入' : '第一次使用？用設定碼建立管理員'}</button>`;
+  document.getElementById('sw').onclick = () => viewAuth(setup ? 'login' : 'setup');
+  document.getElementById('f').onsubmit = async e => {
+    e.preventDefault(); const m = document.getElementById('m'); m.innerHTML = '';
+    const u = document.getElementById('u').value, p = document.getElementById('p').value;
+    try {
+      if (setup) {
+        const r = await rpc('admin_setup', { p_code: document.getElementById('code').value, p_username: u, p_password: p });
+        if (!r.ok) { m.innerHTML = '<div class="msg err">' + ({ bad_code: '設定碼不正確、已用過或已過期。', bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 10 個字。', taken: '這個帳號已經存在。' }[r.error] || '建立失敗') + '</div>'; return; }
+      }
+      const r = await rpc('admin_login', { p_username: u, p_password: p });
+      if (r.ok) { saveToken(r.token); return load(); }
+      m.innerHTML = '<div class="msg err">' + (r.error === 'locked' ? '錯誤次數過多，請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。' : '帳號或密碼不正確。' + (r.attempts_left != null ? '還可以再試 ' + esc(r.attempts_left) + ' 次。' : '')) + '</div>';
+    } catch (err) { if (err.message !== 'session') m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+  };
+}
+
+async function load(keepEvent) {
+  app.className = 'wrap';
+  if (!S.ov) app.innerHTML = '<p class="sub">載入中…</p>';
+  try {
+    const r = await rpc('admin_overview', { p_token: S.token });
+    S.ov = r;
+    if (!keepEvent || !r.events.some(e => e.id === S.eventId)) S.eventId = r.events.length ? r.events[0].id : null;
+    await loadEvent();
+  } catch (err) { if (err.message !== 'session') app.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+}
+async function loadEvent() {
+  if (S.eventId) {
+    const r = await rpc('admin_event', { p_token: S.token, p_event: S.eventId });
+    S.slips = r.payslips; S.eventIssues = r.event_issues;
+  } else { S.slips = []; S.eventIssues = []; }
+  S.sel = new Set([...S.sel].filter(id => S.slips.some(s => s.id === id)));
+  render();
+}
+
+function visible() {
+  return S.slips.filter(s => S.filter === 'all' || (S.filter === 'issues' ? openIssues(s).length : s.status === S.filter));
+}
+function render() {
+  const ev = S.ov.events.find(e => e.id === S.eventId), em = S.ov.employer || {};
+  const rows = visible(), cnt = k => S.slips.filter(s => k === 'issues' ? openIssues(s).length : s.status === k).length;
+  const selIds = [...S.sel];
+  app.innerHTML = `
+    <div class="bar">
+      <div class="brand"><b>WORKS</b><span>薪資管理</span></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="sub">${esc(S.ov.username)}</span>
+        <button class="btn ghost" id="emp">公司資料${em.legal_name && em.tax_id ? '' : '（未填）'}</button>
+        <button class="btn ghost" id="out">登出</button>
+      </div>
+    </div>
+    ${S.flash ? '<div class="msg ' + S.flash.type + '" style="margin:0 0 14px">' + esc(S.flash.text) + '</div>' : ''}
+    <div class="events" role="tablist" aria-label="活動">
+      ${S.ov.events.map(e => `<button class="ev" role="tab" aria-selected="${e.id === S.eventId}" data-id="${esc(e.id)}">
+        <span class="n">${esc(e.name)}</span>
+        <span class="m">${esc(d(e.start_date))}　已發布 ${e.published}/${e.total}${e.open_issues ? '　待處理 ' + e.open_issues : ''}</span></button>`).join('')}
+    </div>
+    ${ev ? `
+    <div class="stats">
+      <div class="card stat"><div class="k">薪資單</div><div class="v">${ev.total}</div></div>
+      <div class="card stat"><div class="k">已發布</div><div class="v">${ev.published}</div></div>
+      <div class="card stat"><div class="k">草稿</div><div class="v">${ev.draft}</div></div>
+      <div class="card stat"><div class="k">實發合計</div><div class="v">${money(ev.net_sum)}</div></div>
+      <div class="card stat"><div class="k">發薪日</div><div class="v" style="font-size:16px;margin-top:6px">${esc(d(ev.pay_date))}</div></div>
+    </div>
+    <div class="card pad" style="margin-top:10px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div><label for="pd" style="margin-top:0">設定這場活動的發薪日</label><input id="pd" type="date" value="${esc(ev.pay_date || '')}" style="width:190px"></div>
+      <button class="btn ghost" id="pdsave">儲存並套用到全部薪資單</button>
+      <span class="sub grow">薪資單上必須顯示發薪日，建議發布前先填。</span>
+    </div>
+    ${S.eventIssues.length ? '<h2>這場活動的注意事項</h2><div class="card pad" style="padding-top:6px;padding-bottom:6px">' + S.eventIssues.map(issueRow).join('') + '</div>' : ''}
+    <div class="tools">
+      ${[['all', '全部', S.slips.length], ['draft', '草稿', cnt('draft')], ['published', '已發布', cnt('published')], ['issues', '有問題', cnt('issues')]].map(([k, t, n]) => `<button class="chip" aria-pressed="${S.filter === k}" data-f="${k}">${t} ${n}</button>`).join('')}
+      <span class="grow"></span>
+      <span class="sub">已選 ${selIds.length} 筆</span>
+      <button class="btn" id="pub" ${selIds.length ? '' : 'disabled'}>發布所選</button>
+      <button class="btn ghost" id="unpub" ${selIds.length ? '' : 'disabled'}>取消發布</button>
+    </div>
+    <div class="card tablebox"><table>
+      <thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${rows.length && rows.every(s => S.sel.has(s.id)) ? 'checked' : ''}></th><th>姓名</th><th>崗位</th><th>性質</th><th class="r">應發</th><th class="r">津貼</th><th class="r">扣款</th><th class="r">實發</th><th>狀態</th><th>問題</th></tr></thead>
+      <tbody>${rows.map(s => `<tr data-id="${esc(s.id)}" class="${s.id === S.openId ? 'open' : ''}">
+        <td><input type="checkbox" class="ck" data-id="${esc(s.id)}" aria-label="選取 ${esc(s.name)}" ${S.sel.has(s.id) ? 'checked' : ''}></td>
+        <td>${esc(s.name)}</td><td>${esc(s.role || '—')}</td><td>${s.relation === 'contract' ? '勞務報酬' : '僱傭'}</td>
+        <td class="r">${money(s.gross)}</td><td class="r">${Number(s.allowances) ? money(s.allowances) : ''}</td><td class="r">${Number(s.deductions) ? money(s.deductions) : ''}</td><td class="r"><b>${money(s.net)}</b></td>
+        <td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td>
+        <td>${openIssues(s).length ? '<span class="badge ' + worst(s) + '">' + openIssues(s).length + ' 項</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="sub" style="text-align:center;padding:28px">沒有符合的薪資單</td></tr>'}</tbody>
+    </table></div>
+    ${S.pending ? `<div class="confirm"><span class="grow">${S.pending === 'published' ? '確定發布 ' + selIds.length + ' 筆？發布後工讀生登入就看得到。' : '確定把 ' + selIds.length + ' 筆改回草稿？工讀生將看不到。'}</span><button class="btn" id="yes">確定</button><button class="btn ghost" id="no">取消</button></div>` : ''}`
+    : '<p class="sub" style="margin-top:20px">還沒有任何活動。</p>'}`;
+  S.flash = null;
+  app.querySelectorAll('.ev').forEach(b => b.onclick = async () => { S.eventId = b.dataset.id; S.sel.clear(); S.openId = null; S.pending = null; S.filter = 'all'; drawer.innerHTML = ''; render(); await loadEvent(); });
+  app.querySelectorAll('.chip').forEach(b => b.onclick = () => { S.filter = b.dataset.f; render(); });
+  app.querySelectorAll('.ck').forEach(c => { c.onclick = e => e.stopPropagation(); c.onchange = () => { c.checked ? S.sel.add(c.dataset.id) : S.sel.delete(c.dataset.id); S.pending = null; render(); }; });
+  const all = document.getElementById('all'); if (all) all.onchange = () => { rows.forEach(s => all.checked ? S.sel.add(s.id) : S.sel.delete(s.id)); S.pending = null; render(); };
+  app.querySelectorAll('tbody tr[data-id]').forEach(tr => tr.onclick = () => openSlip(tr.dataset.id));
+  app.querySelectorAll('[data-issue]').forEach(bindIssue);
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  on('out', async () => { try { await rpc('admin_logout', { p_token: S.token }); } catch (e) {} saveToken(null); S.ov = null; viewAuth('login'); });
+  on('emp', openEmployer);
+  on('pub', () => { S.pending = 'published'; render(); });
+  on('unpub', () => { S.pending = 'draft'; render(); });
+  on('no', () => { S.pending = null; render(); });
+  on('yes', async () => {
+    const status = S.pending; S.pending = null;
+    const r = await rpc('admin_set_status', { p_token: S.token, p_ids: selIds, p_status: status });
+    S.flash = { type: r.skipped_no_amount ? 'warn' : 'ok', text: (status === 'published' ? '已發布 ' : '已改回草稿 ') + r.updated + ' 筆。' + (r.skipped_no_amount ? '另有 ' + r.skipped_no_amount + ' 筆沒有金額，無法發布。' : '') };
+    S.sel.clear(); await load(true);
+  });
+  on('pdsave', async () => {
+    await rpc('admin_update_event', { p_token: S.token, p_id: S.eventId, p_patch: { pay_date: document.getElementById('pd').value, apply_to_payslips: true } });
+    S.flash = { type: 'ok', text: '發薪日已更新並套用到這場活動的全部薪資單。' }; await load(true);
+  });
+}
+function issueRow(i) {
+  return `<div class="issue ${i.resolved ? 'done' : ''}"><div><span class="badge ${esc(i.severity)}">${{ error: '須處理', warn: '請確認', info: '說明' }[i.severity]}</span> ${esc(i.detail)}</div>${i.severity === 'info' ? '' : `<button class="link" style="padding:0;white-space:nowrap" data-issue="${esc(i.id)}" data-to="${!i.resolved}">${i.resolved ? '重新開啟' : '標為已處理'}</button>`}</div>`;
+}
+function bindIssue(b) {
+  b.onclick = async () => { await rpc('admin_resolve_issue', { p_token: S.token, p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' }); await load(true); if (S.openId) openSlip(S.openId); };
+}
+
+async function openSlip(id) {
+  S.openId = id; app.querySelectorAll('tbody tr').forEach(tr => tr.classList.toggle('open', tr.dataset.id === id));
+  drawer.innerHTML = '<div class="drawer"><p class="sub">載入中…</p></div>';
+  const r = await rpc('admin_payslip', { p_token: S.token, p_id: id });
+  if (!r.ok) { drawer.innerHTML = ''; return; }
+  const p = r.payslip;
+  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="薪資單明細">
+    <div class="bar" style="margin-bottom:10px"><h1>${esc(p.person.name)}</h1><button class="btn ghost" id="close">關閉</button></div>
+    <dl class="kv">
+      <dt>身分證字號</dt><dd>${esc(p.person.national_id)}</dd><dt>電話</dt><dd>${esc(p.person.phone || '—')}</dd>
+      <dt>狀態</dt><dd><span class="badge ${esc(p.status)}">${STATUS[p.status]}</span></dd>
+      <dt>工作日（原填）</dt><dd>${esc(p.work_dates_text || '—')}</dd>
+      <dt>計薪區間</dt><dd>${esc(d(p.period_start))} – ${esc(d(p.period_end))}</dd>
+      <dt>匯款帳戶</dt><dd>${esc([p.pay_bank_code, p.pay_bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.pay_account_name || '')} ${esc(p.pay_account || '')}</dd>
+    </dl>
+    <h2>金額</h2>
+    <table>${p.items.map(i => `<tr><td>${esc(i.label)}${i.work_date ? '<div class="dim">' + esc(d(i.work_date)) + (i.hours != null ? '　' + Number(i.hours) + ' 小時 × ' + money(i.rate) : '') + '</div>' : ''}</td><td class="r">${i.kind === 'deduction' ? '−' : ''}${money(i.amount)}</td></tr>`).join('')}
+      <tr><td><b>實發</b></td><td class="r"><b>${money(p.net)}</b></td></tr></table>
+    ${p.attendance.length ? '<h2>出勤</h2><table>' + p.attendance.map(a => `<tr><td>${esc(d(a.work_date))}</td><td class="r">${a.clock_in ? esc(a.clock_in) + ' – ' + esc(a.clock_out || '') : '<span class="dim">' + esc(a.scheduled_text || '無時間紀錄') + '</span>'}</td></tr>`).join('') + '</table>' : ''}
+    ${p.issues.length ? '<h2>問題</h2>' + p.issues.map(issueRow).join('') : ''}
+    <h2>設定</h2>
+    <label for="rel" style="margin-top:0">性質</label>
+    <select id="rel"><option value="employment" ${p.relation === 'employment' ? 'selected' : ''}>僱傭（適用勞基法）</option><option value="contract" ${p.relation === 'contract' ? 'selected' : ''}>承攬（勞務報酬）</option></select>
+    <label for="pdate">發薪日</label><input id="pdate" type="date" value="${esc(p.pay_date || '')}">
+    <label for="note">備註（工讀生看得到）</label><textarea id="note">${esc(p.note || '')}</textarea>
+    <div id="dm"></div>
+    <button class="btn block" id="save">儲存</button>
+    <h2>帳號</h2>
+    <p class="sub">${p.person.has_password ? (p.person.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.person.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
+    <button class="btn ghost" id="reset" style="margin-top:8px" ${p.person.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button>
+  </div>`;
+  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; S.openId = null; app.querySelectorAll('tbody tr.open').forEach(tr => tr.classList.remove('open')); };
+  drawer.querySelectorAll('[data-issue]').forEach(bindIssue);
+  document.getElementById('save').onclick = async () => {
+    const r2 = await rpc('admin_update_payslip', { p_token: S.token, p_id: id, p_patch: { relation: document.getElementById('rel').value, pay_date: document.getElementById('pdate').value, note: document.getElementById('note').value } });
+    if (r2.ok) { await load(true); await openSlip(id); document.getElementById('dm').innerHTML = '<div class="msg ok">已儲存。</div>'; }
+  };
+  document.getElementById('reset').onclick = async () => {
+    const r2 = await rpc('admin_reset_password', { p_token: S.token, p_person: p.person.id });
+    document.getElementById('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>';
+  };
+}
+
+function openEmployer() {
+  const em = S.ov.employer || {};
+  drawer.innerHTML = `<div class="drawer" role="dialog" aria-label="公司資料">
+    <div class="bar" style="margin-bottom:10px"><h1>公司資料</h1><button class="btn ghost" id="close">關閉</button></div>
+    <p class="sub">這些資料會顯示在每張薪資單的「雇主」欄。</p>
+    <label for="ln">公司全名</label><input id="ln" type="text" value="${esc(em.legal_name || '')}" placeholder="例如：○○有限公司">
+    <label for="tx">統一編號（8 碼）</label><input id="tx" type="text" inputmode="numeric" maxlength="8" value="${esc(em.tax_id || '')}">
+    <div id="dm"></div><button class="btn block" id="save">儲存</button></div>`;
+  document.getElementById('close').onclick = () => { drawer.innerHTML = ''; };
+  document.getElementById('save').onclick = async () => {
+    const r = await rpc('admin_update_employer', { p_token: S.token, p_patch: { legal_name: document.getElementById('ln').value, tax_id: document.getElementById('tx').value } });
+    if (!r.ok) { document.getElementById('dm').innerHTML = '<div class="msg err">統一編號必須是 8 個數字。</div>'; return; }
+    drawer.innerHTML = ''; S.flash = { type: 'ok', text: '公司資料已更新。' }; await load(true);
+  };
+}
+
+S.token ? load() : viewAuth('login');
+</script>
+</body>
+</html>
