@@ -57,6 +57,9 @@ input:focus{border-color:var(--ink);box-shadow:0 0 0 3px rgba(29,28,26,.08)}
 .hero{padding:22px 18px 20px;text-align:center}
 .hero .label{font-size:13px;color:var(--muted);letter-spacing:.12em}
 .hero .net{font-family:var(--num);font-size:44px;font-weight:700;line-height:1.15;margin-top:4px;letter-spacing:-.01em}
+.clock{font-family:var(--num);font-size:56px;font-weight:700;line-height:1.1;letter-spacing:-.02em}
+.btn.big{height:64px;font-size:19px}
+.btn.out{background:var(--accent)}
 .hero .net small{font-size:18px;font-weight:500;margin-right:4px;color:var(--muted)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:14px}
 .kv dt{color:var(--muted)}
@@ -89,9 +92,10 @@ th{font-size:12px;color:var(--muted);letter-spacing:.06em}
 const API = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/rest/v1/rpc/';
 const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
 const app = document.getElementById('app');
-const state = { token: null, person: null, payslips: [], year: 'all' };
+const state = { token: null, person: null, payslips: [], year: 'all', ticket: null };
 
-try { state.token = sessionStorage.getItem('payroll_token'); } catch (e) {}
+try { state.token = sessionStorage.getItem('payroll_token'); state.ticket = sessionStorage.getItem('payroll_ticket'); } catch (e) {}
+function saveTicket(t) { state.ticket = t; try { t ? sessionStorage.setItem('payroll_ticket', t) : sessionStorage.removeItem('payroll_ticket'); } catch (e) {} }
 function saveToken(t) { state.token = t; try { t ? sessionStorage.setItem('payroll_token', t) : sessionStorage.removeItem('payroll_token'); } catch (e) {} }
 
 async function rpc(name, body) {
@@ -131,7 +135,7 @@ function viewLogin(message) {
     e.preventDefault(); go.disabled = true; go.textContent = '登入中…'; m.innerHTML = '';
     try {
       const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
-      if (r.ok) { saveToken(r.token); return viewList(); }
+      if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : viewList(); }
       if (r.error === 'locked') m.innerHTML = '<div class="msg err">輸入錯誤次數過多，帳號已暫時鎖定。請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。</div>';
       else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。' + (r.attempts_left != null ? '還可以再試 ' + esc(r.attempts_left) + ' 次。' : '') + '</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
@@ -269,7 +273,57 @@ function viewPassword() {
   });
 }
 
-state.token ? viewList() : viewLogin();
+async function viewCheckin(action) {
+  document.title = '簽到退｜沃克思';
+  if (!action) app.innerHTML = brand + '<div class="skeleton" style="height:220px"></div>';
+  let r;
+  try { r = await rpc('payroll_clock', { p_token: state.token, p_ticket: state.ticket, p_action: action || 'status' }); }
+  catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewCheckin()">再試一次</button>'; return; }
+  if (r.error === 'session') { saveToken(null); return viewLogin('請先登入，登入後就可以簽到。'); }
+  if (r.error === 'ticket') { saveTicket(null); app.innerHTML = brand + '<h1>簽到連結已失效</h1><p class="sub" style="margin-top:8px">請重新掃描現場的 QR 碼。</p><button class="btn ghost" onclick="viewList()">查看我的薪資</button>'; return; }
+  const note = { not_event_day: '今天不在這場活動的日期內，無法簽到。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '找不到簽到紀錄，請先簽到。' }[r.error];
+  const st = r.state || 'none';
+  app.innerHTML = brand + `
+    <p class="sub">${esc(r.event || '')}</p>
+    <h1>${st === 'in' ? '上班中' : st === 'done' ? '今天已完成' : '尚未簽到'}</h1>
+    <div class="card hero" style="margin-top:18px">
+      <div class="label">現在時間</div>
+      <div class="clock">${esc(r.now || '--:--')}</div>
+      <dl class="kv" style="margin-top:16px;text-align:left">
+        <dt>簽到</dt><dd>${esc(r.clock_in || '—')}</dd>
+        <dt>簽退</dt><dd>${esc(r.clock_out || '—')}</dd>
+      </dl>
+    </div>
+    ${r.ok && r.done ? '<div class="msg ok">' + (r.done === 'in' ? '簽到成功，時間 ' + esc(r.clock_in) + '。' : '簽退成功，時間 ' + esc(r.clock_out) + '。辛苦了。') + '</div>' : ''}
+    ${note ? '<div class="msg warn">' + esc(note) + '</div>' : ''}
+    ${r.error === 'not_event_day' || st === 'done' ? '' : st === 'in'
+      ? '<button class="btn big out" id="act" data-a="out">簽退</button>'
+      : '<button class="btn big" id="act" data-a="in">簽到</button>'}
+    <button class="btn ghost" id="tolist">查看我的薪資</button>
+    <p class="foot">簽到退時間以伺服器時間為準，記錄到分鐘，並依勞動基準法第 30 條保存 5 年。時間有誤請當場告訴現場負責人。</p>`;
+  document.getElementById('tolist').addEventListener('click', viewList);
+  const act = document.getElementById('act');
+  if (act) act.addEventListener('click', () => {
+    if (act.dataset.a === 'out' && !act.dataset.sure) { act.dataset.sure = '1'; act.textContent = '確定要簽退？再按一次'; return; }
+    act.disabled = true; viewCheckin(act.dataset.a);
+  });
+}
+
+(async function boot() {
+  const code = new URLSearchParams(location.search).get('k');
+  let codeMsg = null;
+  if (code) {
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}
+    try {
+      const r = await rpc('payroll_checkin_ticket', { p_code: code });
+      if (r.ok) saveTicket(r.ticket);
+      else { saveTicket(null); codeMsg = r.error === 'expired' ? 'QR 碼已過期，請重新掃描現場的 QR 碼。' : 'QR 碼無法辨識，請重新掃描。'; }
+    } catch (err) { codeMsg = '網路連線失敗，請重新掃描 QR 碼。'; }
+  }
+  if (!state.token) return viewLogin(codeMsg || (state.ticket ? '請先登入，登入後就可以簽到。' : null));
+  if (state.ticket && code) return viewCheckin();
+  viewList();
+})();
 </script>
 </body>
 </html>
