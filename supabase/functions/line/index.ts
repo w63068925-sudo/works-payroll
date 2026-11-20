@@ -47,13 +47,13 @@ async function flush() {
       if (stop) { results.push({ id: m.id, status: "pending", error: null }); continue; }
       const res = await line("/v2/bot/message/push", { method: "POST", headers: { "X-Line-Retry-Key": m.id }, body: JSON.stringify({ to: m.to, messages: [{ type: "text", text: m.text }] }) });
       if (res.ok || res.status === 409) { results.push({ id: m.id, status: "sent", error: null }); sent++; }
-      else {
-        const body = await res.text();
-        if (res.status === 429) { stop = true; results.push({ id: m.id, status: "failed", error: "monthly_limit_or_rate_limit" }); failed++; }
-        else { results.push({ id: m.id, status: "failed", error: `http_${res.status}: ${body.slice(0, 160)}` }); failed++; }
-      }
+      else if (res.status === 429) { stop = true; results.push({ id: m.id, status: "retry", error: "http_429" }); failed++; }
+      else if (res.status >= 500) { results.push({ id: m.id, status: "retry", error: `http_${res.status}` }); failed++; }
+      else { results.push({ id: m.id, status: "failed", error: `http_${res.status}` }); failed++; }
     }
-    await sb.rpc("notify_mark", { p_results: results.filter((r) => r.status !== "pending") });
+    // 尚未嘗試的維持 sending，10 分鐘後由下一輪重新領取
+    const { error: markErr } = await sb.rpc("notify_mark", { p_results: results.filter((r) => r.status !== "pending") });
+    if (markErr) return { ok: false, error: "mark_failed", sent, failed };
     if (stop) break;
   }
   return { ok: true, sent, failed };
@@ -74,7 +74,7 @@ Deno.serve(async (req: Request) => {
     for (const ev of body.events ?? []) {
       const uid = ev.source?.type === "user" ? ev.source.userId : null;
       if (!uid) continue;
-      if (ev.type === "unfollow") { await sb.rpc("line_unfollow", { p_user: uid }); continue; }
+      if (ev.type === "unfollow") { const { error } = await sb.rpc("line_unfollow", { p_user: uid }); if (error) return json({ ok: false }, 500); continue; }
       if (ev.type === "follow") {
         await reply(ev.replyToken, `歡迎加入沃克思！\n要收到錄取、上班前一天提醒和薪資單通知，請到薪資查詢網站登入 → 我的資料 → 綁定 LINE，再把 6 位數綁定碼傳給我。\n${site}`);
         continue;
@@ -82,9 +82,12 @@ Deno.serve(async (req: Request) => {
       if (ev.type === "message" && ev.message?.type === "text") {
         const m = String(ev.message.text).match(/\b(\d{6})\b/);
         if (m) {
-          const { data } = await sb.rpc("line_bind", { p_code: m[1], p_user: uid });
+          const { data, error } = await sb.rpc("line_bind", { p_code: m[1], p_user: uid });
+          if (error) return json({ ok: false }, 500);
           await reply(ev.replyToken, data?.ok
             ? `綁定完成！${data.name}，之後錄取通知、上班前一天提醒和薪資單發布都會在這裡通知你。`
+            : data?.error === "too_many"
+            ? `嘗試次數太多，請一小時後再試。`
             : `綁定碼不正確或已過期（15 分鐘內有效），請到網站重新產生。\n${site}`);
         } else {
           await reply(ev.replyToken, `這個帳號負責發送排班與薪資通知，無法回覆訊息。有問題請直接聯絡活動負責人。\n薪資查詢：${site}`);

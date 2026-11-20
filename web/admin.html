@@ -122,7 +122,7 @@ tbody tr.on{background:var(--accent-soft)}
 <body>
 <div id="root"></div>
 <div id="overlay"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js" integrity="sha384-mZT2gIty7ZDdOGkxfP6joZcYdMW1Jvj9dRlfpTmaJAKKXTqzygtB22k7FLe+KZC1" crossorigin="anonymous"></script>
 <script>
 const API = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/rest/v1/rpc/';
 const FN = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/docs';
@@ -185,7 +185,7 @@ function viewAuth(mode, message) {
       }
       const r = await rpc('admin_login', { p_username: u, p_password: p });
       if (r.ok) { saveToken(r.token); S.user = r.username; S.ov = null; return route(); }
-      m.innerHTML = '<div class="msg err">' + (r.error === 'locked' ? '錯誤次數過多，請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。' : '帳號或密碼不正確。' + (r.attempts_left != null ? '還可以再試 ' + esc(r.attempts_left) + ' 次。' : '')) + '</div>';
+      m.innerHTML = '<div class="msg err">' + (r.error === 'locked' ? '錯誤次數過多，請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。' : '帳號或密碼不正確。連續錯 5 次會鎖定 15 分鐘。') + '</div>';
     } catch (err) { if (err.message !== 'session') m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
   };
 }
@@ -559,7 +559,7 @@ const stepPublish = {
     b('yes', async () => {
       const status = S.confirm; S.confirm = null;
       const r = await rpc('admin_set_status', { p_ids: [...S.sel], p_status: status });
-      flash(r.skipped_no_amount ? 'warn' : 'ok', (status === 'published' ? '已發布 ' : '已改回草稿 ') + r.updated + ' 筆。' + (r.skipped_no_amount ? '另有 ' + r.skipped_no_amount + ' 筆沒有金額，無法發布。' : ''));
+      flash(r.skipped_no_amount || r.blocked_errors ? 'warn' : 'ok', (status === 'published' ? '已發布 ' : '已改回草稿 ') + r.updated + ' 筆。' + (r.skipped_no_amount ? '另有 ' + r.skipped_no_amount + ' 筆沒有金額，無法發布。' : '') + (r.blocked_errors ? r.blocked_errors + ' 筆有「須處理」的問題（例如低於最低工資），處理後才能發布。' : ''));
       S.sel = new Set(); refreshEvent(e, 'publish');
     });
   }
@@ -583,7 +583,7 @@ const stepPayout = {
       <div class="card tablebox"><table>
       <thead><tr><th>姓名</th><th>銀行</th><th>戶名</th><th>帳號</th><th class="r">實發</th><th>狀態</th></tr></thead>
       <tbody>${live.map(s => `<tr><td>${esc(s.name)}</td><td>${esc([s.pay_bank_code, s.pay_bank_branch].filter(Boolean).join(' ') || '—')}</td><td>${esc(s.pay_account_name || '—')}</td>
-        <td>${s.pay_account ? esc(s.pay_account) : '<span class="badge warn">缺</span>'}</td><td class="r">${money(s.net)}</td><td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">沒有薪資單</td></tr>'}</tbody>
+        <td>${s.pay_account ? esc(s.pay_account) : '<span class="badge warn">缺</span>'}${openIssues(s.issues).some(i => i.code === 'bank_changed') ? ' <span class="badge warn">帳戶待核</span>' : ''}</td><td class="r">${money(s.net)}</td><td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">沒有薪資單</td></tr>'}</tbody>
       </table></div>`;
   },
   bind: e => {
@@ -592,10 +592,14 @@ const stepPayout = {
       flash(r.ok ? 'ok' : 'err', r.ok ? '發薪日已套用到 ' + r.payslips_updated + ' 張薪資單。' : '儲存失敗。'); refreshEvent(e, 'payout');
     };
     const c = $('csv'); if (c) c.onclick = () => {
-      const pub = S.cache.slips.filter(s => s.status === 'published' && s.relation !== 'contract');
-      const cell = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const held = s => openIssues(s.issues).some(i => i.code === 'bank_changed');
+      const all = S.cache.slips.filter(s => s.status === 'published' && s.relation !== 'contract');
+      const pub = all.filter(s => !held(s) && s.pay_account);
+      if (pub.length < all.length) alert((all.length - pub.length) + ' 筆因為沒有帳號或帳戶剛被本人更改、尚未核對，沒有放進匯款清單。請到「核對」處理後再下載。');
+      const cell = v => { let t = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
+      const digits = v => '="' + String(v || '').replace(/\D/g, '') + '"';
       const lines = [['姓名', '身分證字號', '銀行代碼', '分行', '戶名', '帳號', '實發金額', '發薪日'].map(cell).join(',')]
-        .concat(pub.map(s => [cell(s.name), cell(s.national_id), '="' + (s.pay_bank_code || '') + '"', cell(s.pay_bank_branch), cell(s.pay_account_name), '="' + (s.pay_account || '') + '"', s.net, cell(e.pay_date || '')].join(',')));
+        .concat(pub.map(s => [cell(s.name), cell(s.national_id), digits(s.pay_bank_code), cell(s.pay_bank_branch), cell(s.pay_account_name), digits(s.pay_account), Number(s.net) || 0, cell(s.pay_date || e.pay_date || '')].join(',')));
       const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = e.name.replace(/[\\/:*?"<>|]/g, '') + '-匯款清單.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     };
@@ -657,7 +661,7 @@ async function openDetail(kind, key, e, keepScroll) {
     bindClose();
     $('save').onclick = async () => {
       const r = await rpc('admin_save_shifts', { p_event: e.id, p_shift: x ? key : null, p_patch: { work_date: $('sd').value, until_date: $('su') ? $('su').value : '', start: $('ss').value, end: $('se').value, role: $('sr').value, headcount: $('sh').value, rate: $('sp').value, note: $('sn').value } });
-      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + (r.error === 'below_accepted' ? '人數不能少於已錄取人數。' : '請確認日期、時間（例如 10:00）與人數。') + '</div>'; return; }
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + ({ below_accepted: '人數不能少於已錄取人數。', overlap: '改了之後會跟某位錄取者的其他班次時間重疊，請先調整他的錄取。' }[r.error] || '請確認日期、時間（例如 10:00）與人數。') + '</div>'; return; }
       flash('ok', x ? '班次已更新。' : '已建立 ' + r.count + ' 個班次。'); S.detail = null; refreshEvent(e, 'staff');
     };
     if ($('del')) $('del').onclick = async () => {
@@ -998,7 +1002,7 @@ async function viewSettings(tab) {
     on('[data-reset]', 'click', async (ev, b) => {
       const pw = rnd();
       const r = await rpc('admin_reset_admin', { p_username: b.dataset.reset, p_password: pw });
-      $('am').innerHTML = r.ok ? '<div class="msg ok">' + esc(b.dataset.reset) + ' 的新密碼：<b style="font-family:var(--num)">' + esc(pw) + '</b>　請私下交給對方，這個密碼只會顯示這一次。</div>' : '<div class="msg err">重設失敗。</div>';
+      $('am').innerHTML = r.ok ? '<div class="msg ok">' + esc(b.dataset.reset) + ' 的新密碼：<b style="font-family:var(--num)">' + esc(pw) + '</b>　請私下交給對方，這個密碼只會顯示這一次。</div>' : '<div class="msg err">' + (r.error === 'self' ? '自己的密碼請用下方「更改我的密碼」。' : '重設失敗。') + '</div>';
     });
   }
   if (f('wf')) f('wf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_min_wages', { p_set: { effective_from: $('wd').value, hourly: $('wh').value, monthly: $('wm').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">請確認日期與金額。</div>'; return; } flash('ok', '最低工資已儲存。'); viewSettings('wages'); };

@@ -160,7 +160,7 @@ function viewLogin(message) {
       const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
       if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList(); }
       if (r.error === 'locked') m.innerHTML = '<div class="msg err">輸入錯誤次數過多，帳號已暫時鎖定。請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。</div>';
-      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。' + (r.attempts_left != null ? '還可以再試 ' + esc(r.attempts_left) + ' 次。' : '') + '</div>';
+      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
     go.disabled = false; go.textContent = '登入'; pw.value = ''; pw.focus();
   });
@@ -226,7 +226,7 @@ async function viewSlip(id) {
   document.title = p.event + '｜薪資單';
   const by = k => p.items.filter(i => i.kind === k);
   const rows = list => list.map(i => `<tr><td>${esc(i.label)}${i.work_date ? '<div class="dim">' + esc(fmtDate(i.work_date, true)) + (i.hours != null ? '　' + esc(Number(i.hours)) + ' 小時 × ' + money(i.rate) : '') + '</div>' : ''}</td><td class="r">${money(i.amount)}</td></tr>`).join('');
-  const hours = a => { if (!a.clock_in || !a.clock_out) return null; const [h1, m1] = a.clock_in.split(':').map(Number), [h2, m2] = a.clock_out.split(':').map(Number); return Math.round(((h2 * 60 + m2) - (h1 * 60 + m1) - (a.break_minutes || 0)) / 6) / 10; };
+  const hours = a => a.minutes == null ? null : Math.round(a.minutes / 6) / 10;
   const payable = Number(p.gross || 0) + Number(p.allowances || 0);
   app.innerHTML = brand + `
     <button class="link no-print" id="back">← 返回列表</button>
@@ -262,7 +262,7 @@ async function viewSlip(id) {
     ${p.attendance.length ? `<h2>出勤紀錄</h2>
     <div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>
       <tr><th>日期</th><th>上班</th><th>下班</th><th class="r">休息</th><th class="r">工時</th></tr>
-      ${p.attendance.map(a => `<tr><td>${esc(fmtDate(a.work_date, true).slice(5))}${a.source === 'legacy' && a.clock_in ? '<div class="dim">排定時段</div>' : ''}</td><td>${esc(a.clock_in || '—')}</td><td>${esc(a.clock_out || '—')}</td><td class="r">${a.clock_in ? esc(a.break_minutes) + ' 分' : '—'}</td><td class="r">${hours(a) != null ? hours(a) + ' 時' : '—'}</td></tr>`).join('')}
+      ${p.attendance.map(a => `<tr><td>${esc(fmtDate(a.work_date, true).slice(5))}${a.source === 'legacy' && a.clock_in ? '<div class="dim">排定時段</div>' : ''}</td><td>${esc(a.clock_in || '—')}</td><td>${esc(a.clock_out || '—')}${a.overnight ? '<div class="dim">翌日</div>' : ''}</td><td class="r">${a.clock_in ? esc(a.break_minutes) + ' 分' : '—'}</td><td class="r">${hours(a) != null ? hours(a) + ' 時' : '—'}</td></tr>`).join('')}
     </table></div>` : ''}
     ${p.note ? '<h2>備註</h2><div class="card pad">' + esc(p.note) + '</div>' : ''}
     <button class="btn no-print" id="print">列印／存成 PDF</button>
@@ -534,8 +534,9 @@ async function viewContract(appId) {
   if (go) go.addEventListener('click', async () => {
     if (!document.getElementById('ok').checked) { document.getElementById('m').innerHTML = '<div class="msg err">請先勾選同意。</div>'; return; }
     go.disabled = true;
-    const r2 = await rpc('payroll_accept_contract', { p_token: state.token, p_app: appId });
+    const r2 = await rpc('payroll_accept_contract', { p_token: state.token, p_app: appId, p_hash: r.hash });
     if (r2.ok) return viewContract(appId);
+    if (r2.error === 'changed') { alert('契約內容剛剛有更新，請重新閱讀後再確認。'); return viewContract(appId); }
     document.getElementById('m').innerHTML = '<div class="msg err">確認失敗，請重新整理後再試。</div>'; go.disabled = false;
   });
 }
@@ -576,7 +577,7 @@ async function viewCheckin(action) {
   catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewCheckin()">再試一次</button>'; return; }
   if (r.error === 'session') { saveToken(null); return viewLogin('請先登入，登入後就可以簽到。'); }
   if (r.error === 'ticket') { saveTicket(null); app.innerHTML = brand + '<h1>簽到連結已失效</h1><p class="sub" style="margin-top:8px">請重新掃描現場的 QR 碼。</p><button class="btn ghost" onclick="viewList()">查看我的薪資</button>'; return; }
-  const note = { not_event_day: '今天不在這場活動的日期內，無法簽到。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '找不到簽到紀錄，請先簽到。' }[r.error];
+  const note = { not_scheduled: '你今天沒有被排到這場活動的班，無法簽到。如果現場臨時需要你支援，請請負責人在後台補登出勤。', not_event_day: '今天不在這場活動的日期內，無法簽到。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '找不到簽到紀錄，請先簽到。' }[r.error];
   const st = r.state || 'none';
   app.innerHTML = brand + `
     <p class="sub">${esc(r.event || '')}</p>
@@ -591,7 +592,7 @@ async function viewCheckin(action) {
     </div>
     ${r.ok && r.done ? '<div class="msg ok">' + (r.done === 'in' ? '簽到成功，時間 ' + esc(r.clock_in) + '。' : '簽退成功，時間 ' + esc(r.clock_out) + '。辛苦了。') + '</div>' : ''}
     ${note ? '<div class="msg warn">' + esc(note) + '</div>' : ''}
-    ${r.error === 'not_event_day' || st === 'done' ? '' : st === 'in'
+    ${r.error === 'not_event_day' || r.error === 'not_scheduled' || st === 'done' ? '' : st === 'in'
       ? '<button class="btn big out" id="act" data-a="out">簽退</button>'
       : '<button class="btn big" id="act" data-a="in">簽到</button>'}
     <button class="btn ghost" id="tolist">查看我的薪資</button>

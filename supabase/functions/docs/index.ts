@@ -49,9 +49,11 @@ Deno.serve(async (req: Request) => {
       const personId = String(b.person_id ?? "");
       const { data: doc } = await sb.from("people_documents").select("path").eq("person_id", personId).eq("kind", kind).maybeSingle();
       if (!doc) return json({ ok: false, error: "missing" });
+      // 先寫入調閱紀錄，寫入失敗就不核發連結
+      const { error: auditErr } = await sb.from("audit_log").insert({ actor, action: "document_url_issued", table_name: "people_documents", row_id: personId, detail: { kind } });
+      if (auditErr) return json({ ok: false, error: "audit" });
       const { data, error } = await sb.storage.from("documents").createSignedUrl(doc.path, 120);
       if (error || !data) return json({ ok: false, error: "storage" });
-      await sb.from("audit_log").insert({ actor, action: "document_viewed", table_name: "people_documents", row_id: personId, detail: { kind } });
       return json({ ok: true, url: data.signedUrl });
     }
     return json({ ok: false, error: "bad_action" }, 400);

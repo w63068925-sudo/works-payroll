@@ -101,10 +101,13 @@ function flatten_(obj, prefix, acc) {
     const v = obj[k];
     if (v && typeof v === 'object' && !Array.isArray(v)) flatten_(v, path, acc);
     else if (v === null && EMBEDS.indexOf(k) >= 0) return; // 沒有關聯資料的欄位略過
-    else acc[path] = v === null || v === undefined ? '' : String(v);
+    else acc[path] = safeCell_(v === null || v === undefined ? '' : String(v));
   });
   return acc;
 }
+
+// 以 = + - @ 開頭的文字前面加 '，避免被試算表當成公式執行（資料來自工讀生自行填寫）
+function safeCell_(t) { return /^[=+\-@]/.test(t) ? "'" + t : t; }
 
 function writeTab_(ss, name, rows) {
   const sheet = ss.getSheetByName(name) || ss.insertSheet(name);
