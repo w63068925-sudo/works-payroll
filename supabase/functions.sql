@@ -1,0 +1,1902 @@
+-- 自動匯出：Supabase public schema 的全部函式（2026-11-21）
+-- 這是資料庫目前的實際定義，修改請用 migration，改完重新匯出。
+
+CREATE OR REPLACE FUNCTION public.admin_actor(p_token text)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select a.username from public.admin_sessions s join public.admins a on a.id = s.admin_id
+  where s.token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') and s.expires_at > now();
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_add_attendance(p_token text, p_event uuid, p_national_id text, p_date date)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_pid uuid; v_id uuid;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select id into v_pid from public.people where national_id = upper(btrim(coalesce(p_national_id,'')));
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'no_person'); end if;
+  if p_date is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+  if exists (select 1 from public.attendance where person_id = v_pid and event_id = p_event and work_date = p_date) then
+    return jsonb_build_object('ok', false, 'error', 'exists');
+  end if;
+  insert into public.attendance(person_id, event_id, work_date, source, note) values (v_pid, p_event, p_date, 'manual', '管理員補登') returning id into v_id;
+  insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, 'attendance_added', 'attendance', v_id);
+  return jsonb_build_object('ok', true, 'id', v_id);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_attendance(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true,
+    'settings', (select jsonb_build_object('default_break_minutes', default_break_minutes, 'default_hourly_rate', default_hourly_rate, 'insured_salary', insured_salary) from public.events where id = p_event),
+    'default_break_minutes', (select default_break_minutes from public.events where id = p_event),
+    'rows', coalesce((select jsonb_agg(jsonb_build_object('id', a.id, 'person_id', a.person_id, 'name', p.name, 'work_date', a.work_date,
+      'clock_in', to_char(a.clock_in at time zone 'Asia/Taipei', 'YYYY-MM-DD"T"HH24:MI'),
+      'clock_out', to_char(a.clock_out at time zone 'Asia/Taipei', 'YYYY-MM-DD"T"HH24:MI'),
+      'break_minutes', a.break_minutes, 'source', a.source, 'scheduled_text', a.scheduled_text, 'note', a.note,
+      'minutes', case when a.clock_in is not null and a.clock_out is not null then floor(extract(epoch from a.clock_out - a.clock_in) / 60)::int - a.break_minutes end,
+      'holiday', (select h.name from public.holidays h where h.day = a.work_date),
+      'staff', (select jsonb_build_object('role', s.role, 'relation', s.relation, 'pay_type', s.pay_type, 'rate', s.rate, 'insured_salary', s.insured_salary, 'deduct_insurance', s.deduct_insurance)
+                from public.event_staff s where s.event_id = a.event_id and s.person_id = a.person_id))
+      order by a.work_date desc, p.name)
+      from public.attendance a join public.people p on p.id = a.person_id where a.event_id = p_event), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_change_password(p_token text, p_old text, p_new text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v public.admins;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into v from public.admins where username = v_actor;
+  if v.password_hash <> extensions.crypt(coalesce(p_old,''), v.password_hash) then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
+  if length(coalesce(p_new,'')) < 10 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  update public.admins set password_hash = extensions.crypt(p_new, extensions.gen_salt('bf', 10)) where id = v.id;
+  delete from public.admin_sessions where admin_id = v.id and token_hash <> encode(extensions.digest(p_token, 'sha256'), 'hex');
+  insert into public.audit_log(actor, action, table_name) values (v_actor, 'admin_password_changed', 'admins');
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_checkin_code(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_code text;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  v_code := public.checkin_make_code(p_event, floor(extract(epoch from now()) / 60)::bigint);
+  if v_code is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  return jsonb_build_object('ok', true, 'code', v_code, 'refresh_in', 60 - floor(extract(epoch from now()))::bigint % 60);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_contract(p_token text, p_app uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); a public.applications;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into a from public.applications where id = p_app;
+  if a.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  return jsonb_build_object('ok', true, 'accepted_at', a.contract_accepted_at, 'text', coalesce(a.contract_text, public.payroll_contract_text(a.id)));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_create_admin(p_token text, p_username text, p_password text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_user text := lower(btrim(coalesce(p_username,'')));
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if v_user !~ '^[a-z0-9._@-]{3,60}$' then return jsonb_build_object('ok', false, 'error', 'bad_username'); end if;
+  if length(coalesce(p_password,'')) < 10 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  if exists (select 1 from public.admins where username = v_user) then return jsonb_build_object('ok', false, 'error', 'taken'); end if;
+  insert into public.admins(username, password_hash) values (v_user, extensions.crypt(p_password, extensions.gen_salt('bf', 10)));
+  insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'admin_created', 'admins', jsonb_build_object('username', v_user));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_create_event(p_token text, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_id uuid; v_s date; v_e date;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if length(btrim(coalesce(p_patch->>'name',''))) < 2 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
+  begin
+    v_s := (p_patch->>'start_date')::date; v_e := coalesce(nullif(p_patch->>'end_date','')::date, v_s);
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_date'); end;
+  if v_s is null or v_e < v_s then return jsonb_build_object('ok', false, 'error', 'bad_date'); end if;
+  insert into public.events(employer_id, name, start_date, end_date, pay_within_days, default_break_minutes)
+  select id, btrim(p_patch->>'name'), v_s, v_e, nullif(p_patch->>'pay_within_days','')::int, coalesce(nullif(p_patch->>'default_break_minutes','')::int, 0)
+  from public.employers order by created_at limit 1 returning id into v_id;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'event_created', 'events', v_id, p_patch);
+  return jsonb_build_object('ok', true, 'id', v_id);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_decide(p_token text, p_items jsonb, p_status text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); it jsonb; v_app uuid; v_shift uuid; a public.applications; s public.shifts; v_done int := 0; full_list jsonb := '[]'::jsonb; clash_list jsonb := '[]'::jsonb; v_old text;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_status not in ('applied','accepted','waitlist','rejected') then return jsonb_build_object('ok', false, 'error', 'bad_status'); end if;
+  for it in select * from jsonb_array_elements(coalesce(p_items, '[]'::jsonb)) loop
+    v_app := (it->>'app')::uuid; v_shift := (it->>'shift')::uuid;
+    select * into a from public.applications where id = v_app;
+    select * into s from public.shifts where id = v_shift;
+    select status into v_old from public.application_shifts where application_id = v_app and shift_id = v_shift for update;
+    if v_old is null or v_old = p_status then continue; end if;
+    if p_status = 'accepted' and (select count(*) from public.application_shifts x where x.shift_id = v_shift and x.status = 'accepted') >= s.headcount then
+      full_list := full_list || to_jsonb(to_char(s.work_date, 'MM/DD') || ' ' || coalesce(s.role, '')); continue;
+    end if;
+    if p_status = 'accepted' and exists (select 1 from public.application_shifts x2 join public.applications a2 on a2.id = x2.application_id join public.shifts s2 on s2.id = x2.shift_id
+        where a2.person_id = a.person_id and a2.status = 'active' and x2.status = 'accepted' and s2.id <> s.id and s2.work_date between s.work_date - 1 and s.work_date + 1
+          and (s2.work_date + s2.start_time, s2.work_date + s2.end_time + case when s2.end_time <= s2.start_time then interval '1 day' else interval '0' end)
+              overlaps (s.work_date + s.start_time, s.work_date + s.end_time + case when s.end_time <= s.start_time then interval '1 day' else interval '0' end)) then
+      clash_list := clash_list || to_jsonb(to_char(s.work_date, 'MM/DD') || ' ' || to_char(s.start_time, 'HH24:MI') || ' ' || coalesce(s.role, '')); continue;
+    end if;
+    update public.application_shifts set status = p_status, decided_at = now() where application_id = v_app and shift_id = v_shift;
+    if p_status = 'accepted' then
+      insert into public.event_staff(event_id, person_id, role, rate) values (a.event_id, a.person_id, s.role, s.rate)
+      on conflict (event_id, person_id) do update set role = coalesce(public.event_staff.role, excluded.role), rate = coalesce(public.event_staff.rate, excluded.rate);
+      if s.rate is not null and exists (select 1 from public.event_staff es where es.event_id = a.event_id and es.person_id = a.person_id and es.rate is distinct from s.rate) then
+        insert into public.data_issues(event_id, person_id, severity, code, detail) values (a.event_id, a.person_id, 'warn', 'mixed_rates',
+          format('錄取的班次時薪不同（%s 元），目前計薪用 %s 元，請到人員計薪確認', s.rate, (select rate from public.event_staff where event_id = a.event_id and person_id = a.person_id)));
+      end if;
+    end if;
+    if a.contract_accepted_at is not null and (p_status = 'accepted' or v_old = 'accepted') then
+      update public.applications set contract_accepted_at = null, contract_text = null where id = v_app;
+    end if;
+    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'shift_' || p_status, 'application_shifts', v_app, jsonb_build_object('shift', v_shift));
+    v_done := v_done + 1;
+  end loop;
+  return jsonb_build_object('ok', true, 'updated', v_done, 'full', full_list, 'clash', clash_list);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_delete_shift(p_token text, p_shift uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if exists (select 1 from public.application_shifts where shift_id = p_shift and status = 'accepted') then return jsonb_build_object('ok', false, 'error', 'has_accepted'); end if;
+  delete from public.shifts where id = p_shift;
+  insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, 'shift_deleted', 'shifts', p_shift);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_event(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true,
+    'event_issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
+        from public.data_issues i where i.event_id = p_event and i.payslip_id is null and i.person_id is null), '[]'::jsonb),
+    'payslips', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', s.id, 'person_id', s.person_id, 'name', p.name, 'national_id', p.national_id, 'role', s.role, 'relation', s.relation,
+        'basis', s.basis, 'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
+        'gross', s.gross, 'allowances', s.allowances, 'deductions', s.deductions, 'net', s.net, 'status', s.status,
+        'pay_bank_code', s.pay_bank_code, 'pay_bank_branch', s.pay_bank_branch, 'pay_account_name', s.pay_account_name, 'pay_account', s.pay_account,
+        'issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
+            from public.data_issues i where i.payslip_id = s.id or (i.payslip_id is null and i.person_id = s.person_id and (i.event_id is null or i.event_id = s.event_id))), '[]'::jsonb)
+      ) order by s.source_row nulls last, p.name)
+      from public.payslips s join public.people p on p.id = s.person_id where s.event_id = p_event), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_event_staff(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_today date := (now() at time zone 'Asia/Taipei')::date;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true,
+    'signup_open', (select coalesce(end_date, start_date) >= v_today - 1 from public.events where id = p_event),
+    'has_shifts', exists (select 1 from public.shifts where event_id = p_event),
+    'staff', coalesce((select jsonb_agg(jsonb_build_object(
+      'person_id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone, 'source', p.profile_source,
+      'staff', (select jsonb_build_object('role', s.role, 'relation', s.relation, 'pay_type', s.pay_type, 'rate', s.rate, 'insured_salary', s.insured_salary, 'deduct_insurance', s.deduct_insurance)
+                from public.event_staff s where s.event_id = p_event and s.person_id = p.id),
+      'days', (select count(*) from public.attendance a where a.event_id = p_event and a.person_id = p.id),
+      'open', (select count(*) from public.attendance a where a.event_id = p_event and a.person_id = p.id and a.clock_in is not null and a.clock_out is null),
+      'docs', (select count(*) from public.people_documents d where d.person_id = p.id and d.kind <> 'photo'),
+      'has_bank', p.bank_account is not null,
+      'accepted_shifts', (select count(*) from public.application_shifts x join public.applications ap on ap.id = x.application_id where ap.event_id = p_event and ap.person_id = p.id and x.status = 'accepted'),
+      'today_shift', (select to_char(sh.start_time, 'HH24:MI') || '–' || to_char(sh.end_time, 'HH24:MI') from public.application_shifts x join public.applications ap on ap.id = x.application_id
+                      join public.shifts sh on sh.id = x.shift_id where ap.event_id = p_event and ap.person_id = p.id and x.status = 'accepted' and sh.work_date = v_today order by sh.start_time limit 1),
+      'contract', (select ap.contract_accepted_at from public.applications ap where ap.event_id = p_event and ap.person_id = p.id),
+      'slip', (select jsonb_build_object('id', s.id, 'status', s.status, 'relation', s.relation, 'role', s.role, 'net', s.net)
+               from public.payslips s where s.event_id = p_event and s.person_id = p.id and s.status <> 'void' order by s.generated desc limit 1)
+      ) order by p.name)
+      from public.people p
+      where p.id in (select person_id from public.event_staff where event_id = p_event
+                     union select person_id from public.attendance where event_id = p_event
+                     union select person_id from public.payslips where event_id = p_event and status <> 'void')), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_generate_payslips(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); e public.events; pr record; c jsonb; v_id uuid; it jsonb; w jsonb;
+  v_created int := 0; v_replaced int := 0; skipped jsonb := '[]'::jsonb; v_pay date; v_existing public.payslips;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into e from public.events where id = p_event;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  v_pay := coalesce(e.pay_date, e.end_date + e.pay_within_days);
+  for pr in select distinct p.id, p.name, p.bank_code, p.bank_branch, p.bank_account_name, p.bank_account
+            from public.attendance a join public.people p on p.id = a.person_id
+            where a.event_id = p_event and a.source in ('qr','manual') order by p.name loop
+    if coalesce((select relation from public.event_staff where event_id = p_event and person_id = pr.id), 'employment') = 'contract' then
+      skipped := skipped || jsonb_build_object('name', pr.name, 'reason', '承攬人員不自動算薪'); continue;
+    end if;
+    select * into v_existing from public.payslips where event_id = p_event and person_id = pr.id and status <> 'void' order by generated desc limit 1;
+    if v_existing.id is not null and v_existing.status = 'published' then
+      skipped := skipped || jsonb_build_object('name', pr.name, 'reason', '薪資單已發布，請先取消發布再重算'); continue;
+    end if;
+    if v_existing.id is not null and not v_existing.generated then
+      skipped := skipped || jsonb_build_object('name', pr.name, 'reason', '已有人工匯入的薪資單'); continue;
+    end if;
+    c := public.payroll_compute(p_event, pr.id);
+    if not (c->>'ok')::boolean then
+      skipped := skipped || jsonb_build_object('name', pr.name, 'reason', case c->>'error' when 'no_rate' then '尚未設定時薪或日薪' when 'open_attendance' then '有尚未簽退的出勤' else '沒有完整的出勤紀錄' end); continue;
+    end if;
+    if v_existing.id is not null then delete from public.payslips where id = v_existing.id; v_replaced := v_replaced + 1; else v_created := v_created + 1; end if;
+    insert into public.payslips(person_id, event_id, relation, role, period_start, period_end, pay_date, basis, gross, allowances, deductions, net,
+      status, generated, pay_bank_code, pay_bank_branch, pay_account_name, pay_account)
+    values (pr.id, p_event, 'employment', c->>'role', (c->>'period_start')::date, (c->>'period_end')::date, v_pay, 'hourly',
+      (c->>'gross')::numeric, 0, (c->>'deductions')::numeric, (c->>'net')::numeric, 'draft', true, pr.bank_code, pr.bank_branch, pr.bank_account_name, pr.bank_account)
+    returning id into v_id;
+    for it in select * from jsonb_array_elements(c->'items') loop
+      insert into public.payslip_items(payslip_id, kind, code, label, work_date, hours, rate, amount, sort)
+      values (v_id, 'earning', it->>'code', it->>'label', (it->>'work_date')::date, (it->>'hours')::numeric, (it->>'rate')::numeric, (it->>'amount')::numeric, (it->>'sort')::int);
+    end loop;
+    if (c->>'deductions')::numeric > 0 then
+      insert into public.payslip_items(payslip_id, kind, code, label, amount, sort)
+      values (v_id, 'deduction', 'labor_ins', format('勞保與就保自付額（%s 日，投保薪資 %s）', c->>'days', c->>'insured_salary'), (c->>'deductions')::numeric, 30);
+    end if;
+    for w in select * from jsonb_array_elements(c->'warnings') loop
+      insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, w->>'severity', w->>'code', w->>'detail');
+    end loop;
+    if pr.bank_account is null then
+      insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, 'warn', 'no_bank_account', '沒有匯款帳號');
+    end if;
+    if v_pay is null then
+      insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, 'warn', 'no_pay_date', '尚未設定發薪日');
+    end if;
+  end loop;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'payslips_generated', 'events', p_event, jsonb_build_object('created', v_created, 'replaced', v_replaced, 'skipped', skipped));
+  return jsonb_build_object('ok', true, 'created', v_created, 'replaced', v_replaced, 'skipped', skipped);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_holidays(p_token text, p_set jsonb DEFAULT NULL::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_set is not null then
+    begin
+      if nullif(btrim(coalesce(p_set->>'name','')),'') is null then delete from public.holidays where day = (p_set->>'day')::date;
+      else insert into public.holidays(day, name) values ((p_set->>'day')::date, btrim(p_set->>'name')) on conflict (day) do update set name = excluded.name; end if;
+    exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
+    insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'holiday_changed', 'holidays', p_set);
+  end if;
+  return jsonb_build_object('ok', true, 'holidays', coalesce((select jsonb_agg(jsonb_build_object('day', day, 'name', name) order by day) from public.holidays where day >= current_date - 30), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_line_overview(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true, 'basic_id', public.setting('line_basic_id'), 'enabled', coalesce(public.setting('line_enabled'), 'true') = 'true',
+    'linked', (select count(*) from public.people where line_user_id is not null), 'people', (select count(*) from public.people),
+    'pending', (select count(*) from public.notifications where status = 'pending'),
+    'month', (select jsonb_build_object('sent', count(*) filter (where status = 'sent'), 'skipped', count(*) filter (where status = 'skipped'), 'failed', count(*) filter (where status = 'failed'))
+              from public.notifications where created_at >= date_trunc('month', now() at time zone 'Asia/Taipei') at time zone 'Asia/Taipei'),
+    'recent', coalesce((select jsonb_agg(x) from (select jsonb_build_object('kind', n.kind, 'name', p.name, 'event', e.name, 'status', n.status, 'error', n.error,
+        'at', coalesce(n.sent_at, n.created_at), 'body', n.body) x
+      from public.notifications n join public.people p on p.id = n.person_id left join public.events e on e.id = n.event_id order by n.created_at desc limit 40) t), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_line_settings(p_token text, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_id text;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_patch ? 'basic_id' then
+    v_id := lower(btrim(coalesce(p_patch->>'basic_id', '')));
+    if v_id <> '' and left(v_id, 1) <> '@' then v_id := '@' || v_id; end if;
+    if v_id <> '' and v_id !~ '^@[a-z0-9._-]{3,30}$' then return jsonb_build_object('ok', false, 'error', 'bad_basic_id'); end if;
+    update public.app_settings set value = nullif(v_id, '') where key = 'line_basic_id';
+  end if;
+  if p_patch ? 'enabled' then update public.app_settings set value = case when (p_patch->>'enabled')::boolean then 'true' else 'false' end where key = 'line_enabled'; end if;
+  insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'line_settings', 'app_settings', p_patch);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_line_test(p_token text, p_national_id text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); p public.people;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into p from public.people where national_id = upper(btrim(coalesce(p_national_id, '')));
+  if p.id is null then return jsonb_build_object('ok', false, 'error', 'no_person'); end if;
+  if p.line_user_id is null then return jsonb_build_object('ok', false, 'error', 'not_linked'); end if;
+  insert into public.notifications(person_id, kind, body) values (p.id, 'test', '【沃克思】這是測試訊息，收到代表 LINE 通知已設定完成。');
+  return jsonb_build_object('ok', true, 'name', p.name);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_list_admins(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true, 'me', v_actor, 'admins', coalesce((select jsonb_agg(jsonb_build_object('username', a.username, 'created_at', a.created_at,
+      'is_self', a.username = v_actor, 'locked', a.locked_until is not null and a.locked_until > now(),
+      'last_login', (select max(l.at) from public.audit_log l where l.actor = a.username and l.action = 'admin_login'),
+      'created_by', (select l.actor from public.audit_log l where l.action = 'admin_created' and l.detail->>'username' = a.username order by l.at desc limit 1)
+    ) order by a.created_at) from public.admins a), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_login(p_username text, p_password text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v public.admins; v_token text; v_fail int;
+begin
+  select * into v from public.admins where username = lower(btrim(coalesce(p_username,'')));
+  if not found then
+    perform extensions.crypt(coalesce(p_password,''), extensions.gen_salt('bf', 10));
+    return jsonb_build_object('ok', false, 'error', 'invalid');
+  end if;
+  if v.locked_until is not null and v.locked_until > now() then
+    return jsonb_build_object('ok', false, 'error', 'locked', 'retry_after_minutes', ceil(extract(epoch from v.locked_until - now()) / 60));
+  end if;
+  if v.password_hash <> extensions.crypt(coalesce(p_password,''), v.password_hash) then
+    v_fail := v.failed_logins + 1;
+    if v_fail >= 5 then
+      update public.admins set failed_logins = 0, locked_until = now() + interval '15 minutes' where id = v.id;
+      return jsonb_build_object('ok', false, 'error', 'locked', 'retry_after_minutes', 15);
+    end if;
+    update public.admins set failed_logins = v_fail where id = v.id;
+    return jsonb_build_object('ok', false, 'error', 'invalid', 'attempts_left', 5 - v_fail);
+  end if;
+  update public.admins set failed_logins = 0, locked_until = null where id = v.id;
+  delete from public.admin_sessions where expires_at < now();
+  v_token := encode(extensions.gen_random_bytes(32), 'hex');
+  insert into public.admin_sessions(token_hash, admin_id, expires_at)
+  values (encode(extensions.digest(v_token, 'sha256'), 'hex'), v.id, now() + interval '8 hours');
+  insert into public.audit_log(actor, action, table_name) values (v.username, 'admin_login', 'admins');
+  return jsonb_build_object('ok', true, 'token', v_token, 'username', v.username);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_logout(p_token text)
+ RETURNS jsonb
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  with d as (delete from public.admin_sessions where token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') returning 1)
+  select jsonb_build_object('ok', true);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_min_wages(p_token text, p_set jsonb DEFAULT NULL::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_set is not null then
+    begin
+      if coalesce((p_set->>'hourly')::numeric, 0) < 100 or coalesce((p_set->>'monthly')::numeric, 0) < 10000 then
+        return jsonb_build_object('ok', false, 'error', 'bad_value');
+      end if;
+      insert into public.min_wages(effective_from, hourly, monthly) values ((p_set->>'effective_from')::date, (p_set->>'hourly')::numeric, (p_set->>'monthly')::numeric)
+      on conflict (effective_from) do update set hourly = excluded.hourly, monthly = excluded.monthly;
+    exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
+    insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'min_wage_set', 'min_wages', p_set);
+  end if;
+  return jsonb_build_object('ok', true, 'rows', coalesce((select jsonb_agg(jsonb_build_object('effective_from', effective_from, 'hourly', hourly, 'monthly', monthly) order by effective_from desc) from public.min_wages), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_overview(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true, 'username', v_actor,
+    'employer', (select jsonb_build_object('id', id, 'name', name, 'legal_name', legal_name, 'tax_id', tax_id) from public.employers order by created_at limit 1),
+    'events', coalesce((select jsonb_agg(x order by (x->>'start_date') desc nulls last) from (
+      select jsonb_build_object('id', e.id, 'name', e.name, 'start_date', e.start_date, 'end_date', e.end_date,
+        'pay_date', e.pay_date, 'pay_within_days', e.pay_within_days,
+        'total', count(s.id), 'draft', count(s.id) filter (where s.status = 'draft'),
+        'published', count(s.id) filter (where s.status = 'published'), 'void', count(s.id) filter (where s.status = 'void'),
+        'net_sum', coalesce(sum(s.net) filter (where s.status <> 'void'), 0),
+        'open_issues', (select count(*) from public.data_issues i where not i.resolved and i.severity <> 'info'
+            and (i.event_id = e.id or i.payslip_id in (select id from public.payslips where event_id = e.id)))) x
+      from public.events e left join public.payslips s on s.event_id = e.id group by e.id) t), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_payslip(p_token text, p_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); r jsonb;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select jsonb_build_object('id', s.id, 'status', s.status, 'relation', s.relation, 'role', s.role, 'basis', s.basis,
+    'work_dates_text', s.work_dates_text, 'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
+    'gross', s.gross, 'allowances', s.allowances, 'deductions', s.deductions, 'net', s.net, 'note', s.note,
+    'pay_bank_code', s.pay_bank_code, 'pay_bank_branch', s.pay_bank_branch, 'pay_account_name', s.pay_account_name, 'pay_account', s.pay_account,
+    'person', jsonb_build_object('id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone, 'birth_date', p.birth_date,
+        'has_password', p.password_hash is not null, 'password_changed', p.password_changed_at is not null,
+        'locked', p.locked_until is not null and p.locked_until > now()),
+    'items', coalesce((select jsonb_agg(jsonb_build_object('kind', i.kind, 'label', i.label, 'work_date', i.work_date, 'hours', i.hours, 'rate', i.rate, 'amount', i.amount) order by i.work_date nulls last, i.sort, i.id)
+        from public.payslip_items i where i.payslip_id = s.id), '[]'::jsonb),
+    'attendance', coalesce((select jsonb_agg(jsonb_build_object('work_date', a.work_date,
+        'clock_in', to_char(a.clock_in at time zone 'Asia/Taipei', 'HH24:MI'), 'clock_out', to_char(a.clock_out at time zone 'Asia/Taipei', 'HH24:MI'),
+        'break_minutes', a.break_minutes, 'source', a.source, 'scheduled_text', a.scheduled_text) order by a.work_date)
+        from public.attendance a where a.person_id = s.person_id and a.event_id = s.event_id), '[]'::jsonb),
+    'issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
+        from public.data_issues i where i.payslip_id = s.id or (i.payslip_id is null and i.person_id = s.person_id and (i.event_id is null or i.event_id = s.event_id))), '[]'::jsonb)
+  ) into r from public.payslips s join public.people p on p.id = s.person_id where s.id = p_id;
+  if r is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  return jsonb_build_object('ok', true, 'payslip', r);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_people(p_token text, p_q text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_q text := btrim(coalesce(p_q,''));
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true, 'total', (select count(*) from public.people),
+    'people', coalesce((select jsonb_agg(x) from (
+      select jsonb_build_object('id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone, 'source', p.profile_source, 'created_at', p.created_at,
+        'docs', (select count(*) from public.people_documents d where d.person_id = p.id),
+        'open_issues', (select count(*) from public.data_issues i where i.person_id = p.id and i.payslip_id is null and not i.resolved and i.severity <> 'info')) x
+      from public.people p
+      where v_q = '' or p.name ilike '%' || v_q || '%' or p.national_id ilike v_q || '%' or p.phone like '%' || v_q || '%'
+      order by p.created_at desc, p.name limit 60) t), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_person(p_token text, p_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); r jsonb;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select jsonb_build_object('id', p.id, 'name', p.name, 'nickname', p.nickname, 'national_id', p.national_id, 'birth_date', p.birth_date, 'birth_raw', p.birth_raw,
+    'phone', p.phone, 'email', p.email, 'address', p.address, 'bank_code', p.bank_code, 'bank_branch', p.bank_branch, 'bank_account_name', p.bank_account_name,
+    'bank_account', p.bank_account, 'source', p.profile_source, 'created_at', p.created_at, 'consent_at', p.consent_at,
+    'has_password', p.password_hash is not null, 'password_changed', p.password_changed_at is not null, 'locked', p.locked_until is not null and p.locked_until > now(),
+    'documents', coalesce((select jsonb_object_agg(d.kind, d.uploaded_at) from public.people_documents d where d.person_id = p.id), '{}'::jsonb),
+    'issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
+        from public.data_issues i where i.person_id = p.id and i.payslip_id is null), '[]'::jsonb),
+    'payslips', coalesce((select jsonb_agg(jsonb_build_object('event', e.name, 'net', s.net, 'status', s.status, 'period_start', s.period_start) order by s.period_start desc nulls last)
+        from public.payslips s join public.events e on e.id = s.event_id where s.person_id = p.id), '[]'::jsonb)
+  ) into r from public.people p where p.id = p_id;
+  if r is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  return jsonb_build_object('ok', true, 'person', r);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_recruit(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return (select jsonb_build_object('ok', true,
+    'event', jsonb_build_object('location', e.location, 'description', e.description, 'recruiting', e.recruiting, 'form', e.form_config, 'signup_code', e.signup_code,
+       'signup_open', coalesce(e.end_date, e.start_date) >= (now() at time zone 'Asia/Taipei')::date - 1),
+    'shifts', coalesce((select jsonb_agg(public.shift_json(s) order by s.work_date, s.start_time) from public.shifts s where s.event_id = e.id), '[]'::jsonb),
+    'applicants', coalesce((select jsonb_agg(jsonb_build_object('app_id', a.id, 'person_id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone,
+        'source', p.profile_source, 'answers', a.answers, 'experience', a.experience, 'created_at', a.created_at, 'contract_accepted_at', a.contract_accepted_at,
+        'has_photo', exists (select 1 from public.people_documents d where d.person_id = p.id and d.kind = 'photo'),
+        'docs', (select count(*) from public.people_documents d where d.person_id = p.id and d.kind <> 'photo'),
+        'past_events', (select count(distinct s2.event_id) from public.payslips s2 where s2.person_id = p.id and s2.event_id <> e.id),
+        'shifts', coalesce((select jsonb_object_agg(x.shift_id, x.status) from public.application_shifts x where x.application_id = a.id), '{}'::jsonb)
+      ) order by a.created_at) from public.applications a join public.people p on p.id = a.person_id where a.event_id = e.id and a.status = 'active'), '[]'::jsonb))
+    from public.events e where e.id = p_event);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_remove_admin(p_token text, p_username text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_user text := lower(btrim(coalesce(p_username,'')));
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if v_user = v_actor then return jsonb_build_object('ok', false, 'error', 'self'); end if;
+  if (select count(*) from public.admins) <= 1 then return jsonb_build_object('ok', false, 'error', 'last'); end if;
+  delete from public.admins where username = v_user;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'admin_removed', 'admins', jsonb_build_object('username', v_user));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_reset_admin(p_token text, p_username text, p_password text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_user text := lower(btrim(coalesce(p_username,'')));
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if length(coalesce(p_password,'')) < 10 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  update public.admins set password_hash = extensions.crypt(p_password, extensions.gen_salt('bf', 10)), failed_logins = 0, locked_until = null where username = v_user;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  delete from public.admin_sessions where admin_id = (select id from public.admins where username = v_user)
+    and (v_user <> v_actor or token_hash <> encode(extensions.digest(p_token, 'sha256'), 'hex'));
+  insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'admin_password_reset', 'admins', jsonb_build_object('username', v_user));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_reset_password(p_token text, p_person uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_bd date;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select birth_date into v_bd from public.people where id = p_person;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if v_bd is null then return jsonb_build_object('ok', false, 'error', 'no_birth_date'); end if;
+  update public.people set
+    password_hash = extensions.crypt(lpad((extract(year from v_bd)::int - 1911)::text, 3, '0') || to_char(v_bd, 'MMDD'), extensions.gen_salt('bf', 10)),
+    password_changed_at = null, failed_logins = 0, locked_until = null, updated_at = now()
+  where id = p_person;
+  delete from public.sessions where person_id = p_person;
+  insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, 'password_reset', 'people', p_person);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_resolve_issue(p_token text, p_issue bigint, p_resolved boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  update public.data_issues set resolved = coalesce(p_resolved, true) where id = p_issue;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'issue_resolved', 'data_issues', jsonb_build_object('id', p_issue, 'resolved', p_resolved));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_save_event_info(p_token text, p_event uuid, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); q jsonb; v_qs jsonb := '[]'::jsonb; n int := 0;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_patch ? 'form' then
+    for q in select * from jsonb_array_elements(coalesce(p_patch->'form'->'questions', '[]'::jsonb)) loop
+      n := n + 1;
+      if length(btrim(coalesce(q->>'label',''))) = 0 then continue; end if;
+      if coalesce(q->>'type','text') not in ('text','choice') then return jsonb_build_object('ok', false, 'error', 'bad_question'); end if;
+      if q->>'type' = 'choice' and jsonb_array_length(coalesce(q->'options','[]'::jsonb)) < 2 then return jsonb_build_object('ok', false, 'error', 'few_options', 'question', q->>'label'); end if;
+      v_qs := v_qs || jsonb_build_object('id', coalesce(nullif(q->>'id',''), 'q' || n || '_' || substr(md5(random()::text), 1, 6)), 'label', left(btrim(q->>'label'), 100),
+        'type', coalesce(q->>'type','text'), 'required', coalesce((q->>'required')::boolean, false),
+        'options', case when q->>'type' = 'choice' then (select jsonb_agg(left(btrim(o), 50)) from jsonb_array_elements_text(q->'options') o where btrim(o) <> '') else '[]'::jsonb end);
+    end loop;
+  end if;
+  update public.events set
+    location = case when p_patch ? 'location' then nullif(btrim(p_patch->>'location'),'') else location end,
+    description = case when p_patch ? 'description' then nullif(btrim(p_patch->>'description'),'') else description end,
+    recruiting = case when p_patch ? 'recruiting' then coalesce((p_patch->>'recruiting')::boolean, recruiting) else recruiting end,
+    form_config = case when p_patch ? 'form' then jsonb_build_object('experience', coalesce((p_patch->'form'->>'experience')::boolean, false),
+       'photo', coalesce((p_patch->'form'->>'photo')::boolean, false), 'questions', v_qs) else form_config end
+  where id = p_event;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'event_info_saved', 'events', p_event, p_patch);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_save_shifts(p_token text, p_event uuid, p_shift uuid, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_from date; v_to date; v_start time; v_end time; v_n int := 0; dd date; v_head int; v_rate numeric;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  begin
+    v_from := (p_patch->>'work_date')::date; v_to := coalesce(nullif(p_patch->>'until_date','')::date, v_from);
+    v_start := (p_patch->>'start')::time; v_end := (p_patch->>'end')::time;
+    v_head := coalesce(nullif(p_patch->>'headcount','')::int, 1); v_rate := nullif(p_patch->>'rate','')::numeric;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
+  if v_from is null or v_start is null or v_end is null or v_to < v_from or v_to > v_from + 60 or v_start = v_end or v_head < 1 or v_head > 500 or v_rate < 0 then
+    return jsonb_build_object('ok', false, 'error', 'bad_value');
+  end if;
+  if p_shift is not null then
+    if v_head < (select count(*) from public.application_shifts where shift_id = p_shift and status = 'accepted') then return jsonb_build_object('ok', false, 'error', 'below_accepted'); end if;
+    update public.shifts set work_date = v_from, start_time = v_start, end_time = v_end, role = nullif(btrim(coalesce(p_patch->>'role','')),''),
+      headcount = v_head, rate = v_rate, note = nullif(btrim(coalesce(p_patch->>'note','')),'') where id = p_shift and event_id = p_event;
+    if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+    update public.applications set contract_accepted_at = null, contract_text = null
+      where contract_accepted_at is not null and id in (select application_id from public.application_shifts where shift_id = p_shift and status = 'accepted');
+    v_n := 1;
+  else
+    for dd in select generate_series(v_from, v_to, interval '1 day')::date loop
+      insert into public.shifts(event_id, work_date, start_time, end_time, role, headcount, rate, note)
+      values (p_event, dd, v_start, v_end, nullif(btrim(coalesce(p_patch->>'role','')),''), v_head, v_rate, nullif(btrim(coalesce(p_patch->>'note','')),''));
+      v_n := v_n + 1;
+    end loop;
+  end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'shifts_saved', 'shifts', p_event, p_patch);
+  return jsonb_build_object('ok', true, 'count', v_n);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_set_attendance(p_token text, p_id uuid, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_in timestamptz; v_out timestamptz; v_break int;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  begin
+    v_in := nullif(p_patch->>'clock_in','')::timestamp at time zone 'Asia/Taipei';
+    v_out := nullif(p_patch->>'clock_out','')::timestamp at time zone 'Asia/Taipei';
+    v_break := coalesce(nullif(p_patch->>'break_minutes','')::int, 0);
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
+  if v_in is not null and v_out is not null and v_out <= v_in then return jsonb_build_object('ok', false, 'error', 'out_before_in'); end if;
+  if v_break < 0 or v_break > 240 then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+  update public.attendance set clock_in = v_in, clock_out = v_out, break_minutes = v_break,
+    note = nullif(btrim(coalesce(p_patch->>'note','')), ''),
+    source = case when source = 'qr' and (clock_in is distinct from v_in or clock_out is distinct from v_out) then 'manual' else source end
+  where id = p_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'attendance_updated', 'attendance', p_id, p_patch);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_set_staff(p_token text, p_event uuid, p_person uuid, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_rate numeric; v_ins numeric;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  begin
+    v_rate := nullif(p_patch->>'rate','')::numeric; v_ins := nullif(p_patch->>'insured_salary','')::numeric;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
+  if coalesce(p_patch->>'pay_type','hourly') not in ('hourly','daily') or coalesce(p_patch->>'relation','employment') not in ('employment','contract')
+     or v_rate < 0 or v_rate > 100000 then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+  insert into public.event_staff(event_id, person_id, role, relation, pay_type, rate, insured_salary, deduct_insurance)
+  values (p_event, p_person, nullif(btrim(coalesce(p_patch->>'role','')),''), coalesce(p_patch->>'relation','employment'), coalesce(p_patch->>'pay_type','hourly'),
+    v_rate, v_ins, coalesce((p_patch->>'deduct_insurance')::boolean, true))
+  on conflict (event_id, person_id) do update set role = excluded.role, relation = excluded.relation, pay_type = excluded.pay_type,
+    rate = excluded.rate, insured_salary = excluded.insured_salary, deduct_insurance = excluded.deduct_insurance;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'staff_updated', 'event_staff', p_person, p_patch || jsonb_build_object('event', p_event));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_set_status(p_token text, p_ids uuid[], p_status text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_done int; v_skip int := 0;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_status not in ('draft','published','void') then return jsonb_build_object('ok', false, 'error', 'bad_status'); end if;
+  if p_status = 'published' then
+    select count(*) into v_skip from public.payslips where id = any(p_ids) and (net is null or gross is null);
+  end if;
+  with u as (
+    update public.payslips set status = p_status,
+      published_at = case when p_status = 'published' then now() else null end
+    where id = any(p_ids) and status <> p_status and (p_status <> 'published' or (net is not null and gross is not null))
+    returning id
+  ), l as (
+    insert into public.audit_log(actor, action, table_name, row_id, detail)
+    select v_actor, 'payslip_' || p_status, 'payslips', id, null from u returning 1
+  )
+  select count(*) into v_done from l;
+  return jsonb_build_object('ok', true, 'updated', v_done, 'skipped_no_amount', v_skip);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_setup(p_code text, p_username text, p_password text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_hash text := encode(extensions.digest(btrim(coalesce(p_code,'')), 'sha256'), 'hex'); v_user text := lower(btrim(coalesce(p_username,'')));
+begin
+  if not exists (select 1 from public.admin_setup_codes where code_hash = v_hash and used_at is null and expires_at > now()) then
+    return jsonb_build_object('ok', false, 'error', 'bad_code');
+  end if;
+  if v_user !~ '^[a-z0-9._@-]{3,60}$' then return jsonb_build_object('ok', false, 'error', 'bad_username'); end if;
+  if length(coalesce(p_password,'')) < 10 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  if exists (select 1 from public.admins where username = v_user) then return jsonb_build_object('ok', false, 'error', 'taken'); end if;
+  insert into public.admins(username, password_hash) values (v_user, extensions.crypt(p_password, extensions.gen_salt('bf', 10)));
+  update public.admin_setup_codes set used_at = now() where code_hash = v_hash;
+  insert into public.audit_log(actor, action, table_name) values (v_user, 'admin_created', 'admins');
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_signup_code(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return coalesce((select jsonb_build_object('ok', true, 'code', signup_code, 'open', coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1) from public.events where id = p_event),
+    jsonb_build_object('ok', false, 'error', 'not_found'));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_update_employer(p_token text, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_id uuid;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_patch ? 'tax_id' and nullif(btrim(p_patch->>'tax_id'),'') is not null and btrim(p_patch->>'tax_id') !~ '^\d{8}$' then
+    return jsonb_build_object('ok', false, 'error', 'bad_tax_id');
+  end if;
+  select id into v_id from public.employers order by created_at limit 1;
+  update public.employers set
+    legal_name = case when p_patch ? 'legal_name' then nullif(btrim(p_patch->>'legal_name'),'') else legal_name end,
+    tax_id = case when p_patch ? 'tax_id' then nullif(btrim(p_patch->>'tax_id'),'') else tax_id end
+  where id = v_id;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'employer_updated', 'employers', v_id, p_patch);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_update_event(p_token text, p_id uuid, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); v_n int := 0;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  begin
+    update public.events set
+      pay_date = case when p_patch ? 'pay_date' then nullif(p_patch->>'pay_date','')::date else pay_date end,
+      pay_within_days = case when p_patch ? 'pay_within_days' then nullif(p_patch->>'pay_within_days','')::int else pay_within_days end,
+      default_break_minutes = case when p_patch ? 'default_break_minutes' then coalesce(nullif(p_patch->>'default_break_minutes','')::int, 0) else default_break_minutes end,
+      default_hourly_rate = case when p_patch ? 'default_hourly_rate' then nullif(p_patch->>'default_hourly_rate','')::numeric else default_hourly_rate end,
+      insured_salary = case when p_patch ? 'insured_salary' then coalesce(nullif(p_patch->>'insured_salary','')::numeric, 11100) else insured_salary end
+    where id = p_id;
+    if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
+  if p_patch ? 'pay_date' and coalesce((p_patch->>'apply_to_payslips')::boolean, false) then
+    update public.payslips set pay_date = nullif(p_patch->>'pay_date','')::date where event_id = p_id;
+    get diagnostics v_n = row_count;
+  end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'event_updated', 'events', p_id, p_patch);
+  return jsonb_build_object('ok', true, 'payslips_updated', v_n);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_update_payslip(p_token text, p_id uuid, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_patch ? 'relation' and p_patch->>'relation' not in ('employment','contract') then return jsonb_build_object('ok', false, 'error', 'bad_relation'); end if;
+  update public.payslips set
+    relation = coalesce(p_patch->>'relation', relation),
+    pay_date = case when p_patch ? 'pay_date' then nullif(p_patch->>'pay_date','')::date else pay_date end,
+    note = case when p_patch ? 'note' then nullif(btrim(p_patch->>'note'),'') else note end
+  where id = p_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'payslip_updated', 'payslips', p_id, p_patch);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.checkin_make_code(p_event uuid, p_slot bigint)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select replace(e.id::text,'-','') || '.' || p_slot || '.' ||
+    left(encode(extensions.hmac(replace(e.id::text,'-','') || '.' || p_slot, e.checkin_secret, 'sha256'), 'hex'), 20)
+  from public.events e where e.id = p_event;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.checkin_state(p_person uuid, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  with open_row as (
+    select * from public.attendance a where a.person_id = p_person and a.event_id = p_event
+      and a.clock_in is not null and a.clock_out is null and a.clock_in > now() - interval '20 hours'
+    order by a.clock_in desc limit 1
+  ), today_row as (
+    select * from public.attendance a where a.person_id = p_person and a.event_id = p_event
+      and a.work_date = (now() at time zone 'Asia/Taipei')::date limit 1
+  )
+  select jsonb_build_object(
+    'state', case when exists (select 1 from open_row) then 'in' when exists (select 1 from today_row where clock_out is not null) then 'done' else 'none' end,
+    'clock_in', coalesce((select to_char(clock_in at time zone 'Asia/Taipei', 'HH24:MI') from open_row), (select to_char(clock_in at time zone 'Asia/Taipei', 'HH24:MI') from today_row)),
+    'clock_out', (select to_char(clock_out at time zone 'Asia/Taipei', 'HH24:MI') from today_row where not exists (select 1 from open_row)),
+    'now', to_char(now() at time zone 'Asia/Taipei', 'HH24:MI'));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.line_bind(p_code text, p_user text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid; v_name text;
+begin
+  select person_id into v_pid from public.line_link_codes where code = p_code and expires_at > now();
+  if v_pid is null then return jsonb_build_object('ok', false); end if;
+  update public.people set line_user_id = null, line_linked_at = null where line_user_id = p_user and id <> v_pid;
+  update public.people set line_user_id = p_user, line_linked_at = now() where id = v_pid returning name into v_name;
+  delete from public.line_link_codes where person_id = v_pid;
+  insert into public.audit_log(actor, action, table_name, row_id) values (v_pid::text, 'line_linked', 'people', v_pid);
+  return jsonb_build_object('ok', true, 'name', v_name);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.line_cron_ok(p_token text)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$ select p_token is not null and p_token = public.setting('cron_token') $function$
+;
+
+CREATE OR REPLACE FUNCTION public.line_unfollow(p_user text)
+ RETURNS void
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  update public.people set line_user_id = null, line_linked_at = null where line_user_id = p_user;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.notify_batch(p_limit integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare r record; out jsonb := '[]'::jsonb; v_text text; v_lines text; v_site text := public.setting('site_url'); s public.payslips;
+begin
+  for r in select n.*, p.name, p.line_user_id, e.name as event_name from public.notifications n join public.people p on p.id = n.person_id
+           left join public.events e on e.id = n.event_id
+           where n.status = 'pending' and n.send_after <= now() order by n.created_at limit p_limit for update of n skip locked loop
+    if coalesce(public.setting('line_enabled'), 'true') <> 'true' then
+      update public.notifications set status = 'skipped', error = 'disabled' where id = r.id; continue;
+    end if;
+    if (r.kind in ('reminder', 'checkout', 'test') and r.created_at < now() - interval '24 hours') or r.created_at < now() - interval '7 days' then
+      update public.notifications set status = 'skipped', error = 'expired' where id = r.id; continue;
+    end if;
+    if r.line_user_id is null then
+      update public.notifications set status = 'skipped', error = 'not_linked' where id = r.id; continue;
+    end if;
+    v_text := r.body;
+    if r.kind = 'accepted' then
+      select string_agg(to_char(sh.work_date, 'MM/DD') || '（' || (array['日','一','二','三','四','五','六'])[extract(dow from sh.work_date)::int + 1] || '）'
+          || to_char(sh.start_time, 'HH24:MI') || '–' || to_char(sh.end_time, 'HH24:MI') || coalesce('　' || sh.role, ''), E'\n' order by sh.work_date, sh.start_time)
+      into v_lines
+      from public.application_shifts x join public.applications a on a.id = x.application_id join public.shifts sh on sh.id = x.shift_id
+      where a.person_id = r.person_id and a.event_id = r.event_id and a.status = 'active' and x.status = 'accepted';
+      if v_lines is null then update public.notifications set status = 'skipped', error = 'no_longer_accepted' where id = r.id; continue; end if;
+      v_text := '【沃克思】' || r.name || ' 你好，你已錄取「' || r.event_name || '」：' || E'\n' || v_lines || E'\n\n'
+        || '請登入確認勞動契約，確認後才算完成排班：' || E'\n' || v_site;
+    elsif r.kind = 'payslip' then
+      select * into s from public.payslips where id = r.ref_id;
+      if s.id is null or s.status <> 'published' then update public.notifications set status = 'skipped', error = 'not_published' where id = r.id; continue; end if;
+      v_text := '【沃克思】「' || r.event_name || '」的薪資單已發布' || E'\n' || '實發 NT$ ' || to_char(s.net, 'FM999,999,990') || E'\n'
+        || '發薪日 ' || coalesce(to_char(s.pay_date, 'YYYY/MM/DD'), '另行通知') || E'\n' || '登入查看明細：' || v_site;
+    elsif r.kind = 'checkout' then
+      if exists (select 1 from public.attendance where id = r.ref_id and clock_out is not null) then
+        update public.notifications set status = 'skipped', error = 'already_out' where id = r.id; continue;
+      end if;
+    end if;
+    update public.notifications set body = v_text where id = r.id;
+    out := out || jsonb_build_object('id', r.id, 'to', r.line_user_id, 'text', left(v_text, 4900));
+  end loop;
+  return out;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.notify_enqueue_checkout()
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare n int;
+begin
+  insert into public.notifications(person_id, event_id, kind, ref_id, body, dedupe_key)
+  select at.person_id, at.event_id, 'checkout', at.id,
+    '【沃克思】你在「' || e.name || '」' || to_char(at.work_date, 'MM/DD') || ' 還沒簽退。下班時請掃現場 QR 碼簽退；如果已經離開，請告訴現場負責人實際下班時間。',
+    'checkout:' || at.id
+  from public.attendance at join public.events e on e.id = at.event_id
+  where at.clock_in is not null and at.clock_out is null and at.clock_in > now() - interval '24 hours'
+    and now() > coalesce(
+      (select max(s.work_date + s.end_time + case when s.end_time <= s.start_time then interval '1 day' else interval '0' end) at time zone 'Asia/Taipei' + interval '30 minutes'
+       from public.application_shifts x join public.applications a on a.id = x.application_id join public.shifts s on s.id = x.shift_id
+       where a.person_id = at.person_id and a.event_id = at.event_id and x.status = 'accepted' and s.work_date = at.work_date),
+      at.clock_in + interval '10 hours')
+  on conflict do nothing;
+  get diagnostics n = row_count;
+  return n;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.notify_enqueue_reminders()
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_tomorrow date := (now() at time zone 'Asia/Taipei')::date + 1; n int;
+begin
+  insert into public.notifications(person_id, event_id, kind, body, dedupe_key)
+  select a.person_id, e.id, 'reminder',
+    '【沃克思】提醒你明天 ' || to_char(v_tomorrow, 'MM/DD') || '（' || (array['日','一','二','三','四','五','六'])[extract(dow from v_tomorrow)::int + 1] || '）有「' || e.name || '」的班：' || E'\n'
+      || string_agg(to_char(s.start_time, 'HH24:MI') || '–' || to_char(s.end_time, 'HH24:MI') || coalesce('　' || s.role, ''), E'\n' order by s.start_time) || E'\n'
+      || coalesce('地點：' || e.location || E'\n', '')
+      || '到場請用手機掃現場 QR 碼簽到，下班記得簽退。如果不能出勤，請盡快告訴活動負責人。',
+    'reminder:' || a.person_id || ':' || e.id || ':' || v_tomorrow
+  from public.application_shifts x join public.applications a on a.id = x.application_id join public.shifts s on s.id = x.shift_id join public.events e on e.id = a.event_id
+  where x.status = 'accepted' and a.status = 'active' and s.work_date = v_tomorrow
+  group by a.person_id, e.id, e.name, e.location
+  on conflict do nothing;
+  get diagnostics n = row_count;
+  return n;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.notify_mark(p_results jsonb)
+ RETURNS void
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  update public.notifications n set status = x.status, error = x.error, sent_at = case when x.status = 'sent' then now() end
+  from jsonb_to_recordset(p_results) as x(id uuid, status text, error text) where n.id = x.id;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.notify_tick()
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  perform public.notify_enqueue_checkout();
+  if exists (select 1 from public.notifications where status = 'pending' and send_after <= now()) then
+    perform net.http_post(
+      url := 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/line',
+      body := jsonb_build_object('action', 'flush'),
+      headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-token', public.setting('cron_token')),
+      timeout_milliseconds := 20000);
+  end if;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.parse_roc_birth(raw text)
+ RETURNS date
+ LANGUAGE plpgsql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+declare s text := regexp_replace(coalesce(raw,''), '\s', '', 'g'); y int; m int; d int; p text[];
+begin
+  if s ~ '^(19|20)\d{6}$' then
+    y := substr(s,1,4)::int; m := substr(s,5,2)::int; d := substr(s,7,2)::int;
+  elsif s ~ '^\d{7}$' then
+    y := substr(s,1,3)::int + 1911; m := substr(s,4,2)::int; d := substr(s,6,2)::int;
+  elsif s ~ '^\d{6}$' then
+    y := substr(s,1,2)::int + 1911; m := substr(s,3,2)::int; d := substr(s,5,2)::int;
+  elsif s ~ '^\d{2,3}[/.\-]\d{1,2}[/.\-]\d{1,2}$' then
+    p := regexp_split_to_array(s, '[/.\-]');
+    y := p[1]::int + 1911; m := p[2]::int; d := p[3]::int;
+  else
+    return null;
+  end if;
+  return make_date(y,m,d);
+exception when others then
+  return null;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_accept_contract(p_token text, p_app uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); a public.applications; v_text text;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into a from public.applications where id = p_app and person_id = v_pid;
+  if a.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  v_text := public.payroll_contract_text(a.id);
+  if v_text is null then return jsonb_build_object('ok', false, 'error', 'no_accepted'); end if;
+  v_text := v_text || E'\n\n' || '勞工於 ' || to_char(now() at time zone 'Asia/Taipei', 'YYYY/MM/DD HH24:MI') || ' 以本人帳號登入系統線上確認同意。';
+  update public.applications set contract_text = v_text, contract_accepted_at = now(), updated_at = now() where id = a.id;
+  insert into public.audit_log(actor, action, table_name, row_id) values (v_pid::text, 'contract_accepted', 'applications', a.id);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_apply(p_token text, p_join text, p_data jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); e public.events; v_app uuid; v_ids uuid[]; q jsonb; v_ans jsonb := '{}'::jsonb; v text;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into e from public.events where signup_code = btrim(coalesce(p_join,''));
+  if not found or coalesce(e.end_date, e.start_date) < (now() at time zone 'Asia/Taipei')::date - 1 then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
+  if not e.recruiting then return jsonb_build_object('ok', false, 'error', 'closed'); end if;
+  begin
+    select coalesce(array_agg(x::uuid), '{}') into v_ids from jsonb_array_elements_text(coalesce(p_data->'shift_ids','[]'::jsonb)) x;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_shift'); end;
+  if exists (select 1 from public.shifts where event_id = e.id) then
+    if cardinality(v_ids) = 0 then return jsonb_build_object('ok', false, 'error', 'no_shift'); end if;
+    if exists (select 1 from unnest(v_ids) i where not exists (select 1 from public.shifts s where s.id = i and s.event_id = e.id)) then
+      return jsonb_build_object('ok', false, 'error', 'bad_shift');
+    end if;
+  end if;
+  for q in select * from jsonb_array_elements(coalesce(e.form_config->'questions', '[]'::jsonb)) loop
+    v := btrim(coalesce(p_data->'answers'->>(q->>'id'), ''));
+    if coalesce((q->>'required')::boolean, false) and v = '' then return jsonb_build_object('ok', false, 'error', 'missing_answer', 'question', q->>'label'); end if;
+    if q->>'type' = 'choice' and v <> '' and not exists (select 1 from jsonb_array_elements_text(coalesce(q->'options','[]'::jsonb)) o where o = v) then
+      return jsonb_build_object('ok', false, 'error', 'bad_answer', 'question', q->>'label');
+    end if;
+    if v <> '' then v_ans := v_ans || jsonb_build_object(q->>'id', left(v, 500)); end if;
+  end loop;
+  if coalesce((e.form_config->>'experience')::boolean, false) and length(btrim(coalesce(p_data->>'experience',''))) < 2 then
+    return jsonb_build_object('ok', false, 'error', 'missing_experience');
+  end if;
+  if coalesce((e.form_config->>'photo')::boolean, false) and not exists (select 1 from public.people_documents where person_id = v_pid and kind = 'photo') then
+    return jsonb_build_object('ok', false, 'error', 'missing_photo');
+  end if;
+  insert into public.applications(event_id, person_id, answers, experience)
+  values (e.id, v_pid, v_ans, nullif(left(btrim(coalesce(p_data->>'experience','')), 2000), ''))
+  on conflict (event_id, person_id) do update set answers = excluded.answers, experience = excluded.experience, status = 'active', updated_at = now()
+  returning id into v_app;
+  delete from public.application_shifts where application_id = v_app and status in ('applied','waitlist','rejected') and not (shift_id = any(v_ids));
+  insert into public.application_shifts(application_id, shift_id) select v_app, i from unnest(v_ids) i on conflict do nothing;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'applied', 'applications', v_app, jsonb_build_object('shifts', cardinality(v_ids)));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_change_password(p_token text, p_old text, p_new text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); v_hash text;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if length(coalesce(p_new,'')) < 8 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  select password_hash into v_hash from public.people where id = v_pid;
+  if v_hash is null or v_hash <> extensions.crypt(coalesce(p_old,''), v_hash) then
+    return jsonb_build_object('ok', false, 'error', 'invalid');
+  end if;
+  update public.people set password_hash = extensions.crypt(p_new, extensions.gen_salt('bf', 10)),
+    password_changed_at = now(), updated_at = now() where id = v_pid;
+  delete from public.sessions where person_id = v_pid
+    and token_hash <> encode(extensions.digest(p_token, 'sha256'), 'hex');
+  insert into public.audit_log(actor, action, table_name, row_id) values (v_pid::text, 'password_changed', 'people', v_pid);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_checkin_ticket(p_code text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare parts text[] := string_to_array(coalesce(p_code,''), '.'); v_now bigint := floor(extract(epoch from now()) / 60);
+  v_slot bigint; e public.events; v_ticket text;
+begin
+  if coalesce(array_length(parts,1),0) <> 3 or parts[1] !~ '^[0-9a-f]{32}$' or parts[2] !~ '^\d{1,12}$' then
+    return jsonb_build_object('ok', false, 'error', 'bad_code');
+  end if;
+  v_slot := parts[2]::bigint;
+  select * into e from public.events where replace(id::text,'-','') = parts[1];
+  if not found or public.checkin_make_code(e.id, v_slot) <> p_code then return jsonb_build_object('ok', false, 'error', 'bad_code'); end if;
+  if v_slot > v_now or v_slot < v_now - 2 then return jsonb_build_object('ok', false, 'error', 'expired'); end if;
+  delete from public.checkin_tickets where expires_at < now();
+  v_ticket := encode(extensions.gen_random_bytes(24), 'hex');
+  insert into public.checkin_tickets(ticket_hash, event_id, expires_at)
+  values (encode(extensions.digest(v_ticket, 'sha256'), 'hex'), e.id, now() + interval '15 minutes');
+  return jsonb_build_object('ok', true, 'ticket', v_ticket, 'event', e.name);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_clean_profile(p jsonb, p_name text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+declare v_phone text := regexp_replace(coalesce(p->>'phone',''), '\D', '', 'g');
+  v_code text := btrim(coalesce(p->>'bank_code','')); v_acct text := regexp_replace(coalesce(p->>'bank_account',''), '\D', '', 'g');
+  v_an text := btrim(coalesce(p->>'bank_account_name','')); v_addr text := btrim(coalesce(p->>'address','')); v_email text := lower(btrim(coalesce(p->>'email','')));
+begin
+  if v_phone !~ '^09\d{8}$' then return jsonb_build_object('error', 'bad_phone'); end if;
+  if length(v_addr) < 8 then return jsonb_build_object('error', 'bad_address'); end if;
+  if v_email <> '' and v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then return jsonb_build_object('error', 'bad_email'); end if;
+  if v_code !~ '^\d{3}$' then return jsonb_build_object('error', 'bad_bank_code'); end if;
+  if v_acct !~ '^\d{6,16}$' then return jsonb_build_object('error', 'bad_bank_account'); end if;
+  if v_an <> btrim(p_name) then return jsonb_build_object('error', 'payee_not_self'); end if;
+  return jsonb_build_object('phone', v_phone, 'address', v_addr, 'email', nullif(v_email,''), 'bank_code', v_code,
+    'bank_branch', nullif(btrim(coalesce(p->>'bank_branch','')),''), 'bank_account_name', v_an, 'bank_account', v_acct);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_clock(p_token text, p_ticket text, p_action text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); e public.events; v_open public.attendance; v_today date := (now() at time zone 'Asia/Taipei')::date; v_mins int;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select ev.* into e from public.checkin_tickets t join public.events ev on ev.id = t.event_id
+  where t.ticket_hash = encode(extensions.digest(coalesce(p_ticket,''), 'sha256'), 'hex') and t.expires_at > now();
+  if not found then return jsonb_build_object('ok', false, 'error', 'ticket'); end if;
+  if p_action = 'status' then
+    return jsonb_build_object('ok', true, 'event', e.name) || public.checkin_state(v_pid, e.id);
+  end if;
+  if e.start_date is null or v_today < e.start_date or v_today > coalesce(e.end_date, e.start_date) + 1 then
+    return jsonb_build_object('ok', false, 'error', 'not_event_day', 'event', e.name);
+  end if;
+  select * into v_open from public.attendance a where a.person_id = v_pid and a.event_id = e.id
+    and a.clock_in is not null and a.clock_out is null and a.clock_in > now() - interval '20 hours' order by a.clock_in desc limit 1;
+  if p_action = 'in' then
+    if v_open.id is not null then return jsonb_build_object('ok', false, 'error', 'already_in', 'event', e.name) || public.checkin_state(v_pid, e.id); end if;
+    if exists (select 1 from public.attendance where person_id = v_pid and event_id = e.id and work_date = v_today) then
+      return jsonb_build_object('ok', false, 'error', 'already_done', 'event', e.name) || public.checkin_state(v_pid, e.id);
+    end if;
+    insert into public.attendance(person_id, event_id, work_date, clock_in, source, note) values (v_pid, e.id, v_today, now(), 'qr', null);
+    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'clock_in', 'events', e.id, null);
+  elsif p_action = 'out' then
+    if v_open.id is null then return jsonb_build_object('ok', false, 'error', 'not_in', 'event', e.name) || public.checkin_state(v_pid, e.id); end if;
+    v_mins := floor(extract(epoch from now() - v_open.clock_in) / 60);
+    update public.attendance set clock_out = now(),
+      break_minutes = case when v_mins >= 240 then least(e.default_break_minutes, v_mins) else 0 end
+    where id = v_open.id;
+    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'clock_out', 'events', e.id, null);
+  else
+    return jsonb_build_object('ok', false, 'error', 'bad_action');
+  end if;
+  return jsonb_build_object('ok', true, 'event', e.name, 'done', p_action) || public.checkin_state(v_pid, e.id);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_compute(p_event uuid, p_person uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  e public.events; st public.event_staff; a record;
+  v_rate numeric; v_type text; v_rh numeric; v_ins numeric; v_deduct boolean;
+  m int; c int; pos int; dtype text; hol text; nm int; ot int; ot1 int; ot2 int; x int; y int; z int;
+  items jsonb := '[]'::jsonb; warns jsonb := '[]'::jsonb; gross numeric := 0; ded numeric := 0; n_days int := 0;
+  v_min numeric; r public.labor_ins_rates; v_first date; v_last date; wk record;
+  -- 產生一筆應發項目
+  amt numeric;
+begin
+  select * into e from public.events where id = p_event;
+  select * into st from public.event_staff where event_id = p_event and person_id = p_person;
+  v_type := coalesce(st.pay_type, 'hourly');
+  v_rate := coalesce(st.rate, case when v_type = 'hourly' then e.default_hourly_rate end);
+  v_ins := coalesce(st.insured_salary, e.insured_salary);
+  v_deduct := coalesce(st.deduct_insurance, true);
+  if v_rate is null or v_rate <= 0 then return jsonb_build_object('ok', false, 'error', 'no_rate'); end if;
+  if exists (select 1 from public.attendance where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is null) then
+    return jsonb_build_object('ok', false, 'error', 'open_attendance');
+  end if;
+  v_rh := case when v_type = 'daily' then v_rate / 8 else v_rate end;
+
+  for a in select * from public.attendance where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null order by work_date loop
+    m := floor(extract(epoch from a.clock_out - a.clock_in) / 60)::int - a.break_minutes;
+    if m <= 0 then continue; end if;
+    n_days := n_days + 1; v_first := coalesce(v_first, a.work_date); v_last := a.work_date;
+    select name into hol from public.holidays where day = a.work_date;
+    c := 1;
+    while c < 60 and exists (select 1 from public.attendance where person_id = p_person and work_date = a.work_date - c) loop c := c + 1; end loop;
+    pos := ((c - 1) % 7) + 1;
+    dtype := case when hol is not null then 'holiday' when pos = 7 then 'regular_leave' when pos = 6 then 'rest' else 'weekday' end;
+    select hourly into v_min from public.min_wages where effective_from <= a.work_date order by effective_from desc limit 1;
+    if v_min is not null and v_rh < v_min then
+      warns := warns || jsonb_build_object('severity','error','code','below_min_wage','detail', format('%s 時薪 %s 低於最低工資 %s', a.work_date, round(v_rh,2), v_min));
+    end if;
+    if m > 720 then warns := warns || jsonb_build_object('severity','error','code','over_12h','detail', format('%s 工時 %s 小時，超過單日 12 小時上限（勞基法第32條）', a.work_date, round(m/60.0,2))); end if;
+    if m > 240 and a.break_minutes < 30 then warns := warns || jsonb_build_object('severity','warn','code','no_break','detail', format('%s 連續工作超過 4 小時但休息不足 30 分鐘（勞基法第35條）', a.work_date)); end if;
+
+    if dtype in ('weekday','holiday') then
+      nm := least(m, 480); ot := greatest(m - 480, 0); ot1 := least(ot, 120); ot2 := greatest(ot - 120, 0);
+      if dtype = 'weekday' then
+        amt := case when v_type = 'daily' then ceil(v_rate) else ceil(nm / 60.0 * v_rh) end;
+        items := items || jsonb_build_object('code','regular','label', case when v_type = 'daily' then '日薪' else '正常工時工資' end, 'work_date', a.work_date, 'hours', round(nm/60.0,2), 'rate', case when v_type = 'daily' then null else v_rh end, 'amount', amt, 'sort', 10);
+      else
+        amt := case when v_type = 'daily' then ceil(v_rate * 2) else ceil(nm / 60.0 * v_rh * 2) end;
+        items := items || jsonb_build_object('code','holiday','label', '國定假日出勤（' || hol || '，加倍）', 'work_date', a.work_date, 'hours', round(nm/60.0,2), 'rate', round(v_rh * 2, 2), 'amount', amt, 'sort', 10);
+      end if;
+      gross := gross + amt;
+      if ot1 > 0 then amt := ceil(ot1 / 60.0 * v_rh * 1.34); gross := gross + amt;
+        items := items || jsonb_build_object('code','ot_1','label','加班前2小時（×1.34）','work_date', a.work_date, 'hours', round(ot1/60.0,2), 'rate', round(v_rh*1.34,2), 'amount', amt, 'sort', 11); end if;
+      if ot2 > 0 then amt := ceil(ot2 / 60.0 * v_rh * 1.67); gross := gross + amt;
+        items := items || jsonb_build_object('code','ot_2','label','加班第3小時起（×1.67）','work_date', a.work_date, 'hours', round(ot2/60.0,2), 'rate', round(v_rh*1.67,2), 'amount', amt, 'sort', 12); end if;
+    elsif dtype = 'rest' then
+      if v_type = 'daily' then m := greatest(m, 480); end if;
+      x := least(m, 120); y := least(greatest(m - 120, 0), 360); z := greatest(m - 480, 0);
+      amt := ceil(x / 60.0 * v_rh * 1.34); gross := gross + amt;
+      items := items || jsonb_build_object('code','rest_1','label','休息日出勤前2小時（×1.34）','work_date', a.work_date, 'hours', round(x/60.0,2), 'rate', round(v_rh*1.34,2), 'amount', amt, 'sort', 10);
+      if y > 0 then amt := ceil(y / 60.0 * v_rh * 1.67); gross := gross + amt;
+        items := items || jsonb_build_object('code','rest_2','label','休息日出勤第3至8小時（×1.67）','work_date', a.work_date, 'hours', round(y/60.0,2), 'rate', round(v_rh*1.67,2), 'amount', amt, 'sort', 11); end if;
+      if z > 0 then amt := ceil(z / 60.0 * v_rh * 2.67); gross := gross + amt;
+        items := items || jsonb_build_object('code','rest_3','label','休息日出勤第9小時起（×2.67）','work_date', a.work_date, 'hours', round(z/60.0,2), 'rate', round(v_rh*2.67,2), 'amount', amt, 'sort', 12); end if;
+      warns := warns || jsonb_build_object('severity','warn','code','rest_day','detail', format('%s 是連續出勤第 6 天，已依休息日加給計算', a.work_date));
+    else
+      if v_type = 'daily' then m := greatest(m, 480); end if;
+      amt := ceil(m / 60.0 * v_rh * 2); gross := gross + amt;
+      items := items || jsonb_build_object('code','regular_leave','label','例假出勤（加倍）','work_date', a.work_date, 'hours', round(m/60.0,2), 'rate', round(v_rh*2,2), 'amount', amt, 'sort', 10);
+      warns := warns || jsonb_build_object('severity','error','code','regular_leave_work','detail', format('%s 是連續出勤第 7 天（例假），除天災事變外不得出勤（勞基法第36、40條），已加倍計算並應另給補休', a.work_date));
+    end if;
+  end loop;
+
+  if n_days = 0 then return jsonb_build_object('ok', false, 'error', 'no_attendance'); end if;
+
+  for wk in select date_trunc('week', work_date)::date w, sum(least(floor(extract(epoch from clock_out - clock_in)/60)::int - break_minutes, 480)) mins
+            from public.attendance where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null group by 1 loop
+    if wk.mins > 2400 then warns := warns || jsonb_build_object('severity','warn','code','week_over_40','detail', format('%s 起該週正常工時合計 %s 小時，超過 40 小時的部分應依加班計算，請人工確認', wk.w, round(wk.mins/60.0,1))); end if;
+  end loop;
+
+  if v_deduct then
+    select * into r from public.labor_ins_rates where effective_from <= v_first order by effective_from desc limit 1;
+    ded := n_days * (round(v_ins * r.ordinary * 0.2 / 30) + round(v_ins * r.employment * 0.2 / 30));
+  end if;
+  if gross >= coalesce((select monthly from public.min_wages where effective_from <= v_last order by effective_from desc limit 1), 1e9) then
+    warns := warns || jsonb_build_object('severity','warn','code','nhi_supplement','detail','單次給付達每月最低工資，請確認是否需代扣二代健保補充保費與所得稅');
+  end if;
+  return jsonb_build_object('ok', true, 'items', items, 'gross', gross, 'deductions', ded, 'net', gross - ded, 'days', n_days,
+    'period_start', v_first, 'period_end', v_last, 'warnings', warns, 'insured_salary', v_ins, 'role', st.role);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_contract(p_token text, p_app uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); a public.applications;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into a from public.applications where id = p_app and person_id = v_pid;
+  if a.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if a.contract_accepted_at is not null then return jsonb_build_object('ok', true, 'text', a.contract_text, 'accepted_at', a.contract_accepted_at); end if;
+  return jsonb_build_object('ok', true, 'text', public.payroll_contract_text(a.id), 'accepted_at', null);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_contract_text(p_app uuid)
+ RETURNS text
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare a public.applications; e public.events; em public.employers; p public.people; lines text; roles text;
+begin
+  select * into a from public.applications where id = p_app;
+  select * into e from public.events where id = a.event_id;
+  select * into em from public.employers where id = e.employer_id;
+  select * into p from public.people where id = a.person_id;
+  select string_agg(format('　%s（%s）%s–%s%s　%s　時薪 %s 元', to_char(s.work_date, 'YYYY/MM/DD'),
+      (array['日','一','二','三','四','五','六'])[extract(dow from s.work_date)::int + 1], to_char(s.start_time, 'HH24:MI'), to_char(s.end_time, 'HH24:MI'),
+      case when s.end_time <= s.start_time then '（翌日）' else '' end, coalesce(s.role, '活動人員'), trim(to_char(coalesce(s.rate, e.default_hourly_rate), 'FM999999990.##'))),
+      E'\n' order by s.work_date, s.start_time),
+    string_agg(distinct coalesce(s.role, '活動人員'), '、')
+  into lines, roles
+  from public.application_shifts x join public.shifts s on s.id = x.shift_id where x.application_id = p_app and x.status = 'accepted';
+  if lines is null then return null; end if;
+  return '臨時僱用勞動契約' || E'\n\n'
+    || '雇主：' || coalesce(em.legal_name, em.name) || coalesce('（統一編號 ' || em.tax_id || '）', '') || E'\n'
+    || '勞工：' || p.name || '（身分證字號 ' || public.payroll_mask_id(p.national_id) || '）' || E'\n\n'
+    || '一、工作地點：' || coalesce(e.location, '依活動通知之地點') || E'\n'
+    || '二、工作內容：擔任「' || e.name || '」' || roles || '，從事活動現場相關工作，並遵守現場負責人之合理指揮。' || E'\n'
+    || '三、工作日期與時間：' || E'\n' || lines || E'\n'
+    || '　每日連續工作逾 4 小時，於現場安排休息 ' || greatest(e.default_break_minutes, 30) || ' 分鐘，休息時間不計入工時。' || E'\n'
+    || '四、工資：依上列時薪，按實際簽到退紀錄（記錄至分鐘）計算給付。延長工時、休息日及國定假日出勤，依勞動基準法第 24 條、第 39 條規定加給。工資不低於最低工資。' || E'\n'
+    || '五、發薪：' || case when e.pay_date is not null then '於 ' || to_char(e.pay_date, 'YYYY/MM/DD') when e.pay_within_days is not null then '於活動結束後 ' || e.pay_within_days || ' 日內' else '於活動結束後依雇主通知之日期' end
+    || '全額匯入勞工本人帳戶，並於系統提供工資各項目計算方式明細，勞工可隨時查閱及列印。' || E'\n'
+    || '六、保險與退休金：雇主依法為勞工投保勞工保險、就業保險及職業災害保險，勞工應自付之保費自工資中扣除；並依勞工退休金條例提繳退休金。' || E'\n'
+    || '七、出勤紀錄：勞工應於現場以 QR 碼簽到、簽退。出勤紀錄依法保存五年，勞工得隨時申請副本。' || E'\n'
+    || '八、請假與異動：勞工如無法出勤，應儘速於排定日前通知雇主。雇主如需取消或變更排班，應事先通知勞工。' || E'\n'
+    || '九、契約期間：本契約為臨時性定期契約，自上列第一個工作日起至最後一個工作日止，期滿自動終止。' || E'\n'
+    || '十、本契約未約定事項，依勞動基準法及相關法令辦理。';
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_event_public(p_join text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare e public.events; em public.employers;
+begin
+  select * into e from public.events where signup_code = btrim(coalesce(p_join,''));
+  if not found or coalesce(e.end_date, e.start_date) < (now() at time zone 'Asia/Taipei')::date - 1 then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
+  select * into em from public.employers where id = e.employer_id;
+  return jsonb_build_object('ok', true, 'event', jsonb_build_object('name', e.name, 'start_date', e.start_date, 'end_date', e.end_date,
+      'location', e.location, 'description', e.description, 'recruiting', e.recruiting, 'employer', coalesce(em.legal_name, em.name),
+      'default_hourly_rate', e.default_hourly_rate, 'form', e.form_config),
+    'shifts', coalesce((select jsonb_agg(public.shift_json(s) order by s.work_date, s.start_time) from public.shifts s where s.event_id = e.id), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_join_info(p_join text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select coalesce((select jsonb_build_object('ok', true, 'event', e.name, 'employer', em.name)
+    from public.events e join public.employers em on em.id = e.employer_id
+    where e.signup_code = btrim(coalesce(p_join,'')) and coalesce(e.end_date, e.start_date) >= (now() at time zone 'Asia/Taipei')::date - 1),
+    jsonb_build_object('ok', false, 'error', 'bad_join'));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_line_code(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); v_code text; i int := 0;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if public.setting('line_basic_id') is null then return jsonb_build_object('ok', false, 'error', 'not_configured'); end if;
+  delete from public.line_link_codes where person_id = v_pid or expires_at < now();
+  loop
+    v_code := lpad((floor(random() * 1000000))::int::text, 6, '0'); i := i + 1;
+    exit when not exists (select 1 from public.line_link_codes where code = v_code) or i > 20;
+  end loop;
+  insert into public.line_link_codes(code, person_id, expires_at) values (v_code, v_pid, now() + interval '15 minutes');
+  return jsonb_build_object('ok', true, 'code', v_code, 'basic_id', public.setting('line_basic_id'));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_line_status(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token);
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return (select jsonb_build_object('ok', true, 'linked', p.line_user_id is not null, 'linked_at', p.line_linked_at,
+    'basic_id', public.setting('line_basic_id')) from public.people p where p.id = v_pid);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_line_unlink(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token);
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  update public.people set line_user_id = null, line_linked_at = null where id = v_pid;
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_login(p_national_id text, p_password text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  v public.people;
+  v_id text := upper(btrim(coalesce(p_national_id,'')));
+  v_token text;
+  v_fail int;
+begin
+  select * into v from public.people where national_id = v_id;
+  if not found or v.password_hash is null then
+    perform extensions.crypt(coalesce(p_password,''), extensions.gen_salt('bf', 10));
+    return jsonb_build_object('ok', false, 'error', 'invalid');
+  end if;
+  if v.locked_until is not null and v.locked_until > now() then
+    return jsonb_build_object('ok', false, 'error', 'locked',
+      'retry_after_minutes', ceil(extract(epoch from v.locked_until - now()) / 60));
+  end if;
+  if v.password_hash <> extensions.crypt(coalesce(p_password,''), v.password_hash) then
+    v_fail := v.failed_logins + 1;
+    if v_fail >= 5 then
+      update public.people set failed_logins = 0, locked_until = now() + interval '15 minutes' where id = v.id;
+      insert into public.audit_log(actor, action, table_name, row_id) values (v.id::text, 'login_locked', 'people', v.id);
+      return jsonb_build_object('ok', false, 'error', 'locked', 'retry_after_minutes', 15);
+    end if;
+    update public.people set failed_logins = v_fail where id = v.id;
+    return jsonb_build_object('ok', false, 'error', 'invalid', 'attempts_left', 5 - v_fail);
+  end if;
+  update public.people set failed_logins = 0, locked_until = null where id = v.id;
+  delete from public.sessions where expires_at < now();
+  v_token := encode(extensions.gen_random_bytes(32), 'hex');
+  insert into public.sessions(token_hash, person_id, expires_at)
+  values (encode(extensions.digest(v_token, 'sha256'), 'hex'), v.id, now() + interval '8 hours');
+  insert into public.audit_log(actor, action, table_name, row_id) values (v.id::text, 'login', 'people', v.id);
+  return jsonb_build_object('ok', true, 'token', v_token, 'name', v.name,
+    'default_password', v.password_changed_at is null);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_logout(p_token text)
+ RETURNS jsonb
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  with d as (delete from public.sessions where token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') returning 1)
+  select jsonb_build_object('ok', true);
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_mask_id(t text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+  select case when t is null then null else substr(t,1,3) || repeat('＊', greatest(length(t)-6,0)) || right(t,3) end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_my_application(p_token text, p_join text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); a public.applications;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select ap.* into a from public.applications ap join public.events e on e.id = ap.event_id where e.signup_code = btrim(coalesce(p_join,'')) and ap.person_id = v_pid;
+  return jsonb_build_object('ok', true,
+    'has_photo', exists (select 1 from public.people_documents where person_id = v_pid and kind = 'photo'),
+    'application', case when a.id is null then null else jsonb_build_object('status', a.status, 'answers', a.answers, 'experience', a.experience,
+      'contract_accepted_at', a.contract_accepted_at,
+      'shifts', coalesce((select jsonb_object_agg(x.shift_id, x.status) from public.application_shifts x where x.application_id = a.id), '{}'::jsonb)) end);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_my_events(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token);
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true, 'events', coalesce((select jsonb_agg(jsonb_build_object(
+      'app_id', a.id, 'event', e.name, 'join', e.signup_code, 'location', e.location, 'start_date', e.start_date,
+      'contract_needed', exists (select 1 from public.application_shifts x where x.application_id = a.id and x.status = 'accepted') and a.contract_accepted_at is null,
+      'contract_accepted_at', a.contract_accepted_at,
+      'shifts', coalesce((select jsonb_agg(jsonb_build_object('work_date', s.work_date, 'start', to_char(s.start_time,'HH24:MI'), 'end', to_char(s.end_time,'HH24:MI'), 'role', s.role, 'status', x.status) order by s.work_date, s.start_time)
+                 from public.application_shifts x join public.shifts s on s.id = x.shift_id where x.application_id = a.id), '[]'::jsonb)
+    ) order by e.start_date desc)
+    from public.applications a join public.events e on e.id = a.event_id
+    where a.person_id = v_pid and a.status = 'active' and coalesce(e.end_date, e.start_date) >= (now() at time zone 'Asia/Taipei')::date - 14), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_my_payslips(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token);
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true,
+    'person', (select jsonb_build_object('name', p.name, 'national_id', public.payroll_mask_id(p.national_id),
+                 'default_password', p.password_changed_at is null) from public.people p where p.id = v_pid),
+    'payslips', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', s.id, 'event', e.name, 'employer', em.name, 'relation', s.relation, 'role', s.role,
+        'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
+        'gross', s.gross, 'net', s.net) order by coalesce(s.pay_date, s.period_end) desc nulls last, s.created_at desc)
+      from public.payslips s join public.events e on e.id = s.event_id join public.employers em on em.id = e.employer_id
+      where s.person_id = v_pid and s.status = 'published'), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_payslip(p_token text, p_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); r jsonb;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select jsonb_build_object(
+    'id', s.id, 'event', e.name,
+    'employer', jsonb_build_object('name', em.name, 'legal_name', em.legal_name, 'tax_id', em.tax_id),
+    'person', jsonb_build_object('name', p.name, 'national_id', public.payroll_mask_id(p.national_id)),
+    'relation', s.relation, 'role', s.role, 'basis', s.basis,
+    'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
+    'gross', s.gross, 'allowances', s.allowances, 'deductions', s.deductions, 'net', s.net, 'note', s.note,
+    'published_at', s.published_at,
+    'pay_account', jsonb_build_object('bank_code', s.pay_bank_code, 'branch', s.pay_bank_branch,
+        'last4', case when s.pay_account is not null then right(s.pay_account, 4) end),
+    'items', coalesce((select jsonb_agg(jsonb_build_object('kind', i.kind, 'code', i.code, 'label', i.label,
+        'work_date', i.work_date, 'hours', i.hours, 'rate', i.rate, 'amount', i.amount) order by i.work_date nulls last, i.sort, i.id)
+        from public.payslip_items i where i.payslip_id = s.id), '[]'::jsonb),
+    'attendance', coalesce((select jsonb_agg(jsonb_build_object('work_date', a.work_date,
+        'clock_in', to_char(a.clock_in at time zone 'Asia/Taipei', 'HH24:MI'),
+        'clock_out', to_char(a.clock_out at time zone 'Asia/Taipei', 'HH24:MI'),
+        'break_minutes', a.break_minutes, 'source', a.source, 'note', a.note) order by a.work_date)
+        from public.attendance a where a.person_id = s.person_id and a.event_id = s.event_id
+          and a.work_date between coalesce(s.period_start, a.work_date) and coalesce(s.period_end, a.work_date)), '[]'::jsonb)
+  ) into r
+  from public.payslips s join public.events e on e.id = s.event_id join public.employers em on em.id = e.employer_id
+  join public.people p on p.id = s.person_id
+  where s.id = p_id and s.person_id = v_pid and s.status = 'published';
+  if r is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  return jsonb_build_object('ok', true, 'payslip', r);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_profile(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token);
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return (select jsonb_build_object('ok', true, 'profile', jsonb_build_object(
+      'name', p.name, 'national_id', public.payroll_mask_id(p.national_id), 'birth_date', p.birth_date, 'phone', p.phone, 'email', p.email,
+      'address', p.address, 'bank_code', p.bank_code, 'bank_branch', p.bank_branch, 'bank_account_name', p.bank_account_name, 'bank_account', p.bank_account,
+      'default_password', p.password_changed_at is null,
+      'documents', coalesce((select jsonb_object_agg(d.kind, d.uploaded_at) from public.people_documents d where d.person_id = p.id), '{}'::jsonb)))
+    from public.people p where p.id = v_pid);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_register(p_join text, p_data jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare e public.events; v_nid text := upper(btrim(coalesce(p_data->>'national_id',''))); v_name text := btrim(coalesce(p_data->>'name',''));
+  v_bd date; v_age int; c jsonb; v_id uuid; v_token text;
+begin
+  select * into e from public.events where signup_code = btrim(coalesce(p_join,'')) and coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1;
+  if not found then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
+  if not coalesce((p_data->>'consent')::boolean, false) then return jsonb_build_object('ok', false, 'error', 'no_consent'); end if;
+  if not public.valid_tw_id(v_nid) then return jsonb_build_object('ok', false, 'error', 'bad_national_id'); end if;
+  if length(v_name) < 2 or length(v_name) > 40 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
+  begin v_bd := (p_data->>'birth_date')::date; exception when others then v_bd := null; end;
+  if v_bd is null or v_bd < date '1930-01-01' or v_bd > current_date then return jsonb_build_object('ok', false, 'error', 'bad_birth'); end if;
+  v_age := extract(year from age((now() at time zone 'Asia/Taipei')::date, v_bd))::int;
+  if v_age < 15 then return jsonb_build_object('ok', false, 'error', 'too_young'); end if;
+  if exists (select 1 from public.people where national_id = v_nid) then return jsonb_build_object('ok', false, 'error', 'exists'); end if;
+  c := public.payroll_clean_profile(p_data, v_name);
+  if c ? 'error' then return jsonb_build_object('ok', false, 'error', c->>'error'); end if;
+  insert into public.people(national_id, name, nickname, phone, email, birth_date, birth_raw, address, bank_code, bank_branch, bank_account_name, bank_account,
+    password_hash, profile_source, consent_at)
+  values (v_nid, v_name, nullif(btrim(coalesce(p_data->>'nickname','')),''), c->>'phone', c->>'email', v_bd, to_char(v_bd,'YYYY-MM-DD'), c->>'address',
+    c->>'bank_code', c->>'bank_branch', c->>'bank_account_name', c->>'bank_account',
+    extensions.crypt(lpad((extract(year from v_bd)::int - 1911)::text, 3, '0') || to_char(v_bd, 'MMDD'), extensions.gen_salt('bf', 10)), 'self', now())
+  returning id into v_id;
+  insert into public.data_issues(event_id, person_id, severity, code, detail) values (e.id, v_id, 'warn', 'new_registration', '新登錄人員，請核對身分證與存摺影本');
+  if v_age < 18 then
+    insert into public.data_issues(event_id, person_id, severity, code, detail)
+    values (e.id, v_id, 'error', 'minor', format('未滿 18 歲（%s 歲），須備置法定代理人同意書及年齡證明文件（勞基法第46條）%s', v_age, case when v_age < 16 then '；未滿 16 歲為童工，工時與工作內容另有限制（第44、47、48條）' else '' end));
+  end if;
+  v_token := encode(extensions.gen_random_bytes(32), 'hex');
+  insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(v_token, 'sha256'), 'hex'), v_id, now() + interval '8 hours');
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_id::text, 'registered', 'people', v_id, jsonb_build_object('event', e.id));
+  return jsonb_build_object('ok', true, 'token', v_token, 'name', v_name, 'event', e.name);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_session_person(p_token text)
+ RETURNS uuid
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select s.person_id from public.sessions s
+  where s.token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') and s.expires_at > now();
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_update_profile(p_token text, p_data jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); v public.people; c jsonb;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into v from public.people where id = v_pid;
+  c := public.payroll_clean_profile(p_data, v.name);
+  if c ? 'error' then return jsonb_build_object('ok', false, 'error', c->>'error'); end if;
+  if v.bank_account is distinct from c->>'bank_account' or v.bank_code is distinct from c->>'bank_code' then
+    insert into public.data_issues(person_id, severity, code, detail) values (v_pid, 'warn', 'bank_changed', '本人於 ' || to_char(now() at time zone 'Asia/Taipei', 'YYYY-MM-DD') || ' 更改了匯款帳戶，請核對存摺影本');
+  end if;
+  update public.people set phone = c->>'phone', email = c->>'email', address = c->>'address', bank_code = c->>'bank_code', bank_branch = c->>'bank_branch',
+    bank_account_name = c->>'bank_account_name', bank_account = c->>'bank_account', updated_at = now() where id = v_pid;
+  insert into public.audit_log(actor, action, table_name, row_id) values (v_pid::text, 'profile_updated', 'people', v_pid);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_withdraw(p_token text, p_join text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_pid uuid := public.payroll_session_person(p_token); v_app uuid;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select a.id into v_app from public.applications a join public.events e on e.id = a.event_id where e.signup_code = btrim(coalesce(p_join,'')) and a.person_id = v_pid;
+  if v_app is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if exists (select 1 from public.application_shifts where application_id = v_app and status = 'accepted') then return jsonb_build_object('ok', false, 'error', 'has_accepted'); end if;
+  update public.applications set status = 'withdrawn', updated_at = now() where id = v_app;
+  delete from public.application_shifts where application_id = v_app;
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.setting(p_key text)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$ select value from public.app_settings where key = p_key $function$
+;
+
+CREATE OR REPLACE FUNCTION public.shift_json(s shifts)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  select jsonb_build_object('id', s.id, 'work_date', s.work_date, 'start', to_char(s.start_time, 'HH24:MI'), 'end', to_char(s.end_time, 'HH24:MI'),
+    'overnight', s.end_time <= s.start_time, 'role', s.role, 'headcount', s.headcount, 'rate', s.rate, 'note', s.note,
+    'accepted', (select count(*) from public.application_shifts x join public.applications a on a.id = x.application_id where x.shift_id = s.id and x.status = 'accepted' and a.status = 'active'),
+    'applied', (select count(*) from public.application_shifts x join public.applications a on a.id = x.application_id where x.shift_id = s.id and x.status in ('applied','waitlist') and a.status = 'active'));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_notify_accept()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  if new.status = 'accepted' and (tg_op = 'INSERT' or old.status is distinct from 'accepted') then
+    insert into public.notifications(person_id, event_id, kind, send_after)
+    select a.person_id, a.event_id, 'accepted', now() + interval '2 minutes' from public.applications a where a.id = new.application_id
+    on conflict do nothing;
+  end if;
+  return new;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_notify_payslip()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  if new.status = 'published' and old.status is distinct from 'published' then
+    insert into public.notifications(person_id, event_id, kind, ref_id, dedupe_key, send_after)
+    values (new.person_id, new.event_id, 'payslip', new.id, 'payslip:' || new.id, now() + interval '2 minutes')
+    on conflict do nothing;
+  end if;
+  return new;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.valid_tw_id(id text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+declare letters text := 'ABCDEFGHJKLMNPQRSTUVXYWZIO'; n int; s int; i int;
+begin
+  if id !~ '^[A-Z][1289]\d{8}$' then return false; end if;
+  n := strpos(letters, substr(id,1,1)) + 9;
+  s := (n / 10) + (n % 10) * 9;
+  for i in 2..9 loop
+    s := s + substr(id,i,1)::int * (10 - i);
+  end loop;
+  s := s + substr(id,10,1)::int;
+  return s % 10 = 0;
+end $function$
+;
