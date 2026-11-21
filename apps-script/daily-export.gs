@@ -107,7 +107,7 @@ function flatten_(obj, prefix, acc) {
 }
 
 // 以 = + - @ 開頭的文字前面加 '，避免被試算表當成公式執行（資料來自工讀生自行填寫）
-function safeCell_(t) { return /^[=+\-@]/.test(t) ? "'" + t : t; }
+function safeCell_(t) { return /^[\s]*[=+\-@]/.test(t) ? "'" + t : t; }
 
 function writeTab_(ss, name, rows) {
   const sheet = ss.getSheetByName(name) || ss.insertSheet(name);

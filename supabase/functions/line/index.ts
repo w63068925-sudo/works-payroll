@@ -41,18 +41,18 @@ async function flush() {
     const { data: batch, error } = await sb.rpc("notify_batch", { p_limit: 25 });
     if (error) return { ok: false, error: "db" };
     if (!batch || batch.length === 0) break;
-    const results: { id: string; status: string; error: string | null }[] = [];
+    const results: { id: string; claim: string; status: string; error: string | null }[] = [];
     let stop = false;
-    for (const m of batch as { id: string; to: string; text: string }[]) {
-      if (stop) { results.push({ id: m.id, status: "pending", error: null }); continue; }
+    for (const m of batch as { id: string; claim: string; to: string; text: string }[]) {
+      // 遇到限流後，這批剩下的還沒送出：釋放回佇列，不算發送次數
+      if (stop) { results.push({ id: m.id, claim: m.claim, status: "release", error: "deferred" }); continue; }
       const res = await line("/v2/bot/message/push", { method: "POST", headers: { "X-Line-Retry-Key": m.id }, body: JSON.stringify({ to: m.to, messages: [{ type: "text", text: m.text }] }) });
-      if (res.ok || res.status === 409) { results.push({ id: m.id, status: "sent", error: null }); sent++; }
-      else if (res.status === 429) { stop = true; results.push({ id: m.id, status: "retry", error: "http_429" }); failed++; }
-      else if (res.status >= 500) { results.push({ id: m.id, status: "retry", error: `http_${res.status}` }); failed++; }
-      else { results.push({ id: m.id, status: "failed", error: `http_${res.status}` }); failed++; }
+      if (res.ok || res.status === 409) { results.push({ id: m.id, claim: m.claim, status: "sent", error: null }); sent++; }
+      else if (res.status === 429) { stop = true; results.push({ id: m.id, claim: m.claim, status: "retry", error: "http_429" }); failed++; }
+      else if (res.status >= 500) { results.push({ id: m.id, claim: m.claim, status: "retry", error: `http_${res.status}` }); failed++; }
+      else { results.push({ id: m.id, claim: m.claim, status: "failed", error: `http_${res.status}` }); failed++; }
     }
-    // 尚未嘗試的維持 sending，10 分鐘後由下一輪重新領取
-    const { error: markErr } = await sb.rpc("notify_mark", { p_results: results.filter((r) => r.status !== "pending") });
+    const { error: markErr } = await sb.rpc("notify_mark", { p_results: results });
     if (markErr) return { ok: false, error: "mark_failed", sent, failed };
     if (stop) break;
   }

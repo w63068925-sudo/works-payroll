@@ -577,6 +577,7 @@ async function viewCheckin(action) {
   catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewCheckin()">再試一次</button>'; return; }
   if (r.error === 'session') { saveToken(null); return viewLogin('請先登入，登入後就可以簽到。'); }
   if (r.error === 'ticket') { saveTicket(null); app.innerHTML = brand + '<h1>簽到連結已失效</h1><p class="sub" style="margin-top:8px">請重新掃描現場的 QR 碼。</p><button class="btn ghost" onclick="viewList()">查看我的薪資</button>'; return; }
+  if (!r.error && r.block && (r.state || 'none') === 'none') r.error = r.block;
   const note = { not_scheduled: '你今天沒有被排到這場活動的班，無法簽到。如果現場臨時需要你支援，請請負責人在後台補登出勤。', not_event_day: '今天不在這場活動的日期內，無法簽到。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '找不到簽到紀錄，請先簽到。' }[r.error];
   const st = r.state || 'none';
   app.innerHTML = brand + `

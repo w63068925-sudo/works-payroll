@@ -591,15 +591,19 @@ const stepPayout = {
       const r = await rpc('admin_update_event', { p_id: e.id, p_patch: { pay_date: $('pd').value, pay_within_days: $('pw').value, apply_to_payslips: true } });
       flash(r.ok ? 'ok' : 'err', r.ok ? '發薪日已套用到 ' + r.payslips_updated + ' 張薪資單。' : '儲存失敗。'); refreshEvent(e, 'payout');
     };
-    const c = $('csv'); if (c) c.onclick = () => {
-      const held = s => openIssues(s.issues).some(i => i.code === 'bank_changed');
-      const all = S.cache.slips.filter(s => s.status === 'published' && s.relation !== 'contract');
-      const pub = all.filter(s => !held(s) && s.pay_account);
-      if (pub.length < all.length) alert((all.length - pub.length) + ' 筆因為沒有帳號或帳戶剛被本人更改、尚未核對，沒有放進匯款清單。請到「核對」處理後再下載。');
-      const cell = v => { let t = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
-      const digits = v => '="' + String(v || '').replace(/\D/g, '') + '"';
+    const c = $('csv'); if (c) c.onclick = async () => {
+      // 下載當下向伺服器取最新的帳戶與核對狀態，不用畫面上的舊資料
+      const r = await rpc('admin_payout', { p_event: e.id });
+      if (!r.ok) { alert('無法取得匯款資料。'); return; }
+      const HOLD = { no_pay_date: '沒有發薪日', bad_account: '帳號格式不正確', bank_pending: '帳戶剛被本人更改、尚未核對', payee_mismatch: '戶名與本人姓名不同' };
+      const pub = r.rows.filter(x => !x.hold), held = r.rows.filter(x => x.hold);
+      if (held.length) alert(held.length + ' 筆沒有放進匯款清單：\n' + held.map(x => x.name + '：' + HOLD[x.hold]).join('\n') + '\n\n請處理後再下載。');
+      if (!pub.length) return;
+      const q = t => '"' + String(t).replace(/"/g, '""') + '"';
+      const cell = v => { let t = String(v == null ? '' : v); if (/^[\s]*[=+\-@]/.test(t)) t = "'" + t; return q(t); };
+      const digits = v => q('="' + String(v) + '"');
       const lines = [['姓名', '身分證字號', '銀行代碼', '分行', '戶名', '帳號', '實發金額', '發薪日'].map(cell).join(',')]
-        .concat(pub.map(s => [cell(s.name), cell(s.national_id), digits(s.pay_bank_code), cell(s.pay_bank_branch), cell(s.pay_account_name), digits(s.pay_account), Number(s.net) || 0, cell(s.pay_date || e.pay_date || '')].join(',')));
+        .concat(pub.map(s => [cell(s.name), cell(s.national_id), digits(s.bank_code), cell(s.bank_branch), cell(s.account_name), digits(s.account), Number(s.net) || 0, cell(s.pay_date)].join(',')));
       const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = e.name.replace(/[\\/:*?"<>|]/g, '') + '-匯款清單.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     };
@@ -708,7 +712,7 @@ async function openDetail(kind, key, e, keepScroll) {
       <h2>在這場活動的計薪方式</h2>
       <label for="srel" style="margin-top:0">性質</label><select id="srel"><option value="employment" ${st.relation !== 'contract' ? 'selected' : ''}>僱傭（自動算薪）</option><option value="contract" ${st.relation === 'contract' ? 'selected' : ''}>承攬（不自動算薪）</option></select>
       <label for="stype">計薪方式</label><select id="stype"><option value="hourly" ${st.pay_type !== 'daily' ? 'selected' : ''}>時薪</option><option value="daily" ${st.pay_type === 'daily' ? 'selected' : ''}>日薪（8 小時內全額，超過另計加班）</option></select>
-      <label for="srate">金額（留空＝活動預設時薪）</label><input id="srate" type="text" inputmode="decimal" value="${esc(st.rate == null ? '' : Number(st.rate))}">
+      <label for="srate">金額（有班次時以班次時薪為準；班次沒設時用這裡，再沒有才用活動預設）</label><input id="srate" type="text" inputmode="decimal" value="${esc(st.rate == null ? '' : Number(st.rate))}">
       <label for="srole">崗位</label><input id="srole" type="text" value="${esc(st.role || '')}" placeholder="PT">
       <label for="sins">勞保月投保薪資（留空＝活動設定）</label><input id="sins" type="text" inputmode="numeric" value="${esc(st.insured_salary == null ? '' : Number(st.insured_salary))}">
       <label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:14px;margin-top:14px"><input id="sded" type="checkbox" ${st.deduct_insurance === false ? '' : 'checked'}> 從薪資扣勞保自付額</label>
