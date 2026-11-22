@@ -57,6 +57,28 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.admin_calendar(p_token text, p_from date, p_to date)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_from is null or p_to is null or p_to < p_from or p_to - p_from > 62 then return jsonb_build_object('ok', false, 'error', 'bad_range'); end if;
+  return jsonb_build_object('ok', true,
+    'events', coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'name', e.name, 'start_date', e.start_date, 'end_date', coalesce(e.end_date, e.start_date),
+        'location', e.location, 'has_shifts', exists (select 1 from public.shifts s where s.event_id = e.id)) order by e.start_date, e.name)
+      from public.events e where e.start_date is not null and e.start_date <= p_to and coalesce(e.end_date, e.start_date) >= p_from), '[]'::jsonb),
+    'shifts', coalesce((select jsonb_agg(public.shift_json(s) || jsonb_build_object('event_id', s.event_id,
+        'names', coalesce((select jsonb_agg(p.name order by p.name) from public.application_shifts x join public.applications a on a.id = x.application_id
+          join public.people p on p.id = a.person_id where x.shift_id = s.id and x.status = 'accepted' and a.status = 'active'), '[]'::jsonb))
+        order by s.work_date, s.start_time)
+      from public.shifts s where s.work_date between p_from and p_to), '[]'::jsonb));
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.admin_change_password(p_token text, p_old text, p_new text)
  RETURNS jsonb
  LANGUAGE plpgsql

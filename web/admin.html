@@ -64,6 +64,19 @@ input:focus,select:focus,textarea:focus{border-color:var(--ink);box-shadow:0 0 0
 @keyframes sh{to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.skeleton{animation:none}}
 /* 分頁（點選有深色底線，下方內容同步） */
+.calbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.calbar select{width:auto}
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid var(--line);border-left:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.cal .wd{padding:8px;font-size:12px;color:var(--muted);text-align:center;border-right:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--soft)}
+.cal .day{min-height:108px;padding:6px;border:0;border-right:1px solid var(--line);border-bottom:3px solid transparent;box-shadow:inset 0 -1px 0 var(--line);background:var(--card);text-align:left;font:inherit;color:inherit;cursor:pointer;display:flex;flex-direction:column;gap:3px;min-width:0}
+.cal .day:hover{background:var(--soft)}
+.cal .day.out{background:var(--paper);color:var(--muted)}
+.cal .day.sel{border-bottom-color:var(--ink);background:var(--soft)}
+.cal .n{font-size:13px;font-weight:600;font-family:var(--num)}
+.cal .day.today .n{background:var(--ink);color:#fff;border-radius:99px;padding:0 7px;align-self:flex-start}
+.cal .chip{font-size:12px;line-height:1.35;padding:2px 6px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:3px solid currentColor}
+.cal .more{font-size:12px;color:var(--muted)}
+@media (max-width:760px){.cal .day{min-height:64px;padding:4px}.cal .chip{font-size:0;padding:0;height:6px;border-left:0}.cal .more{font-size:10px}}
 .tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none;margin-bottom:14px}
 .tabs::-webkit-scrollbar{display:none}
 .tab{background:none;border:0;border-bottom:3px solid transparent;margin-bottom:-1px;padding:10px 0;color:var(--muted);cursor:pointer;white-space:nowrap}
@@ -194,7 +207,7 @@ function viewAuth(mode, message) {
 }
 
 /* ---------- 外框與路由 ---------- */
-const NAV = [['today', '今日現場'], ['events', '活動'], ['people', '人員'], ['payouts', '薪資發放'], ['settings', '設定']];
+const NAV = [['today', '今日現場'], ['events', '活動'], ['calendar', '班表'], ['people', '人員'], ['payouts', '薪資發放'], ['settings', '設定']];
 function activeEvents() { const t = today(); return (S.ov ? S.ov.events : []).filter(e => e.start_date && e.start_date <= t && (e.end_date || e.start_date) >= addDays(t, -1)); }
 function addDays(s, n) { const x = new Date(s + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
 function shell(section, html) {
@@ -221,6 +234,7 @@ async function route() {
     if (sec === 'today') return viewToday(parts[1]);
     if (sec === 'events' && parts[1]) return viewEvent(parts[1], parts[2]);
     if (sec === 'events') return viewEvents();
+    if (sec === 'calendar') return viewCalendar(parts[1], parts[2]);
     if (sec === 'people') return viewPeople(parts[1]);
     if (sec === 'payouts') return viewPayouts();
     if (sec === 'settings') return viewSettings();
@@ -231,7 +245,8 @@ window.addEventListener('hashchange', () => { S.sel = new Set(); S.detail = null
 
 /* ---------- 發薪方式：活動後 N 天內，或指定日期 ---------- */
 function payModeHtml(p, e) {
-  const mode = e && e.pay_date ? 'date' : 'days';
+  // 預設指定發薪日；舊活動若已設定天數則沿用天數
+  const mode = e && !e.pay_date && e.pay_within_days != null ? 'days' : 'date';
   return `<div><label for="${p}mode">發薪方式</label><select id="${p}mode" style="width:170px">
       <option value="days" ${mode === 'days' ? 'selected' : ''}>活動結束後幾天內</option><option value="date" ${mode === 'date' ? 'selected' : ''}>指定發薪日</option></select></div>
     <div id="${p}dayswrap" ${mode === 'date' ? 'hidden' : ''}><label for="${p}days">幾天內</label><input id="${p}days" type="text" inputmode="numeric" placeholder="30" value="${esc(e && e.pay_within_days != null ? e.pay_within_days : '')}" style="width:100px"></div>
@@ -428,7 +443,7 @@ const recruitApps = {
 const recruitShifts = {
   html: () => {
     const rc = S.cache.rc, cfg = S.cache.settings;
-    return splitWrap(`<div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">每個班次是一個時段與崗位。工讀生報名時勾選想上的班次。</p><button class="btn sm" id="newshift">新增班次</button></div>
+    return splitWrap(`<div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">每個班次是一個時段與崗位。工讀生報名時勾選想上的班次。</p><a class="btn ghost sm" style="display:inline-flex;align-items:center;text-decoration:none" href="#/calendar/${esc((rc.shifts[0] ? rc.shifts[0].work_date : today()).slice(0, 7))}/${esc(location.hash.split('/')[2] || '')}">行事曆檢視</a><button class="btn sm" id="newshift">新增班次</button></div>
       <div class="card tablebox"><table><thead><tr><th>日期</th><th>時段</th><th>崗位</th><th class="r">時薪</th><th class="r">錄取 / 名額</th><th class="r">待審</th></tr></thead>
       <tbody>${rc.shifts.map(x => `<tr data-k="${esc(x.id)}" class="${S.detail && S.detail.key === x.id ? 'on' : ''}"><td>${esc(d(x.work_date))}</td><td>${esc(x.start)}–${esc(x.end)}${x.overnight ? ' <span class="dim">翌日</span>' : ''}</td><td>${esc(x.role || '—')}</td>
         <td class="r">${x.rate != null ? money(x.rate) : cfg.default_hourly_rate != null ? money(cfg.default_hourly_rate) + ' <span class="dim">預設</span>' : '<span class="badge warn">未設</span>'}</td>
@@ -843,6 +858,84 @@ function showQr(e) {
     } catch (err) { if (err.message === 'session') return stop(); timer = setTimeout(tick, 5000); }
   };
   tick();
+}
+
+
+/* ---------- 班表行事曆 ---------- */
+const CAL_COLORS = [['#1f5c4a', '#e4efe9'], ['#2b4f8a', '#e3eaf6'], ['#8a5a00', '#fbf1d9'], ['#7a2f6b', '#f4e5f0'], ['#a3271f', '#fbe6e3'], ['#3d5a1e', '#ebf2df'], ['#4b4f57', '#eceef1']];
+async function viewCalendar(ym, evId) {
+  const evSel = evId && S.ov.events.find(e => e.id === evId) ? evId : '';
+  const base = '#/calendar/', suffix = evSel ? '/' + evSel : '';
+  const t = today();
+  if (!/^\d{4}-\d{2}$/.test(ym || '') || Number(ym.slice(5)) < 1 || Number(ym.slice(5)) > 12) ym = (S.calYm || t.slice(0, 7));
+  const evRow = evSel ? S.ov.events.find(e => e.id === evSel) : null;
+  S.calYm = ym;
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5));
+  const first = ym + '-01', last = addDays(new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10), -1);
+  const gridStart = addDays(first, -new Date(first + 'T00:00:00Z').getUTCDay());
+  const gridEnd = addDays(last, 6 - new Date(last + 'T00:00:00Z').getUTCDay());
+  const r = await rpc('admin_calendar', { p_from: gridStart, p_to: gridEnd });
+  if (evSel) { r.events = r.events.filter(e => e.id === evSel); r.shifts = r.shifts.filter(s => s.event_id === evSel); }
+  const color = {}; r.events.forEach((e, i) => { color[e.id] = CAL_COLORS[i % CAL_COLORS.length]; });
+  const evName = {}; r.events.forEach(e => { evName[e.id] = e.name; });
+  const byDay = {};
+  r.shifts.forEach(s => { (byDay[s.work_date] = byDay[s.work_date] || []).push({ type: 'shift', s }); });
+  // 沒開班次的活動：活動期間每天顯示一筆
+  r.events.filter(e => !e.has_shifts).forEach(e => { for (let x = e.start_date; x <= e.end_date && x <= gridEnd; x = addDays(x, 1)) if (x >= gridStart) (byDay[x] = byDay[x] || []).push({ type: 'event', e }); });
+  if (!S.calDay || S.calDay.slice(0, 7) !== ym) S.calDay = t.slice(0, 7) === ym ? t : first;
+  const shiftMonth = n => { const x = new Date(Date.UTC(y, m - 1 + n, 1)); return x.toISOString().slice(0, 7); };
+  const years = []; for (let i = Math.min(y, Number(t.slice(0, 4))) - 3; i <= Math.max(y, Number(t.slice(0, 4))) + 3; i++) years.push(i);
+  const chip = it => {
+    const id = it.type === 'shift' ? it.s.event_id : it.e.id, [fg, bg] = color[id] || CAL_COLORS[6];
+    const txt = it.type === 'shift' ? `${it.s.start} ${it.s.accepted}/${it.s.headcount} ${evName[id] || ''}` : `${it.e.name}（未排班次）`;
+    return `<div class="chip" style="color:${fg};background:${bg}" title="${esc(txt)}">${esc(txt)}</div>`;
+  };
+  const cells = [];
+  for (let x = gridStart; x <= gridEnd; x = addDays(x, 1)) {
+    const items = byDay[x] || [];
+    cells.push(`<button class="day${x.slice(0, 7) !== ym ? ' out' : ''}${x === t ? ' today' : ''}${x === S.calDay ? ' sel' : ''}" data-d="${x}" aria-pressed="${x === S.calDay}" aria-label="${esc(x)}，${items.length} 筆">
+      <span class="n">${Number(x.slice(8))}</span>${items.slice(0, 3).map(chip).join('')}${items.length > 3 ? '<span class="more">+' + (items.length - 3) + ' 筆</span>' : ''}</button>`);
+  }
+  const monthShifts = r.shifts.filter(s => s.work_date.slice(0, 7) === ym);
+  const need = monthShifts.reduce((a, s) => a + Number(s.headcount || 0), 0), got = monthShifts.reduce((a, s) => a + Number(s.accepted || 0), 0);
+  shell('calendar', `
+    <div class="head"><div><h1>${evRow ? esc(evRow.name) + ' 班表' : '班表'}</h1><p class="sub">${y} 年 ${m} 月　${evRow ? esc(d(evRow.start_date)) + (evRow.end_date && evRow.end_date !== evRow.start_date ? '–' + esc(d(evRow.end_date)) : '') + '　' : ''}${r.events.filter(e => e.start_date <= last && e.end_date >= first).length} 場活動・${monthShifts.length} 個班次・已錄取 ${got}／需求 ${need} 人</p></div></div>
+    <div class="calbar">
+      <select id="cev" aria-label="活動" style="max-width:260px"><option value="">全部活動</option>${S.ov.events.slice().sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || ''))).map(e => `<option value="${esc(e.id)}" ${e.id === evSel ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select>
+      <button class="btn ghost" id="cprev" aria-label="上個月">‹ 上個月</button>
+      <select id="cyear" aria-label="年份">${years.map(v => `<option value="${v}" ${v === y ? 'selected' : ''}>${v} 年</option>`).join('')}</select>
+      <select id="cmonth" aria-label="月份">${Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}" ${i + 1 === m ? 'selected' : ''}>${i + 1} 月</option>`).join('')}</select>
+      <button class="btn ghost" id="cnext" aria-label="下個月">下個月 ›</button>
+      <button class="btn ghost" id="cnow">本月</button>
+    </div>
+    <div class="cal" role="grid">${['日', '一', '二', '三', '四', '五', '六'].map(w => `<div class="wd">${w}</div>`).join('')}${cells.join('')}</div>
+    <div id="calday"></div>`);
+  const showDay = () => {
+    const x = S.calDay, items = byDay[x] || [];
+    const rows = items.map(it => {
+      if (it.type === 'event') return `<tr><td><a href="#/events/${esc(it.e.id)}/staff">${esc(it.e.name)}</a></td><td>—</td><td>—</td><td class="r">—</td><td class="dim">這場活動沒有開班次</td></tr>`;
+      const s = it.s, full = Number(s.accepted) >= Number(s.headcount);
+      return `<tr><td><a href="#/events/${esc(s.event_id)}/staff">${esc(evName[s.event_id] || '')}</a></td><td style="font-family:var(--num)">${esc(s.start)}–${esc(s.end)}${s.overnight ? ' <span class="badge">跨夜</span>' : ''}</td><td>${esc(s.role || '—')}</td>
+        <td class="r"><span class="badge ${full ? 'ok' : 'warn'}">${esc(s.accepted)}／${esc(s.headcount)}</span>${Number(s.applied) ? '<div class="dim">待審 ' + esc(s.applied) + '</div>' : ''}</td><td>${s.names.length ? esc(s.names.join('、')) : '<span class="dim">尚未錄取</span>'}</td></tr>`;
+    }).join('');
+    $('calday').innerHTML = `<h2>${esc(d(x))}（${'日一二三四五六'[new Date(x + 'T00:00:00Z').getUTCDay()]}）</h2>
+      <div class="card tablebox">${items.length ? '<table><thead><tr><th>活動</th><th>時間</th><th>職務</th><th class="r">錄取／需求</th><th>已錄取人員</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<p class="empty" style="padding:18px">這天沒有排班。</p>'}</div>`;
+  };
+  showDay();
+  on('.cal .day', 'click', (ev, b) => {
+    S.calDay = b.dataset.d;
+    if (S.calDay.slice(0, 7) !== ym) return go(base + S.calDay.slice(0, 7) + suffix);
+    document.querySelectorAll('.cal .day').forEach(c => { const on_ = c.dataset.d === S.calDay; c.classList.toggle('sel', on_); c.setAttribute('aria-pressed', on_); });
+    showDay();
+  });
+  const goYm = (yy, mm) => { S.calDay = null; go(base + yy + '-' + String(mm).padStart(2, '0') + suffix); };
+  $('cprev').onclick = () => { S.calDay = null; go(base + shiftMonth(-1) + suffix); };
+  $('cnext').onclick = () => { S.calDay = null; go(base + shiftMonth(1) + suffix); };
+  $('cnow').onclick = () => { S.calDay = null; go(base + t.slice(0, 7) + suffix); };
+  $('cyear').onchange = () => goYm($('cyear').value, $('cmonth').value);
+  $('cmonth').onchange = () => goYm($('cyear').value, $('cmonth').value);
+  // 切換活動：單一活動跳到它開始的月份
+  $('cev').onchange = () => { const v = $('cev').value, e = S.ov.events.find(x => x.id === v); S.calDay = e && e.start_date ? e.start_date : null; go(base + (e && e.start_date ? e.start_date.slice(0, 7) : ym) + (v ? '/' + v : '')); };
 }
 
 /* ---------- 人員 ---------- */

@@ -172,5 +172,15 @@ begin
   r := public.admin_update_event(atok, ev2, jsonb_build_object('pay_within_days', '120'));
   if r->>'error' is distinct from 'bad_pay' then fails := fails || ' [16e days out of range accepted]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 16 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 17. 班表行事曆：只回傳區間內的活動與班次，需要登入，區間上限 62 天
+  insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values (ev2, '2026-12-02', '09:00', '17:00', 3);
+  r := public.admin_calendar(atok, '2026-11-29', '2027-01-02');
+  if not exists (select 1 from jsonb_array_elements(r->'events') x where (x->>'id')::uuid = ev2) then fails := fails || ' [17a event missing]'; end if;
+  if not exists (select 1 from jsonb_array_elements(r->'shifts') x where (x->>'event_id')::uuid = ev2 and x->>'work_date' = '2026-12-02' and x ? 'names') then fails := fails || ' [17b shift missing]'; end if;
+  r := public.admin_calendar(atok, '2027-02-01', '2027-02-28');
+  if exists (select 1 from jsonb_array_elements(r->'shifts') x where (x->>'event_id')::uuid = ev2) then fails := fails || ' [17c out of range shift]'; end if;
+  if public.admin_calendar('bad-token', '2026-12-01', '2026-12-31')->>'error' is distinct from 'session' then fails := fails || ' [17d no session]'; end if;
+  if public.admin_calendar(atok, '2026-01-01', '2026-12-31')->>'error' is distinct from 'bad_range' then fails := fails || ' [17e range too long]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 17 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;
