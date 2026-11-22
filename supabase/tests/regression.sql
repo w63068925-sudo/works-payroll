@@ -136,5 +136,14 @@ begin
   r := public.admin_payout(atok, ev);
   if (select x->>'hold' from jsonb_array_elements(r->'rows') x where x->>'national_id' = 'Z999990001') is distinct from 'bad_account' then fails := fails || ' [13 payout hold missing]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 13 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 14. 管理員密碼至少 8 個字（設定碼、新增、重設、自己改）
+  insert into public.admin_setup_codes(code_hash, expires_at) values (encode(extensions.digest('regress-code-8', 'sha256'), 'hex'), now() + interval '1 hour');
+  if public.admin_setup('regress-code-8', 'regress-c', '1234567')->>'error' is distinct from 'too_short' then fails := fails || ' [14a setup 7 accepted]'; end if;
+  if (public.admin_setup('regress-code-8', 'regress-c', '12345678')->>'ok')::boolean is not true then fails := fails || ' [14b setup 8 rejected]'; end if;
+  if public.admin_create_admin(atok, 'regress-d', '1234567')->>'error' is distinct from 'too_short' then fails := fails || ' [14c create 7 accepted]'; end if;
+  if (public.admin_create_admin(atok, 'regress-d', '12345678')->>'ok')::boolean is not true then fails := fails || ' [14d create 8 rejected]'; end if;
+  if public.admin_reset_admin(atok, 'regress-d', '1234567')->>'error' is distinct from 'too_short' then fails := fails || ' [14e reset 7 accepted]'; end if;
+  if (public.admin_reset_admin(atok, 'regress-d', '87654321')->>'ok')::boolean is not true then fails := fails || ' [14f reset 8 rejected]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 14 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

@@ -169,7 +169,7 @@ function viewAuth(mode, message) {
     <form id="f" class="card pad" style="margin-top:18px">
       ${setup ? '<label for="code" style="margin-top:0">設定碼</label><input id="code" type="text" autocomplete="off" required>' : ''}
       <label for="u" ${setup ? '' : 'style="margin-top:0"'}>帳號</label><input id="u" type="text" autocomplete="username" autocapitalize="none" required>
-      <label for="p">密碼${setup ? '（至少 10 個字）' : ''}</label><input id="p" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required>
+      <label for="p">密碼${setup ? '（至少 8 個字）' : ''}</label><input id="p" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required>
       <div id="m" style="margin-top:12px">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
       <button class="btn block">${setup ? '建立管理員' : '登入'}</button>
     </form>
@@ -181,7 +181,7 @@ function viewAuth(mode, message) {
     try {
       if (setup) {
         const r = await rpc('admin_setup', { p_code: $('code').value, p_username: u, p_password: p });
-        if (!r.ok) { m.innerHTML = '<div class="msg err">' + ({ bad_code: '設定碼不正確、已用過或已過期。', bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 10 個字。', taken: '這個帳號已經存在。' }[r.error] || '建立失敗') + '</div>'; return; }
+        if (!r.ok) { m.innerHTML = '<div class="msg err">' + ({ bad_code: '設定碼不正確、已用過或已過期。', bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 8 個字。', taken: '這個帳號已經存在。' }[r.error] || '建立失敗') + '</div>'; return; }
       }
       const r = await rpc('admin_login', { p_username: u, p_password: p });
       if (r.ok) { saveToken(r.token); S.user = r.username; S.ov = null; return route(); }
@@ -958,11 +958,11 @@ async function viewSettings(tab) {
       <div id="am" style="margin-top:12px"></div>
       <form id="cpf" class="card pad" style="margin-top:16px;max-width:460px"><b>更改我的密碼</b>
         <label for="op">目前的密碼</label><input id="op" type="password" autocomplete="current-password" required>
-        <label for="np">新密碼（至少 10 個字）</label><input id="np" type="password" autocomplete="new-password" minlength="10" required>
+        <label for="np">新密碼（至少 8 個字）</label><input id="np" type="password" autocomplete="new-password" minlength="8" required>
         <div id="cm" style="margin-top:12px"></div><button class="btn block">更改密碼</button></form></div>
       <form id="af" class="card pad"><b>新增管理員</b><p class="sub" style="margin:4px 0 0">建立後把帳號和密碼私下交給對方，請對方登入後到這裡更改密碼。管理員可以看到所有人員的個資與證件。</p>
         <label for="nu">帳號</label><input id="nu" type="text" autocapitalize="none" autocomplete="off" placeholder="amy 或 amy@example.com" required>
-        <label for="npw">初始密碼（至少 10 個字）</label><div class="row" style="align-items:center"><input id="npw" type="text" autocomplete="off" class="grow" style="width:auto;min-width:160px" required><button type="button" class="btn ghost sm" id="gen">產生</button></div>
+        <label for="npw">初始密碼（至少 8 個字）</label><div class="row" style="align-items:center"><input id="npw" type="text" autocomplete="off" class="grow" style="width:auto;min-width:160px" required><button type="button" class="btn ghost sm" id="gen">產生</button></div>
         <div id="nm" style="margin-top:12px"></div><button class="btn block">新增管理員</button></form></div>`;
   }
   shell('settings', `<div class="head"><div><h1>設定</h1></div></div>
@@ -988,13 +988,13 @@ async function viewSettings(tab) {
     $('af').onsubmit = async ev => {
       ev.preventDefault();
       const r = await rpc('admin_create_admin', { p_username: $('nu').value, p_password: $('npw').value });
-      if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + ({ bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 10 個字。', taken: '這個帳號已經存在。' }[r.error] || '新增失敗。') + '</div>'; return; }
+      if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + ({ bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 8 個字。', taken: '這個帳號已經存在。' }[r.error] || '新增失敗。') + '</div>'; return; }
       flash('ok', '已新增管理員 ' + $('nu').value.trim().toLowerCase() + '。請把帳號與初始密碼私下交給對方。'); viewSettings('admins');
     };
     $('cpf').onsubmit = async ev => {
       ev.preventDefault();
       const r = await rpc('admin_change_password', { p_old: $('op').value, p_new: $('np').value });
-      $('cm').innerHTML = r.ok ? '<div class="msg ok">密碼已更改，其他裝置上的登入已登出。</div>' : '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 10 個字。' : '目前的密碼不正確。') + '</div>';
+      $('cm').innerHTML = r.ok ? '<div class="msg ok">密碼已更改，其他裝置上的登入已登出。</div>' : '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 8 個字。' : '目前的密碼不正確。') + '</div>';
       if (r.ok) { $('op').value = ''; $('np').value = ''; }
     };
     on('[data-rm]', 'click', async (ev, b) => {

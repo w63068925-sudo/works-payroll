@@ -1,4 +1,4 @@
--- 自動匯出：Supabase public schema 的全部函式（2026-11-21，第二輪審查修正後）
+-- 自動匯出：Supabase public schema 的全部函式（2026-11-22，管理員密碼下限改為 8）
 -- 這是資料庫目前的實際定義，修改請用 migration，改完重新匯出。
 
 CREATE OR REPLACE FUNCTION public.admin_actor(p_token text)
@@ -69,7 +69,7 @@ begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into v from public.admins where username = v_actor for update;
   if v.password_hash <> extensions.crypt(coalesce(p_old,''), v.password_hash) then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
-  if length(coalesce(p_new,'')) < 10 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  if length(coalesce(p_new,'')) < 8 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
   update public.admins set password_hash = extensions.crypt(p_new, extensions.gen_salt('bf', 10)) where id = v.id;
   delete from public.admin_sessions where admin_id = v.id and token_hash <> encode(extensions.digest(p_token, 'sha256'), 'hex');
   insert into public.audit_log(actor, action, table_name) values (v_actor, 'admin_password_changed', 'admins');
@@ -118,7 +118,7 @@ begin
   perform pg_advisory_xact_lock(hashtext('admin_roster'));
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if v_user !~ '^[a-z0-9._@-]{3,60}$' then return jsonb_build_object('ok', false, 'error', 'bad_username'); end if;
-  if length(coalesce(p_password,'')) < 10 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  if length(coalesce(p_password,'')) < 8 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
   if exists (select 1 from public.admins where username = v_user) then return jsonb_build_object('ok', false, 'error', 'taken'); end if;
   insert into public.admins(username, password_hash) values (v_user, extensions.crypt(p_password, extensions.gen_salt('bf', 10)));
   insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'admin_created', 'admins', jsonb_build_object('username', v_user));
@@ -663,7 +663,7 @@ declare v_actor text := public.admin_actor(p_token); v_user text := lower(btrim(
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if v_user = v_actor then return jsonb_build_object('ok', false, 'error', 'self'); end if;
-  if length(coalesce(p_password,'')) < 10 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  if length(coalesce(p_password,'')) < 8 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
   update public.admins set password_hash = extensions.crypt(p_password, extensions.gen_salt('bf', 10)), failed_logins = 0, locked_until = null where username = v_user;
   if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   delete from public.admin_sessions where admin_id = (select id from public.admins where username = v_user)
@@ -883,7 +883,7 @@ AS $function$
 declare v_hash text := encode(extensions.digest(btrim(coalesce(p_code,'')), 'sha256'), 'hex'); v_user text := lower(btrim(coalesce(p_username,''))); v_used text;
 begin
   if v_user !~ '^[a-z0-9._@-]{3,60}$' then return jsonb_build_object('ok', false, 'error', 'bad_username'); end if;
-  if length(coalesce(p_password,'')) < 10 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  if length(coalesce(p_password,'')) < 8 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
   if exists (select 1 from public.admins where username = v_user) then return jsonb_build_object('ok', false, 'error', 'taken'); end if;
   update public.admin_setup_codes set used_at = now() where code_hash = v_hash and used_at is null and expires_at > now() returning code_hash into v_used;
   if v_used is null then return jsonb_build_object('ok', false, 'error', 'bad_code'); end if;
