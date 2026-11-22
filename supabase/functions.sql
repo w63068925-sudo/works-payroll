@@ -1,5 +1,4 @@
 -- 自動匯出：Supabase public schema 的全部函式（2026-11-23，報名必須上傳證件）
--- 這是資料庫目前的實際定義，修改請用 migration，改完重新匯出。
 
 CREATE OR REPLACE FUNCTION public.admin_actor(p_token text)
  RETURNS text
@@ -132,7 +131,7 @@ CREATE OR REPLACE FUNCTION public.admin_create_event(p_token text, p_patch jsonb
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_id uuid; v_s date; v_e date;
+declare v_actor text := public.admin_actor(p_token); v_id uuid; v_s date; v_e date; v_pay date; v_days int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if length(btrim(coalesce(p_patch->>'name',''))) < 2 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
@@ -140,8 +139,14 @@ begin
     v_s := (p_patch->>'start_date')::date; v_e := coalesce(nullif(p_patch->>'end_date','')::date, v_s);
   exception when others then return jsonb_build_object('ok', false, 'error', 'bad_date'); end;
   if v_s is null or v_e < v_s then return jsonb_build_object('ok', false, 'error', 'bad_date'); end if;
-  insert into public.events(employer_id, name, start_date, end_date, pay_within_days, default_break_minutes)
-  select id, btrim(p_patch->>'name'), v_s, v_e, nullif(p_patch->>'pay_within_days','')::int, coalesce(nullif(p_patch->>'default_break_minutes','')::int, 0)
+  begin
+    v_pay := nullif(p_patch->>'pay_date','')::date; v_days := nullif(p_patch->>'pay_within_days','')::int;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_pay'); end;
+  if v_pay is not null and v_pay < v_e then return jsonb_build_object('ok', false, 'error', 'pay_before_end'); end if;
+  if v_days is not null and (v_days < 0 or v_days > 90) then return jsonb_build_object('ok', false, 'error', 'bad_pay'); end if;
+  if v_pay is not null then v_days := null; end if;
+  insert into public.events(employer_id, name, start_date, end_date, pay_date, pay_within_days, default_break_minutes)
+  select id, btrim(p_patch->>'name'), v_s, v_e, v_pay, v_days, coalesce(nullif(p_patch->>'default_break_minutes','')::int, 0)
   from public.employers order by created_at limit 1 returning id into v_id;
   insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'event_created', 'events', v_id, p_patch);
   return jsonb_build_object('ok', true, 'id', v_id);
@@ -935,25 +940,34 @@ CREATE OR REPLACE FUNCTION public.admin_update_event(p_token text, p_id uuid, p_
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_n int := 0;
+declare v_actor text := public.admin_actor(p_token); v_n int := 0; e public.events; v_pay date; v_days int; v_apply boolean := coalesce((p_patch->>'apply_to_payslips')::boolean, false);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into e from public.events where id = p_id for update;
+  if e.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  begin
+    v_pay := case when p_patch ? 'pay_date' then nullif(p_patch->>'pay_date','')::date else e.pay_date end;
+    v_days := case when p_patch ? 'pay_within_days' then nullif(p_patch->>'pay_within_days','')::int else e.pay_within_days end;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_pay'); end;
+  if p_patch ? 'pay_date' and v_pay is not null and v_pay < coalesce(e.end_date, e.start_date) then return jsonb_build_object('ok', false, 'error', 'pay_before_end'); end if;
+  if v_days is not null and (v_days < 0 or v_days > 90) then return jsonb_build_object('ok', false, 'error', 'bad_pay'); end if;
+  -- 兩種方式互斥：指定日期優先
+  if p_patch ? 'pay_date' and v_pay is not null then v_days := null; end if;
   begin
     update public.events set
-      pay_date = case when p_patch ? 'pay_date' then nullif(p_patch->>'pay_date','')::date else pay_date end,
-      pay_within_days = case when p_patch ? 'pay_within_days' then nullif(p_patch->>'pay_within_days','')::int else pay_within_days end,
+      pay_date = v_pay, pay_within_days = v_days,
       default_break_minutes = case when p_patch ? 'default_break_minutes' then coalesce(nullif(p_patch->>'default_break_minutes','')::int, 0) else default_break_minutes end,
       default_hourly_rate = case when p_patch ? 'default_hourly_rate' then nullif(p_patch->>'default_hourly_rate','')::numeric else default_hourly_rate end,
       insured_salary = case when p_patch ? 'insured_salary' then coalesce(nullif(p_patch->>'insured_salary','')::numeric, 11100) else insured_salary end
     where id = p_id;
-    if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
-  if p_patch ? 'pay_date' and coalesce((p_patch->>'apply_to_payslips')::boolean, false) then
-    update public.payslips set pay_date = nullif(p_patch->>'pay_date','')::date where event_id = p_id;
+  if v_apply and (p_patch ? 'pay_date' or p_patch ? 'pay_within_days') then
+    update public.payslips set pay_date = coalesce(v_pay, case when v_days is not null then coalesce(e.end_date, e.start_date) + v_days end)
+    where event_id = p_id and status <> 'void';
     get diagnostics v_n = row_count;
   end if;
   insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'event_updated', 'events', p_id, p_patch);
-  return jsonb_build_object('ok', true, 'payslips_updated', v_n);
+  return jsonb_build_object('ok', true, 'payslips_updated', v_n, 'pay_date', coalesce(v_pay, case when v_days is not null then coalesce(e.end_date, e.start_date) + v_days end));
 end $function$
 ;
 

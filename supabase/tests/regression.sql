@@ -158,5 +158,19 @@ begin
   if public.admin_change_password(atok, 'oldpass99', '1234567')->>'error' is distinct from 'too_short' then fails := fails || ' [14g change 7 accepted]'; end if;
   if (public.admin_change_password(atok, 'oldpass99', '12345678')->>'ok')::boolean is not true then fails := fails || ' [14h change 8 rejected]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 15 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 16. 發薪方式：指定日期或活動後 N 天內，兩者互斥；日期不能早於活動結束
+  r := public.admin_create_event(atok, jsonb_build_object('name', '發薪測試', 'start_date', '2026-12-01', 'end_date', '2026-12-03', 'pay_date', '2026-12-02'));
+  if r->>'error' is distinct from 'pay_before_end' then fails := fails || ' [16a pay date before end accepted]'; end if;
+  r := public.admin_create_event(atok, jsonb_build_object('name', '發薪測試', 'start_date', '2026-12-01', 'end_date', '2026-12-03', 'pay_date', '2026-12-20', 'pay_within_days', '30'));
+  ev2 := (r->>'id')::uuid;
+  if (select pay_date from public.events where id = ev2) <> '2026-12-20' or (select pay_within_days from public.events where id = ev2) is not null then fails := fails || ' [16b date mode]'; end if;
+  insert into public.payslips(person_id, event_id, gross, net, deductions, status) values (p2, ev2, 100, 100, 0, 'draft');
+  r := public.admin_update_event(atok, ev2, jsonb_build_object('pay_date', '', 'pay_within_days', '15', 'apply_to_payslips', true));
+  if (select pay_date from public.payslips where event_id = ev2) <> '2026-12-18' or (select pay_date from public.events where id = ev2) is not null then fails := fails || ' [16c days mode]'; end if;
+  r := public.admin_update_event(atok, ev2, jsonb_build_object('default_hourly_rate', '210'));
+  if (select pay_within_days from public.events where id = ev2) <> 15 then fails := fails || ' [16d other fields changed pay mode]'; end if;
+  r := public.admin_update_event(atok, ev2, jsonb_build_object('pay_within_days', '120'));
+  if r->>'error' is distinct from 'bad_pay' then fails := fails || ' [16e days out of range accepted]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 16 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

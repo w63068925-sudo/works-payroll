@@ -81,3 +81,7 @@
 - 網頁：報名頁缺證件時顯示上傳區塊；登錄後的上傳頁三項傳完才能繼續。
 - 回歸測試 15 組全部通過（新增第 15 組）。
 - **Codex 審查尚未執行**：所有帳號額度低於 20%（Waifdance 9%、預設帳號 0%）。使用者 2026-11-23 指示「先部署後補審」，額度恢復後要補跑，範圍 `git diff 82c41a6^..82c41a6`（說明檔：payroll-brief4）。
+
+## 待補審：發薪日模式（指定日期 / 結束後 N 天）— 2026-11-23
+- 範圍：admin_create_event、admin_update_event（pay_date 與 pay_within_days 互斥、套用到薪資單）、web/admin.html 發薪設定、regression 第 16 組
+- 狀態：Codex 額度用完（exit 3），使用者指示先部署後補審；額度恢復後以 sol（medium）審查此 commit

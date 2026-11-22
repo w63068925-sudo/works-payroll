@@ -229,12 +229,30 @@ async function route() {
 }
 window.addEventListener('hashchange', () => { S.sel = new Set(); S.detail = null; S.confirm = null; route(); });
 
+/* ---------- 發薪方式：活動後 N 天內，或指定日期 ---------- */
+function payModeHtml(p, e) {
+  const mode = e && e.pay_date ? 'date' : 'days';
+  return `<div><label for="${p}mode">發薪方式</label><select id="${p}mode" style="width:170px">
+      <option value="days" ${mode === 'days' ? 'selected' : ''}>活動結束後幾天內</option><option value="date" ${mode === 'date' ? 'selected' : ''}>指定發薪日</option></select></div>
+    <div id="${p}dayswrap" ${mode === 'date' ? 'hidden' : ''}><label for="${p}days">幾天內</label><input id="${p}days" type="text" inputmode="numeric" placeholder="30" value="${esc(e && e.pay_within_days != null ? e.pay_within_days : '')}" style="width:100px"></div>
+    <div id="${p}datewrap" ${mode === 'days' ? 'hidden' : ''}><label for="${p}date">發薪日</label><input id="${p}date" type="date" value="${esc(e && e.pay_date || '')}" style="width:180px"></div>`;
+}
+function bindPayMode(p) {
+  $(p + 'mode').onchange = () => { const d = $(p + 'mode').value === 'date'; $(p + 'datewrap').hidden = !d; $(p + 'dayswrap').hidden = d; };
+}
+function readPayMode(p) {
+  return $(p + 'mode').value === 'date' ? { pay_date: $(p + 'date').value, pay_within_days: '' } : { pay_date: '', pay_within_days: $(p + 'days').value };
+}
+// 實際發薪日：指定日期，或活動結束日加天數
+const payDateOf = e => e.pay_date || (e.pay_within_days != null && (e.end_date || e.start_date) ? addDays(e.end_date || e.start_date, Number(e.pay_within_days)) : null);
+const PAY_ERR = { pay_before_end: '發薪日不能早於活動結束日。', bad_pay: '發薪天數請填 0 到 90 的數字。' };
+
 /* ---------- 活動清單 ---------- */
 function eventState(e) {
   const t = today(), end = e.end_date || e.start_date;
   if (e.start_date && e.start_date <= t && end >= addDays(t, -1)) return ['進行中', 'dark'];
   if (e.start_date && e.start_date > t) return ['即將開始', ''];
-  if (e.total > 0 && e.published === e.total - e.void && e.pay_date && e.pay_date <= t) return ['已結案', 'ok'];
+  if (e.total > 0 && e.published === e.total - e.void && payDateOf(e) && payDateOf(e) <= t) return ['已結案', 'ok'];
   return ['待發薪', 'warn'];
 }
 function viewEvents() {
@@ -254,7 +272,7 @@ function viewEvents() {
         <td><b>${esc(e.name)}</b></td><td>${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(md(e.end_date)) : ''}</td>
         <td><span class="badge ${cls}">${st}</span></td><td class="r">${e.total}</td><td class="r">${e.published}</td>
         <td class="r">${e.open_issues ? '<span class="badge warn">' + e.open_issues + '</span>' : '—'}</td>
-        <td>${e.pay_date ? esc(d(e.pay_date)) : '<span class="dim">未設</span>'}</td><td class="r">${money(e.net_sum)}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">沒有符合的活動</td></tr>'}</tbody>
+        <td>${payDateOf(e) ? esc(d(payDateOf(e))) + (e.pay_date ? '' : ' <span class="dim">結束後 ' + esc(e.pay_within_days) + ' 天</span>') : '<span class="dim">未設</span>'}</td><td class="r">${money(e.net_sum)}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">沒有符合的活動</td></tr>'}</tbody>
     </table></div>`);
   on('tbody tr[data-k]', 'click', (e, tr) => go('#/events/' + tr.dataset.k));
   on('.chip', 'click', (e, b) => { S.filter.events = b.dataset.f; viewEvents(); });
@@ -265,14 +283,17 @@ function viewEvents() {
       <div><label for="es">開始日</label><input id="es" type="date" required></div><div><label for="ee">結束日（單日可留空）</label><input id="ee" type="date"></div></div>
       <div class="row" style="margin-top:12px"><div><label for="eh">預設時薪</label><input id="eh" type="text" inputmode="decimal" placeholder="200" style="width:120px"></div>
       <div><label for="eb">滿 4 小時扣休息（分）</label><input id="eb" type="text" inputmode="numeric" value="30" style="width:150px"></div>
-      <div><label for="ed">活動後幾天內發薪</label><input id="ed" type="text" inputmode="numeric" placeholder="30" style="width:140px"></div>
+      ${payModeHtml('np', null)}
       <span class="grow"></span><button type="button" class="btn ghost" id="nc">取消</button><button class="btn">建立活動</button></div><div id="nm" style="margin-top:12px"></div></form>`;
     $('en').focus();
+    bindPayMode('np');
     $('nc').onclick = () => { $('newbox').innerHTML = ''; };
     $('nf').onsubmit = async ev => {
       ev.preventDefault();
-      const r = await rpc('admin_create_event', { p_patch: { name: $('en').value, start_date: $('es').value, end_date: $('ee').value, default_break_minutes: $('eb').value, pay_within_days: $('ed').value } });
-      if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + (r.error === 'bad_name' ? '請填活動名稱。' : '請確認日期，結束日不能早於開始日。') + '</div>'; return; }
+      const pm = readPayMode('np');
+      if ($('npmode').value === 'date' && !pm.pay_date) { $('nm').innerHTML = '<div class="msg err">請選擇發薪日。</div>'; return; }
+      const r = await rpc('admin_create_event', { p_patch: Object.assign({ name: $('en').value, start_date: $('es').value, end_date: $('ee').value, default_break_minutes: $('eb').value }, pm) });
+      if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + (PAY_ERR[r.error] || (r.error === 'bad_name' ? '請填活動名稱。' : '請確認日期，結束日不能早於開始日。')) + '</div>'; return; }
       if ($('eh').value) await rpc('admin_update_event', { p_id: r.id, p_patch: { default_hourly_rate: $('eh').value } });
       S.filter.nextRtab = 'shifts'; flash('ok', '活動與報名連結已建立。先新增班次，再把報名連結傳給工讀生。'); go('#/events/' + r.id + '/staff');
     };
@@ -300,7 +321,7 @@ function stepInfo(e) {
     att: { done: c.att.length > 0 && !openAtt, s: openAtt ? openAtt + ' 筆未簽退' : c.att.length + ' 筆紀錄', attn: openAtt > 0 },
     review: { done: live.length > 0 && !issues, s: issues ? '剩 ' + issues + ' 件' : live.length ? '完成' : '尚無薪資單', attn: issues > 0 },
     publish: { done: live.length > 0 && pub === live.length, s: pub + ' / ' + live.length, attn: live.length > 0 && pub < live.length },
-    payout: { done: !!e.pay_date && e.pay_date <= t && live.length > 0 && pub === live.length, s: e.pay_date ? '發薪日 ' + md(e.pay_date) : '發薪日未設', attn: !e.pay_date }
+    payout: { done: !!payDateOf(e) && payDateOf(e) <= t && live.length > 0 && pub === live.length, s: payDateOf(e) ? '發薪日 ' + md(payDateOf(e)) : '發薪日未設', attn: !payDateOf(e) }
   };
 }
 async function viewEvent(id, step) {
@@ -575,11 +596,10 @@ const stepPayout = {
     const pub = live.filter(s => s.status === 'published');
     const noAcct = pub.filter(s => !s.pay_account).length;
     return `<div class="card pad" style="margin-bottom:14px"><div class="row">
-        <div><label for="pd">發薪日</label><input id="pd" type="date" value="${esc(e.pay_date || '')}" style="width:180px"></div>
-        <div><label for="pw">活動後幾天內發薪</label><input id="pw" type="text" inputmode="numeric" value="${esc(e.pay_within_days == null ? '' : e.pay_within_days)}" style="width:140px"></div>
+        ${payModeHtml('pp', e)}
         <button class="btn ghost" id="pdsave">儲存並套用到全部薪資單</button><span class="grow"></span>
         <button class="btn" id="csv" ${pub.length ? '' : 'disabled'}>下載匯款清單（CSV）</button></div>
-        <p class="sub" style="margin-top:10px">薪資單上必須顯示發薪日。匯款清單只含已發布、屬於僱傭的薪資單，可直接在 Excel 開啟後交給銀行或會計。</p></div>
+        <p class="sub" style="margin-top:10px">${e.pay_date ? '目前發薪日：' + esc(d(e.pay_date)) + '。' : e.pay_within_days != null ? '目前為活動結束後 ' + esc(e.pay_within_days) + ' 天內發薪，薪資單發薪日為 ' + esc(d(addDays(e.end_date || e.start_date, Number(e.pay_within_days)))) + '。' : '<span style="color:var(--warn)">尚未設定發薪日。</span>'}薪資單上必須顯示發薪日。匯款清單只含已發布、屬於僱傭的薪資單，可直接在 Excel 開啟後交給銀行或會計。</p></div>
       <div class="stats"><div class="card stat"><div class="k">已發布</div><div class="v">${pub.length} / ${live.length}</div></div>
         <div class="card stat"><div class="k">匯款總額</div><div class="v">${money(pub.reduce((a, s) => a + Number(s.net || 0), 0))}</div></div>
         <div class="card stat"><div class="k">缺匯款帳戶</div><div class="v" style="${noAcct ? 'color:var(--warn)' : ''}">${noAcct}</div></div></div>
@@ -590,9 +610,13 @@ const stepPayout = {
       </table></div>`;
   },
   bind: e => {
+    bindPayMode('pp');
     $('pdsave').onclick = async () => {
-      const r = await rpc('admin_update_event', { p_id: e.id, p_patch: { pay_date: $('pd').value, pay_within_days: $('pw').value, apply_to_payslips: true } });
-      flash(r.ok ? 'ok' : 'err', r.ok ? '發薪日已套用到 ' + r.payslips_updated + ' 張薪資單。' : '儲存失敗。'); refreshEvent(e, 'payout');
+      const pm = readPayMode('pp');
+      if ($('ppmode').value === 'date' && !pm.pay_date) { flash('err', '請選擇發薪日。'); return refreshEvent(e, 'payout'); }
+      if ($('ppmode').value === 'days' && pm.pay_within_days === '') { flash('err', '請填活動結束後幾天內發薪。'); return refreshEvent(e, 'payout'); }
+      const r = await rpc('admin_update_event', { p_id: e.id, p_patch: Object.assign({ apply_to_payslips: true }, pm) });
+      flash(r.ok ? 'ok' : 'err', r.ok ? '發薪日 ' + d(r.pay_date) + ' 已套用到 ' + r.payslips_updated + ' 張薪資單。' : (PAY_ERR[r.error] || '儲存失敗。')); refreshEvent(e, 'payout');
     };
     const c = $('csv'); if (c) c.onclick = async () => {
       // 下載當下向伺服器取最新的帳戶與核對狀態，不用畫面上的舊資料
@@ -874,16 +898,16 @@ async function viewDoc(personId, kind) {
 /* ---------- 薪資發放 ---------- */
 function viewPayouts() {
   const t = today();
-  const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => (a.pay_date || '9999') < (b.pay_date || '9999') ? -1 : 1);
-  const todo = evs.filter(e => !e.pay_date || e.published < e.total - e.void);
+  const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => (payDateOf(a) || '9999') < (payDateOf(b) || '9999') ? -1 : 1);
+  const todo = evs.filter(e => !payDateOf(e) || e.published < e.total - e.void);
   shell('payouts', `<div class="head"><div><h1>薪資發放</h1><p class="sub">依發薪日排序。未設發薪日或尚未全部發布的活動排在待辦。</p></div></div>
     <div class="stats"><div class="card stat"><div class="k">待辦活動</div><div class="v" style="${todo.length ? 'color:var(--warn)' : ''}">${todo.length}</div></div>
       <div class="card stat"><div class="k">未發布薪資單</div><div class="v">${evs.reduce((a, e) => a + (e.total - e.void - e.published), 0)}</div></div>
-      <div class="card stat"><div class="k">30 天內應發總額</div><div class="v">${money(evs.filter(e => e.pay_date && e.pay_date >= t && e.pay_date <= addDays(t, 30)).reduce((a, e) => a + Number(e.net_sum || 0), 0))}</div></div></div>
+      <div class="card stat"><div class="k">30 天內應發總額</div><div class="v">${money(evs.filter(e => payDateOf(e) && payDateOf(e) >= t && payDateOf(e) <= addDays(t, 30)).reduce((a, e) => a + Number(e.net_sum || 0), 0))}</div></div></div>
     <div class="card tablebox"><table><thead><tr><th>發薪日</th><th>活動</th><th class="r">已發布</th><th class="r">實發合計</th><th>狀態</th></tr></thead>
-      <tbody>${evs.map(e => { const pending = e.total - e.void - e.published; const late = e.pay_date && e.pay_date < t && pending > 0;
-        return `<tr data-k="${esc(e.id)}"><td>${e.pay_date ? esc(d(e.pay_date)) : '<span class="badge warn">未設</span>'}</td><td><b>${esc(e.name)}</b></td><td class="r">${e.published} / ${e.total - e.void}</td><td class="r">${money(e.net_sum)}</td>
-        <td>${late ? '<span class="badge error">已過發薪日仍有未發布</span>' : pending ? '<span class="badge warn">尚有 ' + pending + ' 張未發布</span>' : !e.pay_date ? '<span class="badge warn">待設發薪日</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || '<tr><td colspan="5" class="empty">還沒有薪資單</td></tr>'}</tbody></table></div>`);
+      <tbody>${evs.map(e => { const pending = e.total - e.void - e.published; const late = payDateOf(e) && payDateOf(e) < t && pending > 0;
+        return `<tr data-k="${esc(e.id)}"><td>${payDateOf(e) ? esc(d(payDateOf(e))) : '<span class="badge warn">未設</span>'}</td><td><b>${esc(e.name)}</b></td><td class="r">${e.published} / ${e.total - e.void}</td><td class="r">${money(e.net_sum)}</td>
+        <td>${late ? '<span class="badge error">已過發薪日仍有未發布</span>' : pending ? '<span class="badge warn">尚有 ' + pending + ' 張未發布</span>' : !payDateOf(e) ? '<span class="badge warn">待設發薪日</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || '<tr><td colspan="5" class="empty">還沒有薪資單</td></tr>'}</tbody></table></div>`);
   on('tbody tr[data-k]', 'click', (ev, tr) => go('#/events/' + tr.dataset.k + '/payout'));
 }
 
