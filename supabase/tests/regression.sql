@@ -51,6 +51,15 @@ begin
   update public.events set signup_code = 'regress-join-1' where id = ev;
   update public.events set signup_code = 'regress-join-2', recruiting = true where id = ev2;
 
+  -- 15. 沒上傳身分證正反面與存摺不能報名；補齊後可以
+  r := public.payroll_apply(tok1, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
+  if r->>'error' is distinct from 'missing_docs' or jsonb_array_length(r->'missing') <> 3 then fails := fails || ' [15a apply without documents: ' || r::text || ']'; end if;
+  insert into public.people_documents(person_id, kind, path) values (p1, 'id_front', p1 || '/id_front-x.jpg'), (p1, 'id_back', p1 || '/id_back-x.jpg');
+  r := public.payroll_apply(tok1, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
+  if r->>'error' is distinct from 'missing_docs' or r->'missing' <> '["bankbook"]'::jsonb then fails := fails || ' [15b partial documents: ' || r::text || ']'; end if;
+  insert into public.people_documents(person_id, kind, path) values (p1, 'bankbook', p1 || '/bankbook-x.jpg'),
+    (p2, 'id_front', p2 || '/id_front-x.jpg'), (p2, 'id_back', p2 || '/id_back-x.jpg'), (p2, 'bankbook', p2 || '/bankbook-x.jpg');
+
   -- 5. 報名不能夾帶別場活動的班次（即使該場沒有班次）
   insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values (ev, v_today, '21:00', '22:00', 1) returning id into s_other;
   if public.payroll_apply(tok1, 'regress-join-2', jsonb_build_object('shift_ids', jsonb_build_array(s_other)))->>'error' is distinct from 'bad_shift' then fails := fails || ' [5 cross-event shift accepted]'; end if;
@@ -59,6 +68,7 @@ begin
   perform public.payroll_apply(tok2, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
   select id into a1 from public.applications where event_id = ev and person_id = p1;
   select id into a2 from public.applications where event_id = ev and person_id = p2;
+  if a1 is null or a2 is null then fails := fails || ' [15c apply with documents failed]'; end if;
 
   -- 6. 未錄取的人不能簽到；活動結束隔天不能簽到
   insert into public.checkin_tickets(ticket_hash, event_id, expires_at) values (encode(extensions.digest('regress-ticket', 'sha256'), 'hex'), ev, now() + interval '10 minutes');
@@ -148,5 +158,5 @@ begin
   if public.admin_change_password(atok, 'oldpass99', '1234567')->>'error' is distinct from 'too_short' then fails := fails || ' [14g change 7 accepted]'; end if;
   if (public.admin_change_password(atok, 'oldpass99', '12345678')->>'ok')::boolean is not true then fails := fails || ' [14h change 8 rejected]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 14 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  if fails = '' then raise exception 'PASS 全部 15 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

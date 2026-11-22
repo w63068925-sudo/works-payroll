@@ -380,7 +380,7 @@ function bindDocs(after) {
   app.querySelectorAll('input[data-doc]').forEach(inp => inp.addEventListener('change', async () => {
     const f = inp.files[0], st = document.getElementById('st-' + inp.dataset.doc); if (!f) return;
     st.className = 'st'; st.textContent = '上傳中…';
-    try { await uploadDoc(inp.dataset.doc, f); st.className = 'st ok'; st.textContent = '已上傳'; if (after) after(); }
+    try { await uploadDoc(inp.dataset.doc, f); st.className = 'st ok'; st.textContent = '已上傳'; if (after) after(inp.dataset.doc); }
     catch (err) { st.className = 'st'; st.style.color = 'var(--danger)'; st.textContent = err.message; }
     inp.value = '';
   }));
@@ -390,11 +390,17 @@ function viewDocs(message) {
   app.innerHTML = brand + `<h1>上傳證件影本</h1>
     <p class="sub">加保勞保和匯款需要核對。照片只有你本人和沃克思的管理人員看得到。</p>
     ${message ? '<div class="msg ok">' + esc(message) + '</div>' : ''}
-    <h2>請拍照或選擇檔案</h2>${docsBlock({})}
-    <button class="btn" id="done">完成</button>
-    <p class="foot">存摺請拍封面（有戶名與帳號的那一頁），不要拍提款卡或信用卡。現在沒帶在身邊也可以先按完成，之後到「我的資料」補傳。</p>`;
-  bindDocs();
-  document.getElementById('done').addEventListener('click', () => state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList());
+    <h2>請拍照或選擇檔案（三項都必填）</h2>${docsBlock({})}
+    <div id="dm"></div>
+    <button class="btn" id="done">完成，繼續報名</button>
+    <p class="foot">存摺請拍封面（有戶名與帳號的那一頁），不要拍提款卡或信用卡。三項都上傳後才能報名班次。</p>`;
+  const got = new Set();
+  bindDocs(k => { got.add(k); document.getElementById('dm').innerHTML = ''; });
+  document.getElementById('done').addEventListener('click', () => {
+    const left = DOCS.filter(([k]) => !got.has(k)).map(([, t]) => t);
+    if (left.length) { document.getElementById('dm').innerHTML = '<div class="msg err">還沒上傳：' + esc(left.join('、')) + '。三項都上傳後才能報名。</div>'; return; }
+    state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList();
+  });
 }
 async function viewProfile(message, focusLine) {
   document.title = '我的資料｜沃克思';
@@ -451,10 +457,10 @@ async function viewRecruit(message) {
   try { pub = await rpc('payroll_event_public', { p_join: state.join }); } catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewRecruit()">再試一次</button>'; return; }
   if (!pub.ok) { saveJoin(null); return state.token ? viewList() : viewLogin(PERR.bad_join); }
   const ev = pub.event, form = ev.form || {}, qs = form.questions || [];
-  let mine = null, hasPhoto = false;
+  let mine = null, hasPhoto = false, docs = {}, missingDocs = [];
   if (state.token) {
     const r = await rpc('payroll_my_application', { p_token: state.token, p_join: state.join });
-    if (!r.ok) { saveToken(null); } else { mine = r.application; hasPhoto = r.has_photo; }
+    if (!r.ok) { saveToken(null); } else { mine = r.application; hasPhoto = r.has_photo; docs = r.documents || {}; missingDocs = r.missing_docs || []; }
   }
   const my = (mine && mine.shifts) || {}, ans = (mine && mine.answers) || {};
   const days = {}; pub.shifts.forEach(s => (days[s.work_date] = days[s.work_date] || []).push(s));
@@ -486,6 +492,7 @@ async function viewRecruit(message) {
         ? `<select id="q_${esc(q.id)}" data-q="${esc(q.id)}"><option value="">請選擇</option>${(q.options || []).map(o => `<option ${ans[q.id] === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
         : `<input id="q_${esc(q.id)}" type="text" data-q="${esc(q.id)}" value="${esc(ans[q.id] || '')}">`)).join('') + '</div>' : ''}
       ${form.experience ? `<h2>相關經驗</h2><textarea id="exp" style="width:100%;min-height:96px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:16px" placeholder="曾擔任過的活動、品牌與工作內容">${esc((mine && mine.experience) || '')}</textarea>` : ''}
+      ${missingDocs.length && ev.recruiting ? '<h2>證件影本（必填）</h2><div class="msg warn">報名前要先上傳身分證正反面和存摺封面，資料只有你本人和沃克思的管理人員看得到。</div>' + docsBlock(docs) : ''}
       ${form.photo ? `<h2>個人照片</h2><div class="card pad" style="padding-top:4px;padding-bottom:4px"><div class="doc"><div><div>清楚的半身生活照</div><div class="st ${hasPhoto ? 'ok' : ''}" id="st-photo">${hasPhoto ? '已上傳' : '尚未上傳'}</div></div><label class="filebtn">${hasPhoto ? '重新上傳' : '選擇照片'}<input type="file" accept="image/*" data-doc="photo"></label></div></div>` : ''}
       <div id="m"></div>
       ${ev.recruiting ? `<button class="btn" id="go">${mine ? '更新報名' : '送出報名'}</button>` : ''}
@@ -512,7 +519,7 @@ async function viewRecruit(message) {
       const r = await rpc('payroll_apply', { p_token: state.token, p_join: state.join, p_data: { shift_ids, answers, experience: exp ? exp.value : '' } });
       if (r.ok) { window.scrollTo(0, 0); return viewRecruit(mine ? '報名已更新。' : '已送出報名。錄取結果會顯示在「我的排班」。'); }
       if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
-      m.innerHTML = '<div class="msg err">' + esc({ closed: '這場活動目前不開放報名。', no_shift: '請至少選一個班次。', bad_shift: '班次有變動，請重新整理頁面。', missing_answer: '請回答「' + (r.question || '') + '」。', bad_answer: '請重新選擇「' + (r.question || '') + '」。', missing_experience: '請填寫相關經驗。', missing_photo: '請上傳個人照片。', bad_join: PERR.bad_join }[r.error] || '送出失敗，請再試一次。') + '</div>';
+      m.innerHTML = '<div class="msg err">' + esc({ closed: '這場活動目前不開放報名。', no_shift: '請至少選一個班次。', bad_shift: '班次有變動，請重新整理頁面。', missing_answer: '請回答「' + (r.question || '') + '」。', bad_answer: '請重新選擇「' + (r.question || '') + '」。', missing_experience: '請填寫相關經驗。', missing_photo: '請上傳個人照片。', missing_docs: '請先上傳' + ((r.missing || []).map(k => ({ id_front: '身分證正面', id_back: '身分證反面', bankbook: '存摺封面' })[k]).join('、') || '證件影本') + '，三項都上傳後才能報名。', bad_join: PERR.bad_join }[r.error] || '送出失敗，請再試一次。') + '</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
     go.disabled = false;
   });

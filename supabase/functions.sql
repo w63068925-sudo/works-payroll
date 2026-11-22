@@ -1,4 +1,4 @@
--- 自動匯出：Supabase public schema 的全部函式（2026-11-22，管理員密碼下限改為 8）
+-- 自動匯出：Supabase public schema 的全部函式（2026-11-23，報名必須上傳證件）
 -- 這是資料庫目前的實際定義，修改請用 migration，改完重新匯出。
 
 CREATE OR REPLACE FUNCTION public.admin_actor(p_token text)
@@ -1305,6 +1305,9 @@ begin
   if coalesce((e.form_config->>'photo')::boolean, false) and not exists (select 1 from public.people_documents where person_id = v_pid and kind = 'photo') then
     return jsonb_build_object('ok', false, 'error', 'missing_photo');
   end if;
+  if jsonb_array_length(public.person_missing_docs(v_pid)) > 0 then
+    return jsonb_build_object('ok', false, 'error', 'missing_docs', 'missing', public.person_missing_docs(v_pid));
+  end if;
   insert into public.applications(event_id, person_id, answers, experience)
   values (e.id, v_pid, v_ans, nullif(left(btrim(coalesce(p_data->>'experience','')), 2000), ''))
   on conflict (event_id, person_id) do update set answers = excluded.answers, experience = excluded.experience, status = 'active', updated_at = now()
@@ -1759,6 +1762,8 @@ begin
   select ap.* into a from public.applications ap join public.events e on e.id = ap.event_id where e.signup_code = btrim(coalesce(p_join,'')) and ap.person_id = v_pid;
   return jsonb_build_object('ok', true,
     'has_photo', exists (select 1 from public.people_documents where person_id = v_pid and kind = 'photo'),
+    'documents', coalesce((select jsonb_object_agg(d.kind, d.uploaded_at) from public.people_documents d where d.person_id = v_pid), '{}'::jsonb),
+    'missing_docs', public.person_missing_docs(v_pid),
     'application', case when a.id is null then null else jsonb_build_object('status', a.status, 'answers', a.answers, 'experience', a.experience,
       'contract_accepted_at', a.contract_accepted_at,
       'shifts', coalesce((select jsonb_object_agg(x.shift_id, x.status) from public.application_shifts x where x.application_id = a.id), '{}'::jsonb)) end);
@@ -1961,6 +1966,17 @@ CREATE OR REPLACE FUNCTION public.payslip_blocked(p payslips)
 AS $function$
   select exists (select 1 from public.data_issues i where not i.resolved and i.severity = 'error'
     and (i.payslip_id = p.id or (i.payslip_id is null and i.person_id = p.person_id and (i.event_id is null or i.event_id = p.event_id))));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.person_missing_docs(p_person uuid)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select coalesce(jsonb_agg(k order by o), '[]'::jsonb) from unnest(array['id_front','id_back','bankbook']) with ordinality t(k, o)
+  where not exists (select 1 from public.people_documents d where d.person_id = p_person and d.kind = t.k);
 $function$
 ;
 
