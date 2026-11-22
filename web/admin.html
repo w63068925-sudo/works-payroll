@@ -135,6 +135,8 @@ try { S.token = sessionStorage.getItem('payroll_admin_token'); } catch (e) {}
 function saveToken(t) { S.token = t; try { t ? sessionStorage.setItem('payroll_admin_token', t) : sessionStorage.removeItem('payroll_admin_token'); } catch (e) {} }
 
 const NO_TOKEN = ['admin_setup', 'admin_login'];
+// 和資料庫一樣以字元（而非 UTF-16 碼元）計算長度
+const pwShort = s => Array.from(s || '').length < 8;
 async function rpc(name, body) {
   const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(NO_TOKEN.includes(name) ? (body || {}) : Object.assign({ p_token: S.token }, body || {})) });
   if (!res.ok) throw new Error('連線失敗（' + res.status + '）');
@@ -178,6 +180,7 @@ function viewAuth(mode, message) {
   $('f').onsubmit = async e => {
     e.preventDefault(); const m = $('m'); m.innerHTML = '';
     const u = $('u').value, p = $('p').value;
+    if (setup && pwShort(p)) { m.innerHTML = '<div class="msg err">密碼至少要 8 個字。</div>'; return; }
     try {
       if (setup) {
         const r = await rpc('admin_setup', { p_code: $('code').value, p_username: u, p_password: p });
@@ -958,7 +961,7 @@ async function viewSettings(tab) {
       <div id="am" style="margin-top:12px"></div>
       <form id="cpf" class="card pad" style="margin-top:16px;max-width:460px"><b>更改我的密碼</b>
         <label for="op">目前的密碼</label><input id="op" type="password" autocomplete="current-password" required>
-        <label for="np">新密碼（至少 8 個字）</label><input id="np" type="password" autocomplete="new-password" minlength="8" required>
+        <label for="np">新密碼（至少 8 個字）</label><input id="np" type="password" autocomplete="new-password" required>
         <div id="cm" style="margin-top:12px"></div><button class="btn block">更改密碼</button></form></div>
       <form id="af" class="card pad"><b>新增管理員</b><p class="sub" style="margin:4px 0 0">建立後把帳號和密碼私下交給對方，請對方登入後到這裡更改密碼。管理員可以看到所有人員的個資與證件。</p>
         <label for="nu">帳號</label><input id="nu" type="text" autocapitalize="none" autocomplete="off" placeholder="amy 或 amy@example.com" required>
@@ -987,12 +990,14 @@ async function viewSettings(tab) {
     $('gen').onclick = () => { $('npw').value = rnd(); };
     $('af').onsubmit = async ev => {
       ev.preventDefault();
+      if (pwShort($('npw').value)) { $('nm').innerHTML = '<div class="msg err">密碼至少要 8 個字。</div>'; return; }
       const r = await rpc('admin_create_admin', { p_username: $('nu').value, p_password: $('npw').value });
       if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + ({ bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 8 個字。', taken: '這個帳號已經存在。' }[r.error] || '新增失敗。') + '</div>'; return; }
       flash('ok', '已新增管理員 ' + $('nu').value.trim().toLowerCase() + '。請把帳號與初始密碼私下交給對方。'); viewSettings('admins');
     };
     $('cpf').onsubmit = async ev => {
       ev.preventDefault();
+      if (pwShort($('np').value)) { $('cm').innerHTML = '<div class="msg err">新密碼至少要 8 個字。</div>'; return; }
       const r = await rpc('admin_change_password', { p_old: $('op').value, p_new: $('np').value });
       $('cm').innerHTML = r.ok ? '<div class="msg ok">密碼已更改，其他裝置上的登入已登出。</div>' : '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 8 個字。' : '目前的密碼不正確。') + '</div>';
       if (r.ok) { $('op').value = ''; $('np').value = ''; }
