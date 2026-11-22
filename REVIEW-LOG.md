@@ -89,3 +89,7 @@
 ## 待補審：班表行事曆＋預設指定發薪日 — 2026-11-23
 - 範圍：新增 admin_calendar（STABLE、需管理員 token、區間上限 62 天）、web/admin.html 班表頁（全部／單一活動、上下月、年月選擇）、發薪方式預設改指定日期、regression 第 17 組
 - 狀態：使用者指示先部署後補審；額度恢復後以 sol（medium）審查此 commit
+
+## 待補審（安全相關，sol high）：舊表證件一次性匯入 — 2026-11-23
+- 範圍：docs Edge Function 新增 legacy_import（以一次性匯入金鑰驗證，金鑰 SHA-256 雜湊存 app_settings、7 天到期；只補系統沒有的證件、不覆蓋）、doc_import_ok（僅 service role 可執行）、apps-script/import-documents.gs
+- 狀態：使用者指示先部署後補審；額度恢復後審查此 commit

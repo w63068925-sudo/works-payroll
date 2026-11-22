@@ -42,6 +42,30 @@ Deno.serve(async (req: Request) => {
       await sb.from("audit_log").insert({ actor: String(pid), action: "document_uploaded", table_name: "people_documents", row_id: pid, detail: { kind } });
       return json({ ok: true });
     }
+    // 舊表證件一次性匯入（Apps Script 從表單擁有者的雲端送來）：只補沒有的，不覆蓋本人上傳的
+    if (b.action === "legacy_import") {
+      const { data: ok } = await sb.rpc("doc_import_ok", { p_key: String(b.import_key ?? "") });
+      if (ok !== true) return json({ ok: false, error: "key" }, 401);
+      if (!["id_front", "id_back", "bankbook"].includes(kind)) return json({ ok: false, error: "bad_kind" });
+      const nid = String(b.national_id ?? "").trim().toUpperCase();
+      if (!/^[A-Z][0-9A-Z]\d{8}$/.test(nid)) return json({ ok: false, error: "bad_id" });
+      const { data: person } = await sb.from("people").select("id").eq("national_id", nid).maybeSingle();
+      if (!person) return json({ ok: false, error: "no_person" });
+      const { data: has } = await sb.from("people_documents").select("path").eq("person_id", person.id).eq("kind", kind).maybeSingle();
+      if (has) return json({ ok: true, skipped: "exists" });
+      const type = String(b.content_type ?? ""), ext = EXT[type];
+      if (!ext) return json({ ok: false, error: "bad_type", type });
+      let bytes: Uint8Array;
+      try { bytes = Uint8Array.from(atob(String(b.data ?? "")), (c) => c.charCodeAt(0)); } catch { return json({ ok: false, error: "bad_data" }); }
+      if (bytes.length < 100 || bytes.length > 8 * 1024 * 1024) return json({ ok: false, error: "bad_size", size: bytes.length });
+      const path = `${person.id}/${kind}-legacy-${Date.now()}.${ext}`;
+      const { error: stErr } = await sb.storage.from("documents").upload(path, bytes, { contentType: type, upsert: false });
+      if (stErr) return json({ ok: false, error: "storage" });
+      const { error: insErr } = await sb.from("people_documents").insert({ person_id: person.id, kind, path, uploaded_at: new Date().toISOString() });
+      if (insErr) { await sb.storage.from("documents").remove([path]); return json({ ok: true, skipped: "exists" }); }
+      await sb.from("audit_log").insert({ actor: "legacy_import", action: "document_imported", table_name: "people_documents", row_id: person.id, detail: { kind, source: String(b.source ?? "").slice(0, 80) } });
+      return json({ ok: true, imported: true });
+    }
     if (b.action === "view_url") {
       const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
       if (!actor) return json({ ok: false, error: "session" });

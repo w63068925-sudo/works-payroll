@@ -1065,6 +1065,19 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.doc_import_ok(p_key text)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select length(coalesce(p_key, '')) >= 32
+    and coalesce(public.setting('doc_import_key_expires'), '') <> ''
+    and public.setting('doc_import_key_expires')::timestamptz > now()
+    and encode(extensions.digest(p_key, 'sha256'), 'hex') = public.setting('doc_import_key_hash');
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.line_bind(p_code text, p_user text)
  RETURNS jsonb
  LANGUAGE plpgsql
