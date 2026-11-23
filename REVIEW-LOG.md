@@ -97,3 +97,7 @@
 ## 待補審（個資匯出，sol high）：加保名冊 Excel 匯出 — 2026-11-23
 - 範圍：admin_roster（STABLE、需管理員 token、狀態白名單、上限 5,000 列）、admin_log_export（匯出前先寫 audit_log，失敗不產生檔案）、web/admin.html 加保名冊頁與自製 XLSX 產生器（文字欄一律字串、不依賴外部套件）、regression 第 18 組
 - 狀態：先部署後補審；額度恢復後審查此 commit
+
+## 待補審（含個資，sol high）：資料夾全部舊表暫存匯入 — 2026-11-23
+- 範圍：legacy_sheets 暫存表（RLS、無對外權限，整理後刪除）、docs Edge Function 新增 legacy_sheet 與 legacy_import 的 check_only、apps-script/import-documents.gs 改為整個資料夾（分段存進度、自動接續觸發器）
+- 狀態：先部署後補審

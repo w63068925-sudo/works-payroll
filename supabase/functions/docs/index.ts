@@ -42,6 +42,18 @@ Deno.serve(async (req: Request) => {
       await sb.from("audit_log").insert({ actor: String(pid), action: "document_uploaded", table_name: "people_documents", row_id: pid, detail: { kind } });
       return json({ ok: true });
     }
+    // 舊表原始內容暫存（Apps Script 送來），之後在資料庫內整理匯入
+    if (b.action === "legacy_sheet") {
+      const { data: ok } = await sb.rpc("doc_import_ok", { p_key: String(b.import_key ?? "") });
+      if (ok !== true) return json({ ok: false, error: "key" }, 401);
+      const fileId = String(b.file_id ?? "");
+      if (!/^[A-Za-z0-9_-]{20,80}$/.test(fileId)) return json({ ok: false, error: "bad_id" });
+      const vals = b.values;
+      if (!Array.isArray(vals) || vals.length > 5000 || !vals.every((r) => Array.isArray(r) && r.length <= 200)) return json({ ok: false, error: "bad_values" });
+      const { error } = await sb.from("legacy_sheets").upsert({ file_id: fileId, title: String(b.title ?? "").slice(0, 300), sheet_name: String(b.sheet_name ?? "").slice(0, 100), vals, received_at: new Date().toISOString() });
+      if (error) return json({ ok: false, error: "db" });
+      return json({ ok: true, rows: vals.length });
+    }
     // 舊表證件一次性匯入（Apps Script 從表單擁有者的雲端送來）：只補沒有的，不覆蓋本人上傳的
     if (b.action === "legacy_import") {
       const { data: ok } = await sb.rpc("doc_import_ok", { p_key: String(b.import_key ?? "") });
@@ -53,6 +65,7 @@ Deno.serve(async (req: Request) => {
       if (!person) return json({ ok: false, error: "no_person" });
       const { data: has } = await sb.from("people_documents").select("path").eq("person_id", person.id).eq("kind", kind).maybeSingle();
       if (has) return json({ ok: true, skipped: "exists" });
+      if (b.check_only === true) return json({ ok: true, need: true });
       const type = String(b.content_type ?? ""), ext = EXT[type];
       if (!ext) return json({ ok: false, error: "bad_type", type });
       let bytes: Uint8Array;
