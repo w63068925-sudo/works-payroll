@@ -576,15 +576,31 @@ async function renderLine(code) {
   document.getElementById('recheck').addEventListener('click', async () => { const r = await rpc('payroll_line_status', { p_token: state.token }); if (r.linked) renderLine(); else document.querySelector('#linebox .hint').textContent = '還沒收到綁定碼。請確認已加入好友，並把 ' + code + ' 傳給官方帳號。'; });
 }
 
-async function viewCheckin(action) {
+async function viewCheckin(action, ack) {
   document.title = '簽到退｜沃克思';
   if (!action) app.innerHTML = brand + '<div class="skeleton" style="height:220px"></div>';
   let r;
-  try { r = await rpc('payroll_clock', { p_token: state.token, p_ticket: state.ticket, p_action: action || 'status' }); }
+  try { r = await rpc('payroll_clock', { p_token: state.token, p_ticket: state.ticket, p_action: action || 'status', p_ack: !!ack }); }
   catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewCheckin()">再試一次</button>'; return; }
   if (r.error === 'session') { saveToken(null); return viewLogin('請先登入，登入後就可以簽到。'); }
   if (r.error === 'ticket') { saveTicket(null); app.innerHTML = brand + '<h1>簽到連結已失效</h1><p class="sub" style="margin-top:8px">請重新掃描現場的 QR 碼。</p><button class="btn ghost" onclick="viewList()">查看我的薪資</button>'; return; }
   if (!r.error && r.block && (r.state || 'none') === 'none') r.error = r.block;
+  // 提早到、遲到、超過表定下班：先讓本人看清楚計薪方式並確認，才完成簽到退
+  if (r.error === 'need_ack' && r.notice) {
+    const title = { early: '提早到場', late: '遲到', overtime: '超過表定下班' }[r.notice.kind] || '請確認';
+    app.innerHTML = brand + `
+      <p class="sub">${esc(r.event || '')}</p>
+      <h1>${esc(title)}</h1>
+      <div class="card hero" style="margin-top:18px;text-align:left">
+        <p style="margin:0;line-height:1.8">${esc(r.notice.text)}</p>
+      </div>
+      <button class="btn big ${action === 'out' ? 'out' : ''}" id="ack">我知道了，${action === 'out' ? '簽退' : '簽到'}</button>
+      <button class="btn ghost" id="back">先不要</button>
+      <p class="foot">按下確認後會記錄你看到的這段說明與時間。對計薪有疑問請當場告訴現場負責人。</p>`;
+    document.getElementById('ack').addEventListener('click', ev => { ev.target.disabled = true; viewCheckin(action, true); });
+    document.getElementById('back').addEventListener('click', () => viewCheckin());
+    return;
+  }
   const note = { not_scheduled: '你今天沒有被排到這場活動的班，無法簽到。如果現場臨時需要你支援，請請負責人在後台補登出勤。', not_event_day: '今天不在這場活動的日期內，無法簽到。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '找不到簽到紀錄，請先簽到。' }[r.error];
   const st = r.state || 'none';
   app.innerHTML = brand + `
@@ -594,6 +610,7 @@ async function viewCheckin(action) {
       <div class="label">現在時間</div>
       <div class="clock">${esc(r.now || '--:--')}</div>
       <dl class="kv" style="margin-top:16px;text-align:left">
+        ${r.sched_in ? '<dt>表定時段</dt><dd>' + esc(r.sched_in) + '–' + esc(r.sched_out || '') + '</dd>' : ''}
         <dt>簽到</dt><dd>${esc(r.clock_in || '—')}</dd>
         <dt>簽退</dt><dd>${esc(r.clock_out || '—')}</dd>
       </dl>

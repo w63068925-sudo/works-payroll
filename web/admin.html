@@ -126,6 +126,11 @@ tbody tr.on{background:var(--accent-soft)}
 .qrbox svg{display:block;width:100%;height:auto}
 .qrscreen{position:fixed;inset:0;background:var(--paper);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
 .qrscreen .qrbox svg{width:min(72vw,62vh,440px)}
+.docgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:8px}
+.doccell .dim{margin-bottom:4px}
+.docthumb{min-height:84px;border:1px dashed var(--line);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px;text-align:center}
+.docthumb img{max-width:100%;max-height:160px;border-radius:4px;display:block}
+.docthumb.empty-doc{background:var(--paper)}
 button.stat{font:inherit;color:inherit;text-align:left;cursor:pointer;border-bottom:3px solid var(--line)}
 button.stat:hover{background:var(--soft)}
 button.stat.sel{border-bottom-color:var(--ink)}
@@ -514,6 +519,13 @@ const stepStaff = {
 };
 
 /* 步驟二：出勤 */
+// 提早到、遲到、超時的標記：提早與超時預設不計薪，主管核准後才計
+function attBadge(r, side) {
+  if (side === 'in' && r.in_notice === 'early') return ` <span class="badge ${r.early_approved ? 'ok' : ''}">早 ${esc(r.in_notice_minutes)} 分${r.early_approved ? '・已核准' : '・未計'}</span>`;
+  if (side === 'in' && r.in_notice === 'late') return ` <span class="badge warn">遲到 ${esc(r.in_notice_minutes)} 分</span>`;
+  if (side === 'out' && r.out_notice === 'overtime') return ` <span class="badge ${r.ot_approved ? 'ok' : 'warn'}">超時 ${esc(r.out_notice_minutes)} 分${r.ot_approved ? '・已核准' : '・待核准'}</span>`;
+  return '';
+}
 const stepAtt = {
   html: () => {
     const c = S.cache, cfg = c.settings;
@@ -526,10 +538,11 @@ const stepAtt = {
         <button class="btn ghost" id="addatt">補登出勤</button><button class="btn" id="gen">依出勤產生薪資單</button></div></div>
       ${splitWrap(`<p class="sub" style="margin-bottom:10px">共 ${c.att.length} 筆${open ? '，<b style="color:var(--warn)">' + open + ' 筆尚未簽退</b>，產生薪資單前請先補上下班時間' : ''}。點任一列可修改。</p>
         <div class="card tablebox"><table>
-        <thead><tr><th>姓名</th><th>日期</th><th>上班</th><th>下班</th><th class="r">休息</th><th class="r">工時</th><th>來源</th></tr></thead>
+        <thead><tr><th>姓名</th><th>日期</th><th>表定</th><th>上班</th><th>下班</th><th class="r">休息</th><th class="r">計薪工時</th><th>來源</th></tr></thead>
         <tbody>${c.att.map(r => `<tr data-k="${esc(r.id)}" class="${S.detail && S.detail.key === r.id ? 'on' : ''}"><td>${esc(r.name)}</td><td>${esc(md(r.work_date))}${r.holiday ? ' <span class="badge ok">' + esc(r.holiday) + '</span>' : ''}</td>
-          <td>${esc(hm(r.clock_in))}</td><td>${r.clock_in && !r.clock_out ? '<span class="badge warn">未簽退</span>' : esc(hm(r.clock_out))}</td>
-          <td class="r">${r.clock_in ? esc(r.break_minutes) + '分' : ''}</td><td class="r">${esc(dur(r.minutes))}</td><td>${esc(SRC[r.source] || r.source)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">還沒有出勤紀錄。活動當天到「今日現場」顯示簽到 QR 碼。</td></tr>'}</tbody>
+          <td class="dim">${r.sched_in ? esc(hm(r.sched_in)) + '–' + esc(hm(r.sched_out)) : '—'}</td>
+          <td>${esc(hm(r.clock_in))}${attBadge(r, 'in')}</td><td>${r.clock_in && !r.clock_out ? '<span class="badge warn">未簽退</span>' : esc(hm(r.clock_out)) + attBadge(r, 'out')}</td>
+          <td class="r">${r.clock_in ? esc(r.break_minutes) + '分' : ''}</td><td class="r">${esc(dur(r.minutes))}</td><td>${esc(SRC[r.source] || r.source)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">還沒有出勤紀錄。活動當天到「今日現場」顯示簽到 QR 碼。</td></tr>'}</tbody>
       </table></div>`)}`;
   },
   bind: e => {
@@ -742,8 +755,20 @@ async function openDetail(kind, key, e, keepScroll) {
       <label for="abr">休息分鐘</label><input id="abr" type="text" inputmode="numeric" value="${esc(r.break_minutes)}">
       <label for="anote">修改原因</label><textarea id="anote" placeholder="忘記簽退，依現場負責人確認">${esc(r.note || '')}</textarea>
       <div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">儲存</button>
-      <p class="sub" style="margin-top:10px">修改會留下紀錄，來源改標為「人工」。</p>`;
+      <p class="sub" style="margin-top:10px">修改會留下紀錄，來源改標為「人工」。</p>
+      ${r.sched_in ? `<h2>表定 ${esc(hm(r.sched_in))}–${esc(hm(r.sched_out))}</h2>
+        <p class="sub">計薪從表定上班時間起算、算到表定下班時間；主管核准後，提早開工或延長工時才照實際時間計薪。</p>
+        ${r.in_notice === 'early' ? `<div class="issue"><div>提早 ${esc(r.in_notice_minutes)} 分鐘到場<div class="dim">${r.early_approved ? '已核准提早開工，從實際簽到時間計薪' : '未核准，從表定時間起算'}</div></div><button class="btn ghost sm" data-appr="early" data-on="${!r.early_approved}">${r.early_approved ? '撤銷核准' : '核准提早開工'}</button></div>` : ''}
+        ${r.in_notice === 'late' ? `<div class="issue"><div>遲到 ${esc(r.in_notice_minutes)} 分鐘<div class="dim">從實際簽到時間計薪，不另外扣款</div></div></div>` : ''}
+        ${r.out_notice === 'overtime' ? `<div class="issue"><div>超過表定下班 ${esc(r.out_notice_minutes)} 分鐘<div class="dim">${r.ot_approved ? '已核准延長工時，照實際簽退時間計薪（含加班費）' : '待核准，目前算到表定下班時間'}</div></div><button class="btn ${r.ot_approved ? 'ghost' : ''} sm" data-appr="overtime" data-on="${!r.ot_approved}">${r.ot_approved ? '撤銷核准' : '核准加班'}</button></div>` : ''}
+        ${r.in_notice_text || r.out_notice_text ? `<p class="dim" style="margin-top:8px">本人確認過的說明：${esc([r.in_notice_text, r.out_notice_text].filter(Boolean).join(' ／ '))}</p>` : ''}` : ''}`;
     bindClose();
+    box.querySelectorAll('[data-appr]').forEach(b => b.onclick = async () => {
+      const r3 = await rpc('admin_approve_attendance', { p_id: key, p_kind: b.dataset.appr, p_on: b.dataset.on === 'true' });
+      if (!r3.ok) { $('dm').innerHTML = '<div class="msg err">更新失敗。</div>'; return; }
+      flash('ok', b.dataset.on === 'true' ? '已核准。重新產生薪資單後會套用。' : '已撤銷核准。重新產生薪資單後會套用。');
+      S.detail = { kind: 'att', key }; refreshEvent(e, 'att');
+    });
     $('save').onclick = async () => {
       const r2 = await rpc('admin_set_attendance', { p_id: key, p_patch: { clock_in: $('ain').value, clock_out: $('aout').value, break_minutes: $('abr').value, note: $('anote').value } });
       if (!r2.ok) { $('dm').innerHTML = '<div class="msg err">' + (r2.error === 'out_before_in' ? '下班時間必須晚於上班時間。' : '輸入的內容有誤。') + '</div>'; return; }
@@ -1121,21 +1146,27 @@ async function openPerson(id) {
       <dt>電話</dt><dd>${esc(p.phone || '—')}</dd><dt>Email</dt><dd>${esc(p.email || '—')}</dd><dt>戶籍地址</dt><dd>${esc(p.address || '—')}</dd>
       <dt>匯款帳戶</dt><dd>${esc([p.bank_code, p.bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.bank_account_name || '')} ${esc(p.bank_account || '')}</dd>
       <dt>個資同意</dt><dd>${p.consent_at ? esc(d(p.consent_at)) : '無紀錄（舊資料）'}</dd></dl>
-    <h2>證件影本</h2>${DOCS.map(([k, t]) => `<div class="issue"><div>${t}<div class="dim">${p.documents[k] ? '上傳於 ' + esc(d(p.documents[k])) : '尚未上傳'}</div></div>${p.documents[k] ? `<button class="btn ghost sm" data-doc="${k}">開啟</button>` : ''}</div>`).join('')}
-    <p class="dim" style="margin-top:6px">連結 2 分鐘後失效，每次調閱都會留下紀錄。</p>
+    <h2>證件影本</h2>${DOCS.some(([k]) => p.documents[k]) ? `<p class="sub" style="margin-bottom:8px"><button class="btn ghost sm" id="showdocs">顯示證件</button>　每次顯示都會留下調閱紀錄。</p>` : ''}
+    <div class="docgrid">${DOCS.map(([k, t]) => `<div class="doccell"><div class="dim">${t}</div>${p.documents[k] ? `<div class="docthumb" data-doc="${k}"><span class="dim">上傳於 ${esc(d(p.documents[k]))}</span></div>` : '<div class="docthumb empty-doc"><span class="dim">尚未上傳</span></div>'}</div>`).join('')}</div>
     ${p.issues.length ? '<h2>待確認</h2>' + p.issues.map(issueRow).join('') : ''}
     ${p.payslips.length ? '<h2>薪資單</h2><table>' + p.payslips.map(x => `<tr><td>${esc(x.event)}<div class="dim">${esc(d(x.period_start))}</div></td><td class="r">${money(x.net)} <span class="badge ${esc(x.status)}">${STATUS[x.status]}</span></td></tr>`).join('') + '</table>' : ''}
     <h2>帳號</h2><p class="sub">${p.has_password ? (p.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
     <div id="dm" style="margin-top:10px"></div><button class="btn ghost" id="reset" ${p.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button>`;
   box.querySelectorAll('[data-issue]').forEach(b => b.onclick = async () => { await rpc('admin_resolve_issue', { p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' }); openPerson(id); });
-  box.querySelectorAll('[data-doc]').forEach(b => b.onclick = async () => {
-    const win = window.open('', '_blank');
-    try {
-      const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: id, kind: b.dataset.doc }) });
-      const j = await res.json();
-      if (j.ok) { if (win) win.location = j.url; else location.href = j.url; } else { if (win) win.close(); $('dm').innerHTML = '<div class="msg err">無法開啟檔案。</div>'; }
-    } catch (err) { if (win) win.close(); $('dm').innerHTML = '<div class="msg err">無法開啟檔案。</div>'; }
-  });
+  // 顯示證件：舊表匯入的是小縮圖（點了開雲端原檔），本人上傳的是原檔（點了另開大圖）
+  if ($('showdocs')) $('showdocs').onclick = async () => {
+    $('showdocs').disabled = true;
+    await Promise.all([...box.querySelectorAll('.docthumb[data-doc]')].map(async cell => {
+      try {
+        const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: id, kind: cell.dataset.doc }) });
+        const j = await res.json();
+        if (!j.ok) { cell.innerHTML = '<span class="dim">無法開啟</span>'; return; }
+        const href = j.drive_url || j.url;
+        cell.innerHTML = `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${j.drive_url ? '開啟雲端原檔（需有分享權限的帳號）' : '開啟原檔'}"><img src="${esc(j.url)}" alt="" referrerpolicy="no-referrer"></a>
+          <div class="dim">${j.drive_url ? '縮圖・<a href="' + esc(j.drive_url) + '" target="_blank" rel="noopener noreferrer">雲端原檔</a>' : '<a href="' + esc(j.url) + '" target="_blank" rel="noopener noreferrer">開啟原檔</a>（2 分鐘內有效）'}</div>`;
+      } catch (err) { cell.innerHTML = '<span class="dim">無法開啟</span>'; }
+    }));
+  };
   $('reset').onclick = async () => { const r2 = await rpc('admin_reset_password', { p_person: id }); $('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>'; };
 }
 

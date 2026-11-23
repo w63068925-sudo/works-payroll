@@ -32,6 +32,26 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.admin_approve_attendance(p_token text, p_id uuid, p_kind text, p_on boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_kind = 'early' then
+    update public.attendance set early_approved_by = case when p_on then v_actor end, early_approved_at = case when p_on then now() end where id = p_id;
+  elsif p_kind = 'overtime' then
+    update public.attendance set ot_approved_by = case when p_on then v_actor end, ot_approved_at = case when p_on then now() end where id = p_id;
+  else return jsonb_build_object('ok', false, 'error', 'bad_kind'); end if;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'attendance_' || p_kind || case when p_on then '_approved' else '_unapproved' end, 'attendance', p_id, null);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.admin_attendance(p_token text, p_event uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -48,7 +68,11 @@ begin
       'clock_in', to_char(a.clock_in at time zone 'Asia/Taipei', 'YYYY-MM-DD"T"HH24:MI'),
       'clock_out', to_char(a.clock_out at time zone 'Asia/Taipei', 'YYYY-MM-DD"T"HH24:MI'),
       'break_minutes', a.break_minutes, 'source', a.source, 'scheduled_text', a.scheduled_text, 'note', a.note,
-      'minutes', case when a.clock_in is not null and a.clock_out is not null then floor(extract(epoch from a.clock_out - a.clock_in) / 60)::int - a.break_minutes end,
+      'sched_in', to_char(a.sched_in at time zone 'Asia/Taipei', 'YYYY-MM-DD"T"HH24:MI'), 'sched_out', to_char(a.sched_out at time zone 'Asia/Taipei', 'YYYY-MM-DD"T"HH24:MI'),
+      'in_notice', a.in_notice, 'in_notice_minutes', a.in_notice_minutes, 'in_notice_text', a.in_notice_text,
+      'out_notice', a.out_notice, 'out_notice_minutes', a.out_notice_minutes, 'out_notice_text', a.out_notice_text,
+      'early_approved', a.early_approved_at is not null, 'ot_approved', a.ot_approved_at is not null,
+      'minutes', public.att_minutes(a),
       'holiday', (select h.name from public.holidays h where h.day = a.work_date),
       'staff', (select jsonb_build_object('role', s.role, 'relation', s.relation, 'pay_type', s.pay_type, 'rate', s.rate, 'insured_salary', s.insured_salary, 'deduct_insurance', s.deduct_insurance)
                 from public.event_staff s where s.event_id = a.event_id and s.person_id = a.person_id))
@@ -1086,6 +1110,31 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.att_minutes(a attendance)
+ RETURNS integer
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select case when a.clock_in is null or a.clock_out is null then null
+    else greatest(floor(extract(epoch from public.att_pay_out(a) - public.att_pay_in(a)) / 60)::int - a.break_minutes, 0) end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.att_pay_in(a attendance)
+ RETURNS timestamp with time zone
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select case when a.sched_in is not null and a.clock_in < a.sched_in and a.early_approved_at is null then a.sched_in else a.clock_in end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.att_pay_out(a attendance)
+ RETURNS timestamp with time zone
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select case when a.sched_out is not null and a.clock_out > a.sched_out and a.ot_approved_at is null then a.sched_out else a.clock_out end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.checkin_make_code(p_event uuid, p_slot bigint)
  RETURNS text
  LANGUAGE sql
@@ -1508,25 +1557,26 @@ begin
 end $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.payroll_clock(p_token text, p_ticket text, p_action text)
+CREATE OR REPLACE FUNCTION public.payroll_clock(p_token text, p_ticket text, p_action text, p_ack boolean DEFAULT false)
  RETURNS jsonb
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
 declare v_pid uuid := public.payroll_session_person(p_token); e public.events; v_open public.attendance; v_today date := (now() at time zone 'Asia/Taipei')::date; v_mins int;
+  v_s_in timestamptz; v_s_out timestamptz; v_kind text; v_n int; v_text text; v_now timestamptz := now(); v_pay_in timestamptz; v_pay_out timestamptz;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select ev.* into e from public.checkin_tickets t join public.events ev on ev.id = t.event_id
   where t.ticket_hash = encode(extensions.digest(coalesce(p_ticket,''), 'sha256'), 'hex') and t.expires_at > now();
   if not found then return jsonb_build_object('ok', false, 'error', 'ticket'); end if;
+  select s_in, s_out into v_s_in, v_s_out from public.today_schedule(v_pid, e.id, v_today);
   if p_action = 'status' then
     return jsonb_build_object('ok', true, 'event', e.name, 'block', case
         when e.start_date is null or v_today < e.start_date or v_today > coalesce(e.end_date, e.start_date) then 'not_event_day'
-        when exists (select 1 from public.shifts where event_id = e.id) and not exists (
-          select 1 from public.application_shifts x join public.applications ap on ap.id = x.application_id join public.shifts sh on sh.id = x.shift_id
-          where ap.event_id = e.id and ap.person_id = v_pid and ap.status = 'active' and x.status = 'accepted' and sh.work_date = v_today) then 'not_scheduled'
-        end) || public.checkin_state(v_pid, e.id);
+        when exists (select 1 from public.shifts where event_id = e.id) and v_s_in is null then 'not_scheduled'
+        end,
+      'sched_in', to_char(v_s_in at time zone 'Asia/Taipei', 'HH24:MI'), 'sched_out', to_char(v_s_out at time zone 'Asia/Taipei', 'HH24:MI')) || public.checkin_state(v_pid, e.id);
   end if;
   if e.start_date is null or v_today < e.start_date or v_today > coalesce(e.end_date, e.start_date) + 1 then
     return jsonb_build_object('ok', false, 'error', 'not_event_day', 'event', e.name);
@@ -1535,24 +1585,48 @@ begin
     and a.clock_in is not null and a.clock_out is null and a.clock_in > now() - interval '20 hours' order by a.clock_in desc limit 1;
   if p_action = 'in' then
     if v_today > coalesce(e.end_date, e.start_date) then return jsonb_build_object('ok', false, 'error', 'not_event_day', 'event', e.name); end if;
-    if exists (select 1 from public.shifts where event_id = e.id) and not exists (
-        select 1 from public.application_shifts x join public.applications ap on ap.id = x.application_id join public.shifts sh on sh.id = x.shift_id
-        where ap.event_id = e.id and ap.person_id = v_pid and ap.status = 'active' and x.status = 'accepted' and sh.work_date = v_today) then
+    if exists (select 1 from public.shifts where event_id = e.id) and v_s_in is null then
       return jsonb_build_object('ok', false, 'error', 'not_scheduled', 'event', e.name) || public.checkin_state(v_pid, e.id);
     end if;
     if v_open.id is not null then return jsonb_build_object('ok', false, 'error', 'already_in', 'event', e.name) || public.checkin_state(v_pid, e.id); end if;
     if exists (select 1 from public.attendance where person_id = v_pid and event_id = e.id and work_date = v_today) then
       return jsonb_build_object('ok', false, 'error', 'already_done', 'event', e.name) || public.checkin_state(v_pid, e.id);
     end if;
-    insert into public.attendance(person_id, event_id, work_date, clock_in, source, note) values (v_pid, e.id, v_today, now(), 'qr', null);
-    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'clock_in', 'events', e.id, null);
+    -- 提早到：從表定時間起算；遲到：照實際簽到時間起算，不另扣
+    if v_s_in is not null and v_now < v_s_in - interval '1 minute' then
+      v_kind := 'early'; v_n := ceil(extract(epoch from v_s_in - v_now) / 60);
+      v_text := format('表定上班時間為 %s，你提早 %s 分鐘到場。提早到場的時間不計入工時，工資自 %s 起算。如果是主管要求你提早開始工作，請告訴現場主管，由主管在系統核准後改從實際簽到時間計薪。',
+        to_char(v_s_in at time zone 'Asia/Taipei', 'HH24:MI'), v_n, to_char(v_s_in at time zone 'Asia/Taipei', 'HH24:MI'));
+    elsif v_s_in is not null and v_now >= v_s_in + interval '1 minute' then
+      v_kind := 'late'; v_n := floor(extract(epoch from v_now - v_s_in) / 60);
+      v_text := format('表定上班時間為 %s，你已遲到 %s 分鐘。工資自實際簽到時間 %s 起算，只少算未出勤的分鐘數，不另外扣款。',
+        to_char(v_s_in at time zone 'Asia/Taipei', 'HH24:MI'), v_n, to_char(v_now at time zone 'Asia/Taipei', 'HH24:MI'));
+    end if;
+    if v_kind is not null and not coalesce(p_ack, false) then
+      return jsonb_build_object('ok', false, 'error', 'need_ack', 'event', e.name, 'notice', jsonb_build_object('kind', v_kind, 'minutes', v_n, 'text', v_text)) || public.checkin_state(v_pid, e.id);
+    end if;
+    insert into public.attendance(person_id, event_id, work_date, clock_in, source, sched_in, sched_out, in_notice, in_notice_minutes, in_notice_text, in_ack_at)
+    values (v_pid, e.id, v_today, v_now, 'qr', v_s_in, v_s_out, v_kind, v_n, v_text, case when v_kind is not null then v_now end);
+    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'clock_in', 'events', e.id, case when v_kind is not null then jsonb_build_object('notice', v_kind, 'minutes', v_n) end);
   elsif p_action = 'out' then
     if v_open.id is null then return jsonb_build_object('ok', false, 'error', 'not_in', 'event', e.name) || public.checkin_state(v_pid, e.id); end if;
-    v_mins := floor(extract(epoch from now() - v_open.clock_in) / 60);
-    update public.attendance set clock_out = now(),
-      break_minutes = case when v_mins >= 240 then least(e.default_break_minutes, v_mins) else 0 end
+    -- 超過表定下班：延長工時需主管核准才計薪
+    if v_open.sched_out is not null and v_now >= v_open.sched_out + interval '1 minute' then
+      v_kind := 'overtime'; v_n := floor(extract(epoch from v_now - v_open.sched_out) / 60);
+      v_text := format('表定下班時間為 %s，現在已超過 %s 分鐘。延長工時須經現場主管核准才計薪，未核准的部分工資計算到 %s。如果是主管要求你留下工作，請告訴主管在系統核准。',
+        to_char(v_open.sched_out at time zone 'Asia/Taipei', 'HH24:MI'), v_n, to_char(v_open.sched_out at time zone 'Asia/Taipei', 'HH24:MI'));
+      if not coalesce(p_ack, false) then
+        return jsonb_build_object('ok', false, 'error', 'need_ack', 'event', e.name, 'notice', jsonb_build_object('kind', v_kind, 'minutes', v_n, 'text', v_text)) || public.checkin_state(v_pid, e.id);
+      end if;
+    end if;
+    v_pay_in := case when v_open.sched_in is not null and v_open.clock_in < v_open.sched_in and v_open.early_approved_at is null then v_open.sched_in else v_open.clock_in end;
+    v_pay_out := case when v_open.sched_out is not null and v_now > v_open.sched_out and v_open.ot_approved_at is null then v_open.sched_out else v_now end;
+    v_mins := greatest(floor(extract(epoch from v_pay_out - v_pay_in) / 60), 0);
+    update public.attendance set clock_out = v_now,
+      break_minutes = case when v_mins >= 240 then least(e.default_break_minutes, v_mins) else 0 end,
+      out_notice = v_kind, out_notice_minutes = v_n, out_notice_text = v_text, out_ack_at = case when v_kind is not null then v_now end
     where id = v_open.id;
-    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'clock_out', 'events', e.id, null);
+    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'clock_out', 'events', e.id, case when v_kind is not null then jsonb_build_object('notice', v_kind, 'minutes', v_n) end);
   else
     return jsonb_build_object('ok', false, 'error', 'bad_action');
   end if;
@@ -1589,7 +1663,7 @@ begin
   v_base_rh := v_rh;
 
   for a in select * from public.attendance where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null order by work_date loop
-    m := floor(extract(epoch from a.clock_out - a.clock_in) / 60)::int - a.break_minutes;
+    m := (select public.att_minutes(t) from public.attendance t where t.id = a.id);
     if m <= 0 then continue; end if;
     n_days := n_days + 1; v_first := coalesce(v_first, a.work_date); v_last := a.work_date;
     v_rh := v_base_rh;
@@ -1654,7 +1728,7 @@ begin
 
   if n_days = 0 then return jsonb_build_object('ok', false, 'error', 'no_attendance'); end if;
 
-  for wk in select date_trunc('week', work_date)::date w, sum(least(floor(extract(epoch from clock_out - clock_in)/60)::int - break_minutes, 480)) mins
+  for wk in select date_trunc('week', work_date)::date w, sum(least(public.att_minutes(attendance.*), 480)) mins
             from public.attendance where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null group by 1 loop
     if wk.mins > 2400 then warns := warns || jsonb_build_object('severity','warn','code','week_over_40','detail', format('%s 起該週正常工時合計 %s 小時，超過 40 小時的部分應依加班計算，請人工確認', wk.w, round(wk.mins/60.0,1))); end if;
   end loop;
@@ -1959,7 +2033,7 @@ begin
     'attendance', coalesce((select jsonb_agg(jsonb_build_object('work_date', a.work_date,
         'clock_in', to_char(a.clock_in at time zone 'Asia/Taipei', 'HH24:MI'),
         'clock_out', to_char(a.clock_out at time zone 'Asia/Taipei', 'HH24:MI'),
-        'break_minutes', a.break_minutes, 'source', a.source, 'minutes', case when a.clock_in is not null and a.clock_out is not null then floor(extract(epoch from a.clock_out - a.clock_in) / 60)::int - a.break_minutes end, 'overnight', (a.clock_out at time zone 'Asia/Taipei')::date > a.work_date) order by a.work_date)
+        'break_minutes', a.break_minutes, 'source', a.source, 'minutes', public.att_minutes(a), 'overnight', (a.clock_out at time zone 'Asia/Taipei')::date > a.work_date) order by a.work_date)
         from public.attendance a where a.person_id = s.person_id and a.event_id = s.event_id
           and a.work_date between coalesce(s.period_start, a.work_date) and coalesce(s.period_end, a.work_date)), '[]'::jsonb)
   ) into r
@@ -2120,6 +2194,19 @@ AS $function$
     'accepted', (select count(*) from public.application_shifts x join public.applications a on a.id = x.application_id where x.shift_id = s.id and x.status = 'accepted' and a.status = 'active'),
     'applied', (select count(*) from public.application_shifts x join public.applications a on a.id = x.application_id where x.shift_id = s.id and x.status in ('applied','waitlist') and a.status = 'active'));
 $function$
+;
+
+CREATE OR REPLACE FUNCTION public.today_schedule(p_person uuid, p_event uuid, p_day date)
+ RETURNS TABLE(s_in timestamp with time zone, s_out timestamp with time zone)
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select min((p_day + sh.start_time) at time zone 'Asia/Taipei'),
+         max((p_day + sh.end_time + case when sh.end_time <= sh.start_time then interval '1 day' else interval '0' end) at time zone 'Asia/Taipei')
+  from public.application_shifts x join public.applications ap on ap.id = x.application_id join public.shifts sh on sh.id = x.shift_id
+  where ap.event_id = p_event and ap.person_id = p_person and ap.status = 'active' and x.status = 'accepted' and sh.work_date = p_day
+  having count(*) > 0 $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.trg_contract_superseded()

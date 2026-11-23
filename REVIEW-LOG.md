@@ -105,3 +105,8 @@
 ## 待補審（資料匯入，sol medium）：資料夾 260 份舊表匯入 — 2026-11-24
 - 範圍：supabase/LEGACY-IMPORT.md 所述規則（一次性 SQL，已執行並刪除暫存）；apps-script/import-documents.gs 修正 importDocuments 逾時時引用未定義變數
 - 狀態：先部署後補審
+
+## 待補審（計薪規則，sol high）：簽到退提示與表定計薪 — 2026-11-24
+- 範圍：attendance 新增表定時段、提示與核准欄位；payroll_clock 加 p_ack（提早到、遲到、超時須本人確認並存原文）；att_pay_in/att_pay_out/att_minutes（提早不計、超時待核准，核准後照實際）；payroll_compute、admin_attendance、payroll_payslip 改用 att_minutes；admin_approve_attendance；前台確認畫面、後台核准按鈕；regression 第 19 組
+- 同批：舊表證件改存 300px／5KB 內縮圖＋雲端原檔 ID（docs Edge Function、people_documents.drive_file_id、後台人員頁顯示縮圖）
+- 狀態：先部署後補審

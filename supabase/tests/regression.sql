@@ -6,7 +6,7 @@ declare
   v_today date := (now() at time zone 'Asia/Taipei')::date;
   emp uuid; ev uuid; ev2 uuid; ev3 uuid; s1 uuid; s2 uuid; s3 uuid; s_other uuid;
   p1 uuid; p2 uuid; tok1 text := encode(extensions.gen_random_bytes(16), 'hex'); tok2 text := encode(extensions.gen_random_bytes(16), 'hex');
-  atok text := encode(extensions.gen_random_bytes(16), 'hex'); a1 uuid; a2 uuid; r jsonb; r2 jsonb; c jsonb; v_code text; v_slip uuid; i int; n int; txt text; nid uuid;
+  atok text := encode(extensions.gen_random_bytes(16), 'hex'); ev4 uuid; ev5 uuid; att uuid; a1 uuid; a2 uuid; r jsonb; r2 jsonb; c jsonb; v_code text; v_slip uuid; i int; n int; txt text; nid uuid;
   fails text := '';
 begin
   -- 隔離既有佇列，避免影響通知測試
@@ -196,5 +196,36 @@ begin
   if (public.admin_log_export(atok, 'insurance_roster', 3, '{}')->>'ok')::boolean is not true then fails := fails || ' [18h export log failed]'; end if;
   if not exists (select 1 from public.audit_log where actor = 'regression-admin' and action = 'export_insurance_roster') then fails := fails || ' [18i export not logged]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 18 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 19. 簽到退提示：提早到從表定時間起算、遲到照實際分鐘、超過表定下班要主管核准才計薪
+  insert into public.events(employer_id, name, start_date, end_date) values (emp, '提示測試早', v_today, v_today) returning id into ev4;
+  insert into public.events(employer_id, name, start_date, end_date) values (emp, '提示測試遲', v_today, v_today) returning id into ev5;
+  insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values
+    (ev4, v_today, ((now() at time zone 'Asia/Taipei') + interval '30 minutes')::time(0), ((now() at time zone 'Asia/Taipei') + interval '4 hours 30 minutes')::time(0), 2) returning id into s1;
+  insert into public.applications(event_id, person_id, status) values (ev4, p1, 'active') returning id into a1;
+  insert into public.application_shifts(application_id, shift_id, status) values (a1, s1, 'accepted');
+  insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values
+    (ev5, v_today, ((now() at time zone 'Asia/Taipei') - interval '15 minutes')::time(0), ((now() at time zone 'Asia/Taipei') + interval '3 hours')::time(0), 2) returning id into s2;
+  insert into public.applications(event_id, person_id, status) values (ev5, p2, 'active') returning id into a2;
+  insert into public.application_shifts(application_id, shift_id, status) values (a2, s2, 'accepted');
+  insert into public.checkin_tickets(ticket_hash, event_id, expires_at) values
+    (encode(extensions.digest('regress-ticket-4', 'sha256'), 'hex'), ev4, now() + interval '10 minutes'), (encode(extensions.digest('regress-ticket-5', 'sha256'), 'hex'), ev5, now() + interval '10 minutes');
+  r := public.payroll_clock(tok1, 'regress-ticket-4', 'in');
+  if r->>'error' is distinct from 'need_ack' or r->'notice'->>'kind' is distinct from 'early' then fails := fails || ' [19a early not asked: ' || r::text || ']'; end if;
+  if exists (select 1 from public.attendance where event_id = ev4) then fails := fails || ' [19b clocked in without ack]'; end if;
+  r := public.payroll_clock(tok1, 'regress-ticket-4', 'in', true);
+  select id into att from public.attendance where event_id = ev4 and person_id = p1;
+  if att is null or (select in_notice from public.attendance where id = att) is distinct from 'early' or (select in_ack_at from public.attendance where id = att) is null then fails := fails || ' [19c early ack not recorded]'; end if;
+  r := public.payroll_clock(tok2, 'regress-ticket-5', 'in');
+  if r->>'error' is distinct from 'need_ack' or r->'notice'->>'kind' is distinct from 'late' or (r->'notice'->>'minutes')::int not between 14 and 16 then fails := fails || ' [19d late notice: ' || r::text || ']'; end if;
+  -- 計薪工時：提早 30 分不計、超時 25 分待核准不計；核准後才計
+  update public.attendance set clock_in = sched_in - interval '30 minutes', clock_out = sched_out + interval '25 minutes', break_minutes = 0, out_notice = 'overtime' where id = att;
+  if (select public.att_minutes(a) from public.attendance a where id = att) <> 240 then fails := fails || ' [19e capped minutes ' || (select public.att_minutes(a) from public.attendance a where id = att) || ']'; end if;
+  perform public.admin_approve_attendance(atok, att, 'early', true);
+  perform public.admin_approve_attendance(atok, att, 'overtime', true);
+  if (select public.att_minutes(a) from public.attendance a where id = att) <> 295 then fails := fails || ' [19f approved minutes]'; end if;
+  perform public.admin_approve_attendance(atok, att, 'overtime', false);
+  if (select public.att_minutes(a) from public.attendance a where id = att) <> 270 then fails := fails || ' [19g revoke overtime]'; end if;
+  if public.admin_approve_attendance('bad-token', att, 'early', true)->>'error' is distinct from 'session' then fails := fails || ' [19h approve without session]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 19 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;
