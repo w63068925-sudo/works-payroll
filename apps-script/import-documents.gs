@@ -24,6 +24,7 @@ function key_() {
   if (!k) throw new Error('請先在「專案設定 → 指令碼屬性」新增 IMPORT_KEY');
   return k;
 }
+function req_(body) { return { url: ENDPOINT, method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify(body) }; }
 function post_(body) {
   const res = UrlFetchApp.fetch(ENDPOINT, { method: 'post', contentType: 'application/json', muteHttpExceptions: true, payload: JSON.stringify(body) });
   if (res.getResponseCode() === 401) throw new Error('IMPORT_KEY 不正確或已過期');
@@ -83,7 +84,6 @@ function importSheets() {
 /* ---------- 第二步：證件照片 ---------- */
 function importDocuments() {
   const key = key_(), start = Date.now();
-  const pos = getBig_('docPos', {});
   const stat = { imported: 0, skipped: 0, noPerson: 0, failed: 0 }, fails = [];
   // 最新的表先處理（同一人以最新一場的證件為準）；順序只在第一次計算後記住
   let order = getBig_('docOrder', null);
@@ -106,8 +106,9 @@ function importDocuments() {
     const uploadCols = [[cBank, 'bankbook'], [cFront, 'id_front'], [cBack, 'id_back'], [cBoth, 'both']].filter(x => x[0] >= 0).sort((a, b) => a[0] - b[0]);
     if (!uploadCols.length) { sheetDone[fid] = 1; saveDone_('docSheets', sheetDone); continue; }
 
-    for (let r = pos.fid === fid ? pos.r : rows.length - 1; r >= 1; r--) {
-      if (Date.now() - start > BUDGET_MS) { setBig_('docPos', { fid, r }); continueLater_('importDocuments'); return finish_(stat, fails, false); }
+    // 整份表先收集要處理的照片
+    const items = [];
+    for (let r = rows.length - 1; r >= 1; r--) {
       const row = rows[r];
       let nid = cId >= 0 ? String(row[cId] || '').trim().toUpperCase() : '';
       if (!ID_RE.test(nid)) nid = (row.map(v => String(v).trim().toUpperCase()).find(v => ID_RE.test(v)) || '');
@@ -119,27 +120,43 @@ function importDocuments() {
         const cells = row.filter(v => idsIn_(v).length); // 整列偏移時依出現順序對應
         if (cells.length === uploadCols.length) uploadCols.forEach(([, kind], i) => put(kind, cells[i]));
       }
-      for (const kind of Object.keys(files)) {
+      Object.keys(files).forEach(kind => { if (!items.some(x => x.nid === nid && x.kind === kind)) items.push({ nid, kind, fileId: files[kind], r }); });
+    }
+    // 一次問系統哪些需要（沒有此人或已經有了就不下載）
+    const need = [];
+    for (let i = 0; i < items.length; i += 50) {
+      const part = items.slice(i, i + 50);
+      const res = UrlFetchApp.fetchAll(part.map(it => req_({ action: 'legacy_import', import_key: key, national_id: it.nid, kind: it.kind, check_only: true })));
+      res.forEach((x, j) => {
+        if (x.getResponseCode() === 401) throw new Error('IMPORT_KEY 不正確或已過期');
+        const o = JSON.parse(x.getContentText() || '{}');
+        if (o.skipped) stat.skipped++;
+        else if (o.error === 'no_person') { stat.noPerson++; missingPerson = true; }
+        else if (o.need) need.push(part[j]);
+        else { stat.failed++; fails.push(f.title + ' 第' + (part[j].r + 1) + '列 ' + part[j].kind + '：' + (o.error || '?')); }
+      });
+    }
+    // 照片分批同時上傳
+    for (let i = 0; i < need.length; i += 6) {
+      if (Date.now() - start > BUDGET_MS) { continueLater_('importDocuments'); return finish_(stat, fails, false); }
+      const part = [], reqs = [];
+      need.slice(i, i + 6).forEach(it => {
         try {
-          // 先問系統要不要這張（沒有此人或已經有了就不必下載）
-          const chk = post_({ action: 'legacy_import', import_key: key, national_id: nid, kind, check_only: true });
-          if (chk.skipped) { stat.skipped++; continue; }
-          if (chk.error === 'no_person') { stat.noPerson++; missingPerson = true; continue; }
-          const blob = fileBlob_(files[kind]);
-          const out = post_({ action: 'legacy_import', import_key: key, national_id: nid, kind, content_type: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()), source: f.title.slice(0, 80) });
-          if (out.imported) stat.imported++;
-          else if (out.skipped) stat.skipped++;
-          else if (out.error === 'no_person') { stat.noPerson++; missingPerson = true; }
-          else { stat.failed++; fails.push(f.title + ' 第' + (r + 1) + '列 ' + kind + '：' + (out.error || '?')); }
-        } catch (e) {
-          if (String(e.message).includes('IMPORT_KEY')) throw e;
-          stat.failed++; fails.push(f.title + ' 第' + (r + 1) + '列 ' + kind + '：' + e.message);
-        }
-      }
+          const blob = fileBlob_(it.fileId);
+          reqs.push(req_({ action: 'legacy_import', import_key: key, national_id: it.nid, kind: it.kind, content_type: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()), source: f.title.slice(0, 80) }));
+          part.push(it);
+        } catch (e) { stat.failed++; fails.push(f.title + ' 第' + (it.r + 1) + '列 ' + it.kind + '：' + e.message); }
+      });
+      if (!reqs.length) continue;
+      UrlFetchApp.fetchAll(reqs).forEach((x, j) => {
+        const o = JSON.parse(x.getContentText() || '{}');
+        if (o.imported) stat.imported++;
+        else if (o.skipped) stat.skipped++;
+        else { stat.failed++; fails.push(f.title + ' 第' + (part[j].r + 1) + '列 ' + part[j].kind + '：' + (o.error || x.getResponseCode())); }
+      });
     }
     // 有「系統還沒有此人」的表不標記完成，之後重跑會再補
     if (!missingPerson) { sheetDone[fid] = 1; saveDone_('docSheets', sheetDone); }
-    setBig_('docPos', {});
   }
   stopTriggers_('importDocuments');
   finish_(stat, fails, true);
