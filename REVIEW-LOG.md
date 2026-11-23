@@ -110,3 +110,4 @@
 - 範圍：attendance 新增表定時段、提示與核准欄位；payroll_clock 加 p_ack（提早到、遲到、超時須本人確認並存原文）；att_pay_in/att_pay_out/att_minutes（提早不計、超時待核准，核准後照實際）；payroll_compute、admin_attendance、payroll_payslip 改用 att_minutes；admin_approve_attendance；前台確認畫面、後台核准按鈕；regression 第 19 組
 - 同批：舊表證件改存 300px／5KB 內縮圖＋雲端原檔 ID（docs Edge Function、people_documents.drive_file_id、後台人員頁顯示縮圖）
 - 狀態：先部署後補審
+- 2026-11-24 更新：使用者改定「1＋2」：舊證件只存雲端檔案 ID（path 可空，Edge Function legacy_link、legacy_unlink_copies 已把 796 筆複本改成連結並刪檔）；本人上傳在瀏覽器壓到 1000px／約 50KB；後台「資料已核對」呼叫 verify_docs 降成 500px／約 8KB 存證圖並刪原檔。先前 5KB 縮圖方案作廢。

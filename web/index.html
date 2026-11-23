@@ -355,13 +355,23 @@ async function viewRegister() {
 
 const DOCS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];
 async function fnCall(body) { const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify(body) }); return res.json(); }
+// 上傳前在手機上先縮成長邊 1000px 的 JPEG，目標約 50KB（字仍清楚，又不佔系統空間）；PDF 與無法解碼的格式照原檔上傳
 async function prepFile(file) {
   if (file.type === 'application/pdf') return file;
   try {
-    const bmp = await createImageBitmap(file), k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+    const bmp = await createImageBitmap(file), k = Math.min(1, 1000 / Math.max(bmp.width, bmp.height));
     const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
     c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-    return await new Promise(r => c.toBlob(b => r(b || file), 'image/jpeg', 0.85));
+    let out = null;
+    for (const q of [0.7, 0.6, 0.5, 0.42]) {
+      out = await new Promise(r => c.toBlob(b => r(b), 'image/jpeg', q));
+      if (out && out.size <= 55 * 1024) return out;
+    }
+    // 畫面很雜還壓不下：縮到 850px 再試一次
+    const c2 = document.createElement('canvas'), k2 = 850 / Math.max(c.width, c.height);
+    if (k2 < 1) { c2.width = Math.round(c.width * k2); c2.height = Math.round(c.height * k2); c2.getContext('2d').drawImage(c, 0, 0, c2.width, c2.height);
+      const o2 = await new Promise(r => c2.toBlob(b => r(b), 'image/jpeg', 0.5)); if (o2 && (!out || o2.size < out.size)) out = o2; }
+    return out || file;
   } catch (e) { return file; }
 }
 async function uploadDoc(kind, file) {

@@ -9,7 +9,7 @@
  * 4. 等系統整理好人員資料後，第二步：選 importDocuments → 執行。同樣會自動接續，直到「證件全部完成」。
  *
  * 規則：系統裡已經有的證件（例如本人自己上傳的）不會被覆蓋；同一人在多份表單都有，以最新一場活動為準。
- * 證件只存長邊 300px、5KB 以內的縮圖，原檔留在雲端，系統記錄雲端檔案 ID，點縮圖連回原檔（只有被分享的帳號打得開）。
+ * 舊證件不複製進系統：只記錄雲端檔案 ID，管理員點開時直接連到雲端原檔（只有被分享的帳號打得開）。
  * 資料不經過任何第三方，直接從你的雲端送到系統的私有儲存區。全部完成後可以刪除這個 Apps Script 專案。
  */
 const ENDPOINT = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/docs';
@@ -121,37 +121,16 @@ function importDocuments() {
       }
       Object.keys(files).forEach(kind => { if (!items.some(x => x.nid === nid && x.kind === kind)) items.push({ nid, kind, fileId: files[kind], r }); });
     }
-    // 一次問系統哪些需要（沒有此人或已經有了就不下載）
-    const need = [];
+    // 只送雲端檔案 ID（不下載、不複製照片）；系統已有的（例如本人上傳）會略過
     for (let i = 0; i < items.length; i += 50) {
+      if (Date.now() - start > BUDGET_MS) { continueLater_('importDocuments'); return finish_(stat, fails, false); }
       const part = items.slice(i, i + 50);
-      const res = UrlFetchApp.fetchAll(part.map(it => req_({ action: 'legacy_import', import_key: key, national_id: it.nid, kind: it.kind, check_only: true })));
-      res.forEach((x, j) => {
+      UrlFetchApp.fetchAll(part.map(it => req_({ action: 'legacy_link', import_key: key, national_id: it.nid, kind: it.kind, drive_file_id: it.fileId }))).forEach((x, j) => {
         if (x.getResponseCode() === 401) throw new Error('IMPORT_KEY 不正確或已過期');
         const o = JSON.parse(x.getContentText() || '{}');
-        if (o.skipped) stat.skipped++;
-        else if (o.error === 'no_person') { stat.noPerson++; missingPerson = true; }
-        else if (o.need) need.push(part[j]);
-        else { stat.failed++; fails.push(f.title + ' 第' + (part[j].r + 1) + '列 ' + part[j].kind + '：' + (o.error || '?')); }
-      });
-    }
-    // 照片分批：同時抓雲端縮圖（400px）、同時送出；系統再壓成 300px、5KB 以內，原檔留在雲端
-    const auth = { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() };
-    for (let i = 0; i < need.length; i += 20) {
-      if (Date.now() - start > BUDGET_MS) { continueLater_('importDocuments'); return finish_(stat, fails, false); }
-      const batch = need.slice(i, i + 20), part = [], reqs = [];
-      const got = UrlFetchApp.fetchAll(batch.map(it => ({ url: 'https://drive.google.com/thumbnail?sz=w400&id=' + it.fileId, headers: auth, muteHttpExceptions: true })));
-      got.forEach((res, j) => {
-        const it = batch[j];
-        if (res.getResponseCode() !== 200 || !/^image\//.test(String(res.getHeaders()['Content-Type'] || ''))) { stat.failed++; fails.push(f.title + ' 第' + (it.r + 1) + '列 ' + it.kind + '：雲端縮圖取得失敗（' + res.getResponseCode() + '）'); return; }
-        reqs.push(req_({ action: 'legacy_import', import_key: key, national_id: it.nid, kind: it.kind, drive_file_id: it.fileId, data: Utilities.base64Encode(res.getBlob().getBytes()), source: f.title.slice(0, 80) }));
-        part.push(it);
-      });
-      if (!reqs.length) continue;
-      UrlFetchApp.fetchAll(reqs).forEach((x, j) => {
-        const o = JSON.parse(x.getContentText() || '{}');
-        if (o.imported) stat.imported++;
+        if (o.linked) stat.imported++;
         else if (o.skipped) stat.skipped++;
+        else if (o.error === 'no_person') { stat.noPerson++; missingPerson = true; }
         else { stat.failed++; fails.push(f.title + ' 第' + (part[j].r + 1) + '列 ' + part[j].kind + '：' + (o.error || x.getResponseCode())); }
       });
     }
@@ -166,7 +145,7 @@ function stamp_(v) { const m = String(v || '').match(/(\d{4})\/(\d{1,2})\/(\d{1,
 function idsIn_(cell) { const out = []; let m; URL_RE.lastIndex = 0; while ((m = URL_RE.exec(String(cell || '')))) out.push(m[1]); return out; }
 function finish_(stat, fails, complete) {
   Logger.log((complete ? '證件全部完成。' : '還沒跑完，1 分鐘後自動接著跑。') +
-    ' 本次新增 ' + stat.imported + '、系統已有略過 ' + stat.skipped + '、系統還沒有此人 ' + stat.noPerson + '、失敗 ' + stat.failed);
+    ' 本次建立連結 ' + stat.imported + '、系統已有略過 ' + stat.skipped + '、系統還沒有此人 ' + stat.noPerson + '、失敗 ' + stat.failed);
   fails.slice(0, 50).forEach(f => Logger.log('失敗：' + f));
 }
 

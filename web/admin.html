@@ -1147,7 +1147,10 @@ async function openPerson(id) {
       <dt>匯款帳戶</dt><dd>${esc([p.bank_code, p.bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.bank_account_name || '')} ${esc(p.bank_account || '')}</dd>
       <dt>個資同意</dt><dd>${p.consent_at ? esc(d(p.consent_at)) : '無紀錄（舊資料）'}</dd></dl>
     <h2>證件影本</h2>${DOCS.some(([k]) => p.documents[k]) ? `<p class="sub" style="margin-bottom:8px"><button class="btn ghost sm" id="showdocs">顯示證件</button>　每次顯示都會留下調閱紀錄。</p>` : ''}
-    <div class="docgrid">${DOCS.map(([k, t]) => `<div class="doccell"><div class="dim">${t}</div>${p.documents[k] ? `<div class="docthumb" data-doc="${k}"><span class="dim">上傳於 ${esc(d(p.documents[k]))}</span></div>` : '<div class="docthumb empty-doc"><span class="dim">尚未上傳</span></div>'}</div>`).join('')}</div>
+    <div class="docgrid">${DOCS.map(([k, t]) => { const m = (p.doc_meta || {})[k] || {}; return `<div class="doccell"><div class="dim">${t}</div>${p.documents[k] ? `<div class="docthumb" data-doc="${k}"><span class="dim">${m.link_only ? '舊表證件（存在雲端）' : m.proof ? '已核對・存證圖' : '本人上傳'}<br>${esc(d(p.documents[k]))}</span></div>` : '<div class="docthumb empty-doc"><span class="dim">尚未上傳</span></div>'}</div>`; }).join('')}</div>
+    ${DOCS.some(([k]) => p.documents[k] && !((p.doc_meta || {})[k] || {}).link_only && !((p.doc_meta || {})[k] || {}).proof)
+      ? `<div class="issue"><div>核對完身分證字號與匯款帳號後<div class="dim">按「資料已核對」，本人上傳的證件會縮成約 500px 的存證圖，節省系統空間；縮了就無法還原。</div></div><button class="btn sm" id="verifydocs">資料已核對</button></div>`
+      : p.docs_verified_at ? `<p class="dim">已於 ${esc(d(p.docs_verified_at))} 由 ${esc(p.docs_verified_by || '')} 核對。</p>` : ''}
     ${p.issues.length ? '<h2>待確認</h2>' + p.issues.map(issueRow).join('') : ''}
     ${p.payslips.length ? '<h2>薪資單</h2><table>' + p.payslips.map(x => `<tr><td>${esc(x.event)}<div class="dim">${esc(d(x.period_start))}</div></td><td class="r">${money(x.net)} <span class="badge ${esc(x.status)}">${STATUS[x.status]}</span></td></tr>`).join('') + '</table>' : ''}
     <h2>帳號</h2><p class="sub">${p.has_password ? (p.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
@@ -1161,11 +1164,24 @@ async function openPerson(id) {
         const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: id, kind: cell.dataset.doc }) });
         const j = await res.json();
         if (!j.ok) { cell.innerHTML = '<span class="dim">無法開啟</span>'; return; }
-        const href = j.drive_url || j.url;
-        cell.innerHTML = `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${j.drive_url ? '開啟雲端原檔（需有分享權限的帳號）' : '開啟原檔'}"><img src="${esc(j.url)}" alt="" referrerpolicy="no-referrer"></a>
-          <div class="dim">${j.drive_url ? '縮圖・<a href="' + esc(j.drive_url) + '" target="_blank" rel="noopener noreferrer">雲端原檔</a>' : '<a href="' + esc(j.url) + '" target="_blank" rel="noopener noreferrer">開啟原檔</a>（2 分鐘內有效）'}</div>`;
+        // 舊表證件只有雲端連結；本人上傳的顯示圖片
+        if (!j.url) { cell.innerHTML = j.drive_url ? `<a class="btn ghost sm" href="${esc(j.drive_url)}" target="_blank" rel="noopener noreferrer">開啟雲端原檔</a><div class="dim" style="margin-top:6px">需用有分享權限的 Google 帳號</div>` : '<span class="dim">無法開啟</span>'; return; }
+        cell.innerHTML = `<a href="${esc(j.url)}" target="_blank" rel="noopener noreferrer"><img src="${esc(j.url)}" alt="" referrerpolicy="no-referrer"></a>
+          <div class="dim">${j.proof ? '存證圖' : '<a href="' + esc(j.url) + '" target="_blank" rel="noopener noreferrer">開啟大圖</a>（2 分鐘內有效）'}</div>`;
       } catch (err) { cell.innerHTML = '<span class="dim">無法開啟</span>'; }
     }));
+  };
+  if ($('verifydocs')) $('verifydocs').onclick = async () => {
+    const b2 = $('verifydocs');
+    if (!b2.dataset.sure) { b2.dataset.sure = '1'; b2.textContent = '確定？縮了無法還原'; return; }
+    b2.disabled = true; b2.textContent = '處理中…';
+    try {
+      const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'verify_docs', admin_token: S.token, person_id: id }) });
+      const j = await res.json();
+      if (!j.ok) throw new Error();
+      openPerson(id);
+      setTimeout(() => { if ($('dm')) $('dm').innerHTML = '<div class="msg ok">已核對。' + (j.downgraded.length ? '已縮成存證圖 ' + j.downgraded.length + ' 張。' : '') + (j.kept.length ? '有 ' + j.kept.length + ' 張（PDF 或特殊格式）保留原檔。' : '') + '</div>'; }, 400);
+    } catch (err) { b2.disabled = false; b2.textContent = '資料已核對'; $('dm').innerHTML = '<div class="msg err">處理失敗，請再試一次。</div>'; }
   };
   $('reset').onclick = async () => { const r2 = await rpc('admin_reset_password', { p_person: id }); $('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>'; };
 }
