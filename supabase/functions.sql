@@ -446,6 +446,22 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.admin_log_export(p_token text, p_kind text, p_rows integer, p_detail jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_kind is distinct from 'insurance_roster' then return jsonb_build_object('ok', false, 'error', 'bad_kind'); end if;
+  insert into public.audit_log(actor, action, table_name, detail)
+  values (v_actor, 'export_' || p_kind, 'people', jsonb_build_object('rows', greatest(coalesce(p_rows, 0), 0), 'filter', left(coalesce(p_detail, '{}'::jsonb)::text, 2000)));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.admin_login(p_username text, p_password text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -735,6 +751,62 @@ begin
   if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'issue_resolved', 'data_issues', jsonb_build_object('id', p_issue, 'resolved', p_resolved));
   return jsonb_build_object('ok', true);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_roster(p_token text, p_filter jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  v_actor text := public.admin_actor(p_token);
+  f jsonb := coalesce(p_filter, '{}'::jsonb);
+  v_q text := nullif(btrim(coalesce(f->>'q', '')), '');
+  v_ev uuid; v_from date; v_to date; v_st text[]; v_rows jsonb; v_n int;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  begin
+    v_ev := nullif(f->>'event_id', '')::uuid; v_from := nullif(f->>'from', '')::date; v_to := nullif(f->>'to', '')::date;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_filter'); end;
+  select coalesce(array_agg(x), array['accepted']) into v_st from jsonb_array_elements_text(case when jsonb_typeof(f->'statuses') = 'array' then f->'statuses' else '[]'::jsonb end) x
+    where x in ('accepted', 'applied', 'waitlist', 'rejected', 'attended');
+  with src as (
+    select e.id event_id, e.name event_name, e.start_date event_start, p.id person_id, s.work_date, to_char(s.start_time, 'HH24:MI') t_start, to_char(s.end_time, 'HH24:MI') t_end, s.role, x.status
+      from public.application_shifts x
+      join public.applications a on a.id = x.application_id and a.status = 'active'
+      join public.shifts s on s.id = x.shift_id
+      join public.events e on e.id = s.event_id
+      join public.people p on p.id = a.person_id
+     where x.status = any(v_st)
+    union all
+    -- 沒開班次的活動（舊表匯入）：以出勤紀錄當工作日
+    select distinct e.id, e.name, e.start_date, p.id, t.work_date, null, null, null, 'attended'
+      from public.attendance t
+      join public.events e on e.id = t.event_id
+      join public.people p on p.id = t.person_id
+     where 'attended' = any(v_st) and not exists (select 1 from public.shifts s2 where s2.event_id = e.id)
+  ), flt as (
+    select src.* from src
+     where (v_ev is null or src.event_id = v_ev)
+       and (v_q is null or strpos(src.event_name, v_q) > 0)
+       and (v_from is null or src.work_date >= v_from)
+       and (v_to is null or src.work_date <= v_to)
+  )
+  select count(*), coalesce(jsonb_agg(r order by r.event_start desc nulls last, r.event_name, r.name, r.work_date, r.t_start) filter (where r.rn <= 5000), '[]'::jsonb)
+    into v_n, v_rows
+    from (select flt.event_id, flt.event_name, flt.event_start, flt.person_id, flt.work_date, flt.t_start, flt.t_end, flt.status,
+                 coalesce(flt.role, es.role, ps.role) role, p.name, p.national_id, p.birth_date,
+                 -- 身分：活動人員設定優先，其次是這場的薪資單（舊表匯入時標的承攬／僱傭）
+                 coalesce(es.relation, ps.relation, 'employment') relation, coalesce(es.insured_salary, e.insured_salary) insured_salary,
+                 coalesce(public.valid_tw_id(p.national_id), false) id_valid,
+                 row_number() over (order by flt.event_start desc nulls last, flt.event_name, p.name, flt.work_date) rn
+            from flt join public.people p on p.id = flt.person_id join public.events e on e.id = flt.event_id
+            left join public.event_staff es on es.event_id = flt.event_id and es.person_id = flt.person_id
+            left join lateral (select x.relation, x.role from public.payslips x where x.event_id = flt.event_id and x.person_id = flt.person_id and x.status <> 'void'
+                               order by x.created_at desc limit 1) ps on true) r;
+  return jsonb_build_object('ok', true, 'total', v_n, 'truncated', v_n > 5000, 'rows', v_rows);
 end $function$
 ;
 

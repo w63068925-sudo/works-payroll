@@ -93,3 +93,7 @@
 ## 待補審（安全相關，sol high）：舊表證件一次性匯入 — 2026-11-23
 - 範圍：docs Edge Function 新增 legacy_import（以一次性匯入金鑰驗證，金鑰 SHA-256 雜湊存 app_settings、7 天到期；只補系統沒有的證件、不覆蓋）、doc_import_ok（僅 service role 可執行）、apps-script/import-documents.gs
 - 狀態：使用者指示先部署後補審；額度恢復後審查此 commit
+
+## 待補審（個資匯出，sol high）：加保名冊 Excel 匯出 — 2026-11-23
+- 範圍：admin_roster（STABLE、需管理員 token、狀態白名單、上限 5,000 列）、admin_log_export（匯出前先寫 audit_log，失敗不產生檔案）、web/admin.html 加保名冊頁與自製 XLSX 產生器（文字欄一律字串、不依賴外部套件）、regression 第 18 組
+- 狀態：先部署後補審；額度恢復後審查此 commit

@@ -74,7 +74,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--ink);box-shadow:0 0 0
 .cal .day.sel{border-bottom-color:var(--ink);background:var(--soft)}
 .cal .n{font-size:13px;font-weight:600;font-family:var(--num)}
 .cal .day.today .n{background:var(--ink);color:#fff;border-radius:99px;padding:0 7px;align-self:flex-start}
-.cal .chip{font-size:12px;line-height:1.35;padding:2px 6px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:3px solid currentColor}
+.cal .chip{height:auto;font-size:12px;line-height:1.35;padding:2px 6px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-left:3px solid currentColor}
 .cal .more{font-size:12px;color:var(--muted)}
 @media (max-width:760px){.cal .day{min-height:64px;padding:4px}.cal .chip{font-size:0;padding:0;height:6px;border-left:0}.cal .more{font-size:10px}}
 .tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none;margin-bottom:14px}
@@ -126,6 +126,9 @@ tbody tr.on{background:var(--accent-soft)}
 .qrbox svg{display:block;width:100%;height:auto}
 .qrscreen{position:fixed;inset:0;background:var(--paper);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
 .qrscreen .qrbox svg{width:min(72vw,62vh,440px)}
+button.stat{font:inherit;color:inherit;text-align:left;cursor:pointer;border-bottom:3px solid var(--line)}
+button.stat:hover{background:var(--soft)}
+button.stat.sel{border-bottom-color:var(--ink)}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 .chip{height:34px;padding:0 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);cursor:pointer;font-size:13.5px}
 .chip[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
@@ -207,7 +210,7 @@ function viewAuth(mode, message) {
 }
 
 /* ---------- 外框與路由 ---------- */
-const NAV = [['today', '今日現場'], ['events', '活動'], ['calendar', '班表'], ['people', '人員'], ['payouts', '薪資發放'], ['settings', '設定']];
+const NAV = [['today', '今日現場'], ['events', '活動'], ['calendar', '班表'], ['people', '人員'], ['roster', '加保名冊'], ['payouts', '薪資發放'], ['settings', '設定']];
 function activeEvents() { const t = today(); return (S.ov ? S.ov.events : []).filter(e => e.start_date && e.start_date <= t && (e.end_date || e.start_date) >= addDays(t, -1)); }
 function addDays(s, n) { const x = new Date(s + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
 function shell(section, html) {
@@ -235,6 +238,7 @@ async function route() {
     if (sec === 'events' && parts[1]) return viewEvent(parts[1], parts[2]);
     if (sec === 'events') return viewEvents();
     if (sec === 'calendar') return viewCalendar(parts[1], parts[2]);
+    if (sec === 'roster') return viewRoster();
     if (sec === 'people') return viewPeople(parts[1]);
     if (sec === 'payouts') return viewPayouts();
     if (sec === 'settings') return viewSettings();
@@ -936,6 +940,162 @@ async function viewCalendar(ym, evId) {
   $('cmonth').onchange = () => goYm($('cyear').value, $('cmonth').value);
   // 切換活動：單一活動跳到它開始的月份
   $('cev').onchange = () => { const v = $('cev').value, e = S.ov.events.find(x => x.id === v); S.calDay = e && e.start_date ? e.start_date : null; go(base + (e && e.start_date ? e.start_date.slice(0, 7) : ym) + (v ? '/' + v : '')); };
+}
+
+
+/* ---------- XLSX 產生器（不依賴外部套件；文字一律存成字串，身分證字號、民國生日不會被 Excel 轉格式） ---------- */
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function zipStore(files) {
+  const enc = new TextEncoder(), parts = [], central = []; let off = 0;
+  const u16 = n => [n & 255, (n >>> 8) & 255], u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+  files.forEach(([name, text]) => {
+    const nb = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+    const common = [...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nb.length), ...u16(0)];
+    const local = new Uint8Array([...u32(0x04034b50), ...common]);
+    parts.push(local, nb, data);
+    central.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...common, ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), nb);
+    off += local.length + nb.length + data.length;
+  });
+  const cenSize = central.reduce((a, x) => a + x.length, 0);
+  const end = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cenSize), ...u32(off), ...u16(0)]);
+  return new Blob([...parts, ...central, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+const xesc = v => String(v == null ? '' : v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function colName(i) { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
+// sheets: [{ name, cols: [{ title, width, num }], rows: [[...]], warnRows: Set(index) }]
+function buildXlsx(sheets) {
+  const sheetXml = sh => {
+    const rowXml = (cells, r, style) => `<row r="${r}">${cells.map((v, c) => {
+      const ref = colName(c) + r, st = style != null ? style : (sh.cols[c].num && v !== '' && v != null && !isNaN(v) ? 3 : 0);
+      if (style == null && sh.cols[c].num && v !== '' && v != null && !isNaN(v)) return `<c r="${ref}" s="${sh.warnRows && sh.warnRows.has(r - 2) ? 4 : st}"><v>${Number(v)}</v></c>`;
+      return `<c r="${ref}" t="inlineStr" s="${style != null ? style : (sh.warnRows && sh.warnRows.has(r - 2) ? 2 : 0)}"><is><t xml:space="preserve">${xesc(v)}</t></is></c>`;
+    }).join('')}</row>`;
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<cols>${sh.cols.map((c, i) => `<col min="${i + 1}" max="${i + 1}" width="${c.width || 12}" customWidth="1"/>`).join('')}</cols>
+<sheetData>${rowXml(sh.cols.map(c => c.title), 1, 1)}${sh.rows.map((r, i) => rowXml(r, i + 2)).join('')}</sheetData>
+${sh.rows.length ? `<autoFilter ref="A1:${colName(sh.cols.length - 1)}${sh.rows.length + 1}"/>` : ''}</worksheet>`;
+  };
+  const files = [
+    ['[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`],
+    ['_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sh, i) => `<sheet name="${xesc(sh.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`],
+    ['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+    // 樣式：0 文字、1 標題（粗體灰底）、2 有缺漏的列（淡黃底文字）、3 數字千分位、4 有缺漏的數字
+    ['xl/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEFEBE3"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFBF1D9"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="5"><xf numFmtId="49" applyNumberFormat="1"/><xf numFmtId="49" fontId="1" fillId="2" applyNumberFormat="1" applyFont="1" applyFill="1"/><xf numFmtId="49" fillId="3" applyNumberFormat="1" applyFill="1"/><xf numFmtId="164" applyNumberFormat="1"/><xf numFmtId="164" fillId="3" applyNumberFormat="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`],
+    ...sheets.map((sh, i) => [`xl/worksheets/sheet${i + 1}.xml`, sheetXml(sh)]),
+  ];
+  return zipStore(files);
+}
+function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+
+/* ---------- 加保名冊 ---------- */
+const R_STATUS = [['accepted', '已錄取'], ['attended', '出勤紀錄（舊活動）'], ['applied', '待審'], ['waitlist', '備取'], ['rejected', '未錄取']];
+const rocDate = s => s ? String(Number(s.slice(0, 4)) - 1911).padStart(3, '0') + s.slice(5, 7) + s.slice(8, 10) : '';
+// 同一人、同一場、同一狀態的工作日，連續的合併成一段加保期間；不連續就分開列
+function rosterGroups(rows) {
+  const by = new Map();
+  rows.forEach(r => { const k = r.person_id + '|' + r.event_id + '|' + r.status; if (!by.has(k)) by.set(k, []); by.get(k).push(r); });
+  const out = [];
+  by.forEach(list => {
+    const days = [...new Map(list.map(r => [r.work_date, r])).values()].sort((a, b) => a.work_date < b.work_date ? -1 : 1);
+    let run = [];
+    const flush = () => {
+      if (!run.length) return;
+      const f = run[0], problems = [];
+      if (!String(f.name || '').trim()) problems.push('缺姓名');
+      if (!String(f.national_id || '').trim()) problems.push('缺身分證字號'); else if (!f.id_valid) problems.push('身分證字號格式錯誤');
+      if (!f.birth_date) problems.push('缺出生年月日');
+      const times = [...new Set(list.filter(r => run.some(x => x.work_date === r.work_date) && r.t_start).map(r => r.t_start + '–' + r.t_end))];
+      out.push({ key: f.person_id + '|' + f.event_id + '|' + f.status + '|' + f.work_date, person_id: f.person_id, name: f.name, national_id: f.national_id, birth_date: f.birth_date,
+        event_id: f.event_id, event_name: f.event_name, status: f.status, role: [...new Set(run.map(r => r.role).filter(Boolean))].join('、'), times: times.join('、'),
+        from: f.work_date, to: run[run.length - 1].work_date, days: run.length, dates: run.map(r => md(r.work_date)).join('、'),
+        relation: f.relation, insured: f.relation === 'contract' ? null : f.insured_salary, needIns: f.relation !== 'contract', problems });
+      run = [];
+    };
+    days.forEach(r => { if (run.length && addDays(run[run.length - 1].work_date, 1) !== r.work_date) flush(); run.push(r); });
+    flush();
+  });
+  return out;
+}
+async function viewRoster() {
+  const F = S.filter.roster = S.filter.roster || { q: '', event_id: '', from: '', to: '', statuses: ['accepted', 'attended'], view: 'all' };
+  S.rsel = S.rsel || new Set();
+  const r = await rpc('admin_roster', { p_filter: { q: F.q, event_id: F.event_id, from: F.from, to: F.to, statuses: F.statuses } });
+  if (r.ok === false) { shell('roster', '<div class="msg err">篩選條件有誤，請檢查日期。</div>'); return; }
+  const groups = rosterGroups(r.rows), keys = new Set(groups.map(g => g.key));
+  S.rsel.forEach(k => { if (!keys.has(k)) S.rsel.delete(k); });
+  const bad = groups.filter(g => g.problems.length), need = groups.filter(g => g.needIns);
+  const list = F.view === 'bad' ? bad : F.view === 'need' ? need : groups;
+  const people = new Set(groups.map(g => g.person_id)).size;
+  const evOpts = S.ov.events.slice().sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || '')));
+  const stLabel = Object.fromEntries(R_STATUS);
+  shell('roster', `
+    <div class="head"><div><h1>加保名冊</h1><p class="sub">同一人報名多個日期時，連續的日期合併成一段加保期間，不連續的分開列。匯出只限管理員，每次匯出都會留下紀錄。</p></div>
+      <div class="row"><button class="btn ghost" id="xsel" ${S.rsel.size ? '' : 'disabled'}>匯出勾選（${S.rsel.size}）</button><button class="btn" id="xall" ${list.length ? '' : 'disabled'}>${F.event_id && !F.from && !F.to && F.view === 'all' ? '匯出整場名單' : '匯出全部'}（${list.length}）</button></div></div>
+    <div class="card pad" style="margin-bottom:14px">
+      <div class="row">
+        <div style="flex:2;min-width:200px"><label for="rq">活動名稱</label><input id="rq" type="search" placeholder="輸入部分名稱" value="${esc(F.q)}"></div>
+        <div style="flex:2;min-width:200px"><label for="rev">指定活動</label><select id="rev"><option value="">全部活動</option>${evOpts.map(e => `<option value="${esc(e.id)}" ${e.id === F.event_id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select></div>
+        <div style="min-width:150px"><label for="rfrom">工作日期起</label><input id="rfrom" type="date" value="${esc(F.from)}"></div>
+        <div style="min-width:150px"><label for="rto">工作日期迄</label><input id="rto" type="date" value="${esc(F.to)}"></div>
+        <button class="btn ghost" id="rclear">清除</button>
+      </div>
+      <p class="sub" style="margin:12px 0 6px">報名狀態（可複選）</p>
+      <div class="chips" style="margin:0">${R_STATUS.map(([k, t]) => `<button class="chip rst" aria-pressed="${F.statuses.includes(k)}" data-s="${k}">${t}</button>`).join('')}</div>
+    </div>
+    <div class="stats">
+      <button class="card stat ${F.view === 'all' ? 'sel' : ''}" data-v="all" aria-pressed="${F.view === 'all'}"><div class="k">加保期間</div><div class="v">${groups.length}</div><div class="dim">${people} 人</div></button>
+      <button class="card stat ${F.view === 'need' ? 'sel' : ''}" data-v="need" aria-pressed="${F.view === 'need'}"><div class="k">需加保</div><div class="v">${need.length}</div><div class="dim">承攬不需加保</div></button>
+      <button class="card stat ${F.view === 'bad' ? 'sel' : ''}" data-v="bad" aria-pressed="${F.view === 'bad'}"><div class="k">資料缺漏</div><div class="v" style="${bad.length ? 'color:var(--warn)' : ''}">${bad.length}</div><div class="dim">姓名、身分證、生日</div></button>
+    </div>
+    ${r.truncated ? '<div class="msg warn">符合條件的資料超過 5,000 筆，只顯示前 5,000 筆，請縮小篩選範圍。</div>' : ''}
+    <div class="card tablebox">${list.length ? `<table><thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${list.every(g => S.rsel.has(g.key)) ? 'checked' : ''}></th><th>姓名</th><th>身分證字號</th><th>出生日期</th><th>活動</th><th>加保期間</th><th class="r">天數</th><th>狀態</th><th>檢查</th></tr></thead><tbody>
+      ${list.map(g => `<tr><td><input type="checkbox" class="ck" data-k="${esc(g.key)}" ${S.rsel.has(g.key) ? 'checked' : ''} aria-label="選取 ${esc(g.name)}"></td>
+        <td>${esc(g.name || '—')}</td><td style="font-family:var(--num)">${esc(g.national_id || '—')}</td><td style="font-family:var(--num)">${g.birth_date ? esc(rocDate(g.birth_date)) : '—'}</td>
+        <td>${esc(g.event_name)}${g.role ? '<div class="dim">' + esc(g.role) + '</div>' : ''}</td>
+        <td style="font-family:var(--num)">${esc(d(g.from))}${g.to !== g.from ? '–' + esc(md(g.to)) : ''}</td><td class="r">${g.days}</td>
+        <td>${esc(stLabel[g.status] || g.status)}${g.needIns ? '' : ' <span class="badge">承攬</span>'}</td>
+        <td>${g.problems.length ? g.problems.map(p => `<span class="badge warn">${esc(p)}</span>`).join(' ') : '<span class="badge ok">完整</span>'}</td></tr>`).join('')}
+      </tbody></table>` : '<p class="empty">沒有符合條件的資料。</p>'}</div>`);
+  const reload = () => viewRoster();
+  let tq;
+  $('rq').oninput = () => { clearTimeout(tq); tq = setTimeout(() => { F.q = $('rq').value.trim(); reload().then(() => { const x = $('rq'); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }); }, 400); };
+  $('rev').onchange = () => { F.event_id = $('rev').value; reload(); };
+  $('rfrom').onchange = () => { F.from = $('rfrom').value; reload(); };
+  $('rto').onchange = () => { F.to = $('rto').value; reload(); };
+  $('rclear').onclick = () => { S.filter.roster = null; S.rsel.clear(); reload(); };
+  on('.rst', 'click', (ev, b) => { const k = b.dataset.s; F.statuses = F.statuses.includes(k) ? F.statuses.filter(x => x !== k) : F.statuses.concat(k); if (!F.statuses.length) F.statuses = ['accepted']; reload(); });
+  on('button.stat', 'click', (ev, b) => { F.view = b.dataset.v; reload(); });
+  on('.ck', 'change', (ev, c) => { c.checked ? S.rsel.add(c.dataset.k) : S.rsel.delete(c.dataset.k); $('xsel').textContent = '匯出勾選（' + S.rsel.size + '）'; $('xsel').disabled = !S.rsel.size; });
+  if ($('all')) $('all').onchange = () => { list.forEach(g => $('all').checked ? S.rsel.add(g.key) : S.rsel.delete(g.key)); reload(); };
+  const doExport = async picked => {
+    if (!picked.length) return;
+    const btns = [$('xsel'), $('xall')]; btns.forEach(b => { b.disabled = true; });
+    try {
+      const log = await rpc('admin_log_export', { p_kind: 'insurance_roster', p_rows: picked.length, p_detail: { q: F.q, event_id: F.event_id, from: F.from, to: F.to, statuses: F.statuses, view: F.view, selected: picked.length !== list.length } });
+      if (!log.ok) throw new Error('無法寫入匯出紀錄，這次沒有產生檔案。');
+      const cols = [{ title: '序號', width: 6, num: true }, { title: '姓名', width: 10 }, { title: '身分證字號', width: 13 }, { title: '出生日期（民國）', width: 15 }, { title: '出生日期（西元）', width: 15 },
+        { title: '活動', width: 26 }, { title: '加保日期', width: 12 }, { title: '退保日期', width: 12 }, { title: '天數', width: 6, num: true }, { title: '工作日期', width: 22 }, { title: '時段', width: 14 },
+        { title: '崗位', width: 12 }, { title: '投保薪資', width: 10, num: true }, { title: '需加保', width: 8 }, { title: '報名狀態', width: 12 }, { title: '檢查結果', width: 22 }];
+      const warn = new Set();
+      const rows = picked.map((g, i) => { if (g.problems.length) warn.add(i); return [i + 1, g.name || '', g.national_id || '', rocDate(g.birth_date), g.birth_date ? g.birth_date.replace(/-/g, '/') : '', g.event_name,
+        g.from.replace(/-/g, '/'), g.to.replace(/-/g, '/'), g.days, g.dates, g.times, g.role, g.insured == null ? '' : g.insured, g.needIns ? '是' : '否（承攬）', stLabel[g.status] || g.status, g.problems.join('、') || '完整']; });
+      const probs = picked.map((g, i) => [i + 1, g]).filter(([, g]) => g.problems.length).map(([n, g]) => [n, g.name || '', g.national_id || '', g.event_name, g.problems.join('、')]);
+      const blob = buildXlsx([
+        { name: '加保名冊', cols, rows, warnRows: warn },
+        { name: '資料檢查', cols: [{ title: '名冊序號', width: 9, num: true }, { title: '姓名', width: 10 }, { title: '身分證字號', width: 13 }, { title: '活動', width: 26 }, { title: '缺漏項目', width: 30 }], rows: probs.length ? probs : [['', '', '', '', '全部資料完整']] },
+      ]);
+      const ev = F.event_id && S.ov.events.find(e => e.id === F.event_id);
+      const label = (ev ? ev.name : F.q || (F.from || F.to ? (F.from || '') + '至' + (F.to || '') : '全部活動')).replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
+      downloadBlob(blob, `加保名冊_${label}_${today()}.xlsx`);
+      flash('ok', `已匯出 ${picked.length} 筆${probs.length ? '，其中 ' + probs.length + ' 筆資料有缺漏，已在檔案中標黃並列在「資料檢查」分頁' : ''}。`);
+      reload();
+    } catch (err) { if (err.message !== 'session') { flash('err', err.message); reload(); } }
+  };
+  $('xsel').onclick = () => doExport(groups.filter(g => S.rsel.has(g.key)));
+  $('xall').onclick = () => doExport(list);
 }
 
 /* ---------- 人員 ---------- */

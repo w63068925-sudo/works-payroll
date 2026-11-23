@@ -182,5 +182,19 @@ begin
   if public.admin_calendar('bad-token', '2026-12-01', '2026-12-31')->>'error' is distinct from 'session' then fails := fails || ' [17d no session]'; end if;
   if public.admin_calendar(atok, '2026-01-01', '2026-12-31')->>'error' is distinct from 'bad_range' then fails := fails || ' [17e range too long]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 17 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 18. 加保名冊：只限管理員、依狀態與日期篩選、身分證字號檢查；匯出一定留紀錄
+  r := public.admin_roster(atok, jsonb_build_object('event_id', ev, 'statuses', jsonb_build_array('accepted')));
+  if (select count(*) from jsonb_array_elements(r->'rows') x where (x->>'person_id')::uuid = p1) <> 2 then fails := fails || ' [18a accepted days for p1: ' || coalesce(r->>'total', 'null') || ']'; end if;
+  if exists (select 1 from jsonb_array_elements(r->'rows') x where (x->>'person_id')::uuid = p2) then fails := fails || ' [18b non-accepted included]'; end if;
+  r := public.admin_roster(atok, jsonb_build_object('event_id', ev, 'statuses', jsonb_build_array('accepted'), 'from', v_today + 1, 'to', v_today + 1));
+  if (r->>'total')::int <> 1 then fails := fails || ' [18c date filter]'; end if;
+  if (select (x->>'id_valid')::boolean from jsonb_array_elements(r->'rows') x limit 1) is not false then fails := fails || ' [18d test ID should be invalid]'; end if;
+  if public.admin_roster('bad-token', '{}')->>'error' is distinct from 'session' then fails := fails || ' [18e no session]'; end if;
+  if public.admin_roster(atok, '{"from":"not-a-date"}')->>'error' is distinct from 'bad_filter' then fails := fails || ' [18f bad filter]'; end if;
+  if public.admin_log_export('bad-token', 'insurance_roster', 1, '{}')->>'error' is distinct from 'session' then fails := fails || ' [18g export log without session]'; end if;
+  -- 分兩句：同一個運算式看不到函式內剛寫入的紀錄
+  if (public.admin_log_export(atok, 'insurance_roster', 3, '{}')->>'ok')::boolean is not true then fails := fails || ' [18h export log failed]'; end if;
+  if not exists (select 1 from public.audit_log where actor = 'regression-admin' and action = 'export_insurance_roster') then fails := fails || ' [18i export not logged]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 18 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;
