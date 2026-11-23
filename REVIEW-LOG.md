@@ -101,3 +101,7 @@
 ## 待補審（含個資，sol high）：資料夾全部舊表暫存匯入 — 2026-11-23
 - 範圍：legacy_sheets 暫存表（RLS、無對外權限，整理後刪除）、docs Edge Function 新增 legacy_sheet 與 legacy_import 的 check_only、apps-script/import-documents.gs 改為整個資料夾（分段存進度、自動接續觸發器）
 - 狀態：先部署後補審
+
+## 待補審（資料匯入，sol medium）：資料夾 260 份舊表匯入 — 2026-11-24
+- 範圍：supabase/LEGACY-IMPORT.md 所述規則（一次性 SQL，已執行並刪除暫存）；apps-script/import-documents.gs 修正 importDocuments 逾時時引用未定義變數
+- 狀態：先部署後補審

@@ -95,7 +95,7 @@ function importDocuments() {
   const sheetDone = done_('docSheets');
   for (const [fid, ftitle] of order) {
     if (sheetDone[fid]) continue;
-    if (Date.now() - start > BUDGET_MS) { saveDone_('docs', done); continueLater_('importDocuments'); return finish_(stat, fails, false); }
+    if (Date.now() - start > BUDGET_MS) { continueLater_('importDocuments'); return finish_(stat, fails, false); }
     const f = { id: fid, title: ftitle };
     const rows = SpreadsheetApp.openById(fid).getSheets()[0].getDataRange().getDisplayValues();
     let missingPerson = false;
