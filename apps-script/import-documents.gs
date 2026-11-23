@@ -136,13 +136,17 @@ function importDocuments() {
         else { stat.failed++; fails.push(f.title + ' 第' + (part[j].r + 1) + '列 ' + part[j].kind + '：' + (o.error || '?')); }
       });
     }
-    // 照片分批同時上傳
-    for (let i = 0; i < need.length; i += 6) {
+    // 照片分批：同時下載、同時上傳
+    const auth = { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() };
+    for (let i = 0; i < need.length; i += 10) {
       if (Date.now() - start > BUDGET_MS) { continueLater_('importDocuments'); return finish_(stat, fails, false); }
-      const part = [], reqs = [];
-      need.slice(i, i + 6).forEach(it => {
+      const batch = need.slice(i, i + 10), part = [], reqs = [];
+      const got = UrlFetchApp.fetchAll(batch.map(it => ({ url: 'https://www.googleapis.com/drive/v3/files/' + it.fileId + '?alt=media', headers: auth, muteHttpExceptions: true })));
+      got.forEach((res, j) => {
+        const it = batch[j];
         try {
-          const blob = fileBlob_(it.fileId);
+          let blob = res.getResponseCode() === 200 ? res.getBlob() : fileBlob_(it.fileId);
+          blob = fitBlob_(blob, it.fileId);
           reqs.push(req_({ action: 'legacy_import', import_key: key, national_id: it.nid, kind: it.kind, content_type: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()), source: f.title.slice(0, 80) }));
           part.push(it);
         } catch (e) { stat.failed++; fails.push(f.title + ' 第' + (it.r + 1) + '列 ' + it.kind + '：' + e.message); }
@@ -165,11 +169,12 @@ function importDocuments() {
 function stamp_(v) { const m = String(v || '').match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : 0; }
 function idsIn_(cell) { const out = []; let m; URL_RE.lastIndex = 0; while ((m = URL_RE.exec(String(cell || '')))) out.push(m[1]); return out; }
 // 取得檔案；格式不支援就轉 JPEG，太大就改抓 2400px 縮圖
-function fileBlob_(fileId) {
-  let blob = DriveApp.getFileById(fileId).getBlob();
-  let type = blob.getContentType();
-  if (type === 'image/heif') { blob.setContentType('image/heic'); type = 'image/heic'; }
-  if (OK_TYPES.indexOf(type) < 0) { blob = blob.getAs('image/jpeg'); type = 'image/jpeg'; }
+function fileBlob_(fileId) { return fitBlob_(DriveApp.getFileById(fileId).getBlob(), fileId); }
+function fitBlob_(blob, fileId) {
+  let type = String(blob.getContentType() || '').split(';')[0];
+  if (type === 'image/heif') type = 'image/heic';
+  blob.setContentType(type);
+  if (OK_TYPES.indexOf(type) < 0) { blob = blob.getAs('image/jpeg'); }
   if (blob.getBytes().length > MAX_BYTES) {
     const res = UrlFetchApp.fetch('https://drive.google.com/thumbnail?sz=w2400&id=' + fileId, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } });
     blob = res.getBlob(); blob.setContentType('image/jpeg');
