@@ -666,6 +666,8 @@ begin
     'bank_account', p.bank_account, 'source', p.profile_source, 'created_at', p.created_at, 'consent_at', p.consent_at,
     'has_password', p.password_hash is not null, 'password_changed', p.password_changed_at is not null, 'locked', p.locked_until is not null and p.locked_until > now(),
     'documents', coalesce((select jsonb_object_agg(d.kind, d.uploaded_at) from public.people_documents d where d.person_id = p.id), '{}'::jsonb),
+      'doc_meta', coalesce((select jsonb_object_agg(d.kind, jsonb_build_object('link_only', d.path is null, 'drive', d.drive_file_id is not null, 'proof', d.downgraded_at is not null)) from public.people_documents d where d.person_id = p.id), '{}'::jsonb),
+      'docs_verified_at', p.docs_verified_at, 'docs_verified_by', p.docs_verified_by,
     'issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
         from public.data_issues i where i.person_id = p.id and i.payslip_id is null), '[]'::jsonb),
     'payslips', coalesce((select jsonb_agg(jsonb_build_object('event', e.name, 'net', s.net, 'status', s.status, 'period_start', s.period_start) order by s.period_start desc nulls last)
