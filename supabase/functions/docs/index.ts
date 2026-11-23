@@ -1,5 +1,6 @@
 // 證件上傳與調閱。本函式自行驗證：工讀生用登入 token、管理員用管理 token。（部署時 verify_jwt = false）
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { decode, Image } from "https://deno.land/x/imagescript@1.3.0/mod.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -54,44 +55,64 @@ Deno.serve(async (req: Request) => {
       if (error) return json({ ok: false, error: "db" });
       return json({ ok: true, rows: vals.length });
     }
-    // 舊表證件一次性匯入（Apps Script 從表單擁有者的雲端送來）：只補沒有的，不覆蓋本人上傳的
+    // 舊表證件一次性匯入：系統只存長邊 300px、5KB 以內的縮圖，原檔留在雲端（存檔案 ID）；不覆蓋本人上傳的
     if (b.action === "legacy_import") {
       const { data: ok } = await sb.rpc("doc_import_ok", { p_key: String(b.import_key ?? "") });
       if (ok !== true) return json({ ok: false, error: "key" }, 401);
       if (!["id_front", "id_back", "bankbook"].includes(kind)) return json({ ok: false, error: "bad_kind" });
       const nid = String(b.national_id ?? "").trim().toUpperCase();
       if (!/^[A-Z][0-9A-Z]\d{8}$/.test(nid)) return json({ ok: false, error: "bad_id" });
+      const driveId = String(b.drive_file_id ?? "");
       const { data: person } = await sb.from("people").select("id").eq("national_id", nid).maybeSingle();
       if (!person) return json({ ok: false, error: "no_person" });
-      const { data: has } = await sb.from("people_documents").select("path").eq("person_id", person.id).eq("kind", kind).maybeSingle();
-      if (has) return json({ ok: true, skipped: "exists" });
+      const { data: has } = await sb.from("people_documents").select("path, drive_file_id").eq("person_id", person.id).eq("kind", kind).maybeSingle();
+      // 之前以原尺寸匯入的舊證件可換成縮圖；本人上傳或已是縮圖的不動
+      const replaceable = has && has.path.includes("-legacy-") && !has.drive_file_id;
+      if (has && !replaceable) return json({ ok: true, skipped: "exists" });
       if (b.check_only === true) return json({ ok: true, need: true });
-      const type = String(b.content_type ?? ""), ext = EXT[type];
-      if (!ext) return json({ ok: false, error: "bad_type", type });
+      if (!/^[A-Za-z0-9_-]{20,80}$/.test(driveId)) return json({ ok: false, error: "bad_drive_id" });
       let bytes: Uint8Array;
       try { bytes = Uint8Array.from(atob(String(b.data ?? "")), (c) => c.charCodeAt(0)); } catch { return json({ ok: false, error: "bad_data" }); }
-      if (bytes.length < 100 || bytes.length > 8 * 1024 * 1024) return json({ ok: false, error: "bad_size", size: bytes.length });
-      const path = `${person.id}/${kind}-legacy-${Date.now()}.${ext}`;
-      const { error: stErr } = await sb.storage.from("documents").upload(path, bytes, { contentType: type, upsert: false });
+      if (bytes.length < 100 || bytes.length > 2 * 1024 * 1024) return json({ ok: false, error: "bad_size", size: bytes.length });
+      let thumb: Uint8Array | null = null;
+      try {
+        const img = await decode(bytes);
+        if (!(img instanceof Image)) return json({ ok: false, error: "bad_image" });
+        for (const side of [300, 240, 200, 160]) {
+          const r = img.width >= img.height ? img.clone().resize(Math.min(side, img.width), Image.RESIZE_AUTO) : img.clone().resize(Image.RESIZE_AUTO, Math.min(side, img.height));
+          for (const q of [60, 45, 35, 25, 18, 12]) { const out = await r.encodeJPEG(q); if (out.length <= 5120) { thumb = out; break; } }
+          if (thumb) break;
+        }
+      } catch { return json({ ok: false, error: "bad_image" }); }
+      if (!thumb) return json({ ok: false, error: "too_big" });
+      const path = `${person.id}/${kind}-legacy-thumb-${Date.now()}.jpg`;
+      const { error: stErr } = await sb.storage.from("documents").upload(path, thumb, { contentType: "image/jpeg", upsert: false });
       if (stErr) return json({ ok: false, error: "storage" });
-      const { error: insErr } = await sb.from("people_documents").insert({ person_id: person.id, kind, path, uploaded_at: new Date().toISOString() });
-      if (insErr) { await sb.storage.from("documents").remove([path]); return json({ ok: true, skipped: "exists" }); }
-      await sb.from("audit_log").insert({ actor: "legacy_import", action: "document_imported", table_name: "people_documents", row_id: person.id, detail: { kind, source: String(b.source ?? "").slice(0, 80) } });
-      return json({ ok: true, imported: true });
+      if (replaceable) {
+        const { error: upErr } = await sb.from("people_documents").update({ path, drive_file_id: driveId, uploaded_at: new Date().toISOString() })
+          .eq("person_id", person.id).eq("kind", kind).eq("path", has.path);
+        if (upErr) { await sb.storage.from("documents").remove([path]); return json({ ok: false, error: "db" }); }
+        await sb.storage.from("documents").remove([has.path]);
+      } else {
+        const { error: insErr } = await sb.from("people_documents").insert({ person_id: person.id, kind, path, drive_file_id: driveId, uploaded_at: new Date().toISOString() });
+        if (insErr) { await sb.storage.from("documents").remove([path]); return json({ ok: true, skipped: "exists" }); }
+      }
+      await sb.from("audit_log").insert({ actor: "legacy_import", action: "document_imported", table_name: "people_documents", row_id: person.id, detail: { kind, thumb_bytes: thumb.length, source: String(b.source ?? "").slice(0, 80) } });
+      return json({ ok: true, imported: true, bytes: thumb.length });
     }
     if (b.action === "view_url") {
       const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
       if (!actor) return json({ ok: false, error: "session" });
       if (!KINDS.includes(kind)) return json({ ok: false, error: "bad_kind" });
       const personId = String(b.person_id ?? "");
-      const { data: doc } = await sb.from("people_documents").select("path").eq("person_id", personId).eq("kind", kind).maybeSingle();
+      const { data: doc } = await sb.from("people_documents").select("path, drive_file_id").eq("person_id", personId).eq("kind", kind).maybeSingle();
       if (!doc) return json({ ok: false, error: "missing" });
       // 先寫入調閱紀錄，寫入失敗就不核發連結
       const { error: auditErr } = await sb.from("audit_log").insert({ actor, action: "document_url_issued", table_name: "people_documents", row_id: personId, detail: { kind } });
       if (auditErr) return json({ ok: false, error: "audit" });
       const { data, error } = await sb.storage.from("documents").createSignedUrl(doc.path, 120);
       if (error || !data) return json({ ok: false, error: "storage" });
-      return json({ ok: true, url: data.signedUrl });
+      return json({ ok: true, url: data.signedUrl, thumb: !!doc.drive_file_id, drive_url: doc.drive_file_id ? `https://drive.google.com/file/d/${doc.drive_file_id}/view` : null });
     }
     return json({ ok: false, error: "bad_action" }, 400);
   } catch (_e) {

@@ -9,14 +9,13 @@
  * 4. 等系統整理好人員資料後，第二步：選 importDocuments → 執行。同樣會自動接續，直到「證件全部完成」。
  *
  * 規則：系統裡已經有的證件（例如本人自己上傳的）不會被覆蓋；同一人在多份表單都有，以最新一場活動為準。
+ * 證件只存長邊 300px、5KB 以內的縮圖，原檔留在雲端，系統記錄雲端檔案 ID，點縮圖連回原檔（只有被分享的帳號打得開）。
  * 資料不經過任何第三方，直接從你的雲端送到系統的私有儲存區。全部完成後可以刪除這個 Apps Script 專案。
  */
 const ENDPOINT = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/docs';
 const FOLDER_ID = '18YMg_0INusMi4Jyo7n0nA3tbyHjTmfk5';
 const ID_RE = /^[A-Z][0-9A-Z]\d{8}$/;
 const URL_RE = /https:\/\/drive\.google\.com\/open\?id=([\w-]+)/g;
-const OK_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'application/pdf'];
-const MAX_BYTES = 8 * 1024 * 1024;
 const BUDGET_MS = 4.5 * 60 * 1000;
 
 function key_() {
@@ -136,20 +135,17 @@ function importDocuments() {
         else { stat.failed++; fails.push(f.title + ' 第' + (part[j].r + 1) + '列 ' + part[j].kind + '：' + (o.error || '?')); }
       });
     }
-    // 照片分批：同時下載、同時上傳
+    // 照片分批：同時抓雲端縮圖（400px）、同時送出；系統再壓成 300px、5KB 以內，原檔留在雲端
     const auth = { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() };
-    for (let i = 0; i < need.length; i += 10) {
+    for (let i = 0; i < need.length; i += 20) {
       if (Date.now() - start > BUDGET_MS) { continueLater_('importDocuments'); return finish_(stat, fails, false); }
-      const batch = need.slice(i, i + 10), part = [], reqs = [];
-      const got = UrlFetchApp.fetchAll(batch.map(it => ({ url: 'https://www.googleapis.com/drive/v3/files/' + it.fileId + '?alt=media', headers: auth, muteHttpExceptions: true })));
+      const batch = need.slice(i, i + 20), part = [], reqs = [];
+      const got = UrlFetchApp.fetchAll(batch.map(it => ({ url: 'https://drive.google.com/thumbnail?sz=w400&id=' + it.fileId, headers: auth, muteHttpExceptions: true })));
       got.forEach((res, j) => {
         const it = batch[j];
-        try {
-          let blob = res.getResponseCode() === 200 ? res.getBlob() : fileBlob_(it.fileId);
-          blob = fitBlob_(blob, it.fileId);
-          reqs.push(req_({ action: 'legacy_import', import_key: key, national_id: it.nid, kind: it.kind, content_type: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()), source: f.title.slice(0, 80) }));
-          part.push(it);
-        } catch (e) { stat.failed++; fails.push(f.title + ' 第' + (it.r + 1) + '列 ' + it.kind + '：' + e.message); }
+        if (res.getResponseCode() !== 200 || !/^image\//.test(String(res.getHeaders()['Content-Type'] || ''))) { stat.failed++; fails.push(f.title + ' 第' + (it.r + 1) + '列 ' + it.kind + '：雲端縮圖取得失敗（' + res.getResponseCode() + '）'); return; }
+        reqs.push(req_({ action: 'legacy_import', import_key: key, national_id: it.nid, kind: it.kind, drive_file_id: it.fileId, data: Utilities.base64Encode(res.getBlob().getBytes()), source: f.title.slice(0, 80) }));
+        part.push(it);
       });
       if (!reqs.length) continue;
       UrlFetchApp.fetchAll(reqs).forEach((x, j) => {
@@ -168,19 +164,6 @@ function importDocuments() {
 
 function stamp_(v) { const m = String(v || '').match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : 0; }
 function idsIn_(cell) { const out = []; let m; URL_RE.lastIndex = 0; while ((m = URL_RE.exec(String(cell || '')))) out.push(m[1]); return out; }
-// 取得檔案；格式不支援就轉 JPEG，太大就改抓 2400px 縮圖
-function fileBlob_(fileId) { return fitBlob_(DriveApp.getFileById(fileId).getBlob(), fileId); }
-function fitBlob_(blob, fileId) {
-  let type = String(blob.getContentType() || '').split(';')[0];
-  if (type === 'image/heif') type = 'image/heic';
-  blob.setContentType(type);
-  if (OK_TYPES.indexOf(type) < 0) { blob = blob.getAs('image/jpeg'); }
-  if (blob.getBytes().length > MAX_BYTES) {
-    const res = UrlFetchApp.fetch('https://drive.google.com/thumbnail?sz=w2400&id=' + fileId, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } });
-    blob = res.getBlob(); blob.setContentType('image/jpeg');
-  }
-  return blob;
-}
 function finish_(stat, fails, complete) {
   Logger.log((complete ? '證件全部完成。' : '還沒跑完，1 分鐘後自動接著跑。') +
     ' 本次新增 ' + stat.imported + '、系統已有略過 ' + stat.skipped + '、系統還沒有此人 ' + stat.noPerson + '、失敗 ' + stat.failed);
