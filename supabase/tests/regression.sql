@@ -229,8 +229,12 @@ begin
 
   -- 20. 工讀生密碼至少 7 個字（與民國生日 7 碼一致）；管理員仍至少 8 個字
   if public.payroll_change_password(tok2, '0890101', '123456')->>'error' is distinct from 'too_short' then fails := fails || ' [20a worker 6 accepted]'; end if;
+  if public.payroll_change_password(tok2, 'wrong00', '0730407')->>'error' is distinct from 'invalid' then fails := fails || ' [20d wrong old password accepted]'; end if;
   if (public.payroll_change_password(tok2, '0890101', '0730407')->>'ok')::boolean is not true then fails := fails || ' [20b worker 7 rejected]'; end if;
   if (public.payroll_login('Z999990002', '0730407')->>'ok')::boolean is not true then fails := fails || ' [20c login with new 7]'; end if;
+  -- 改密碼時猜舊密碼也算錯誤次數：錯 5 次鎖定，鎖定中輸入正確也拒絕
+  for i in 1..5 loop perform public.payroll_change_password(tok2, 'wrong00', '7654321'); end loop;
+  if public.payroll_change_password(tok2, '0730407', '7654321')->>'error' is distinct from 'locked' then fails := fails || ' [20e change-password guessing not locked]'; end if;
 
   if fails = '' then raise exception 'PASS 全部 20 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

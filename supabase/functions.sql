@@ -1497,17 +1497,28 @@ CREATE OR REPLACE FUNCTION public.payroll_change_password(p_token text, p_old te
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_pid uuid := public.payroll_session_person(p_token); v_hash text;
+declare v_pid uuid := public.payroll_session_person(p_token); v public.people; v_fail int;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   -- 工讀生密碼至少 7 個字（與預設的民國生日 7 碼一致）；管理員仍至少 8 個字
   if length(coalesce(p_new,'')) < 7 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
-  select password_hash into v_hash from public.people where id = v_pid for update;
-  if v_hash is null or v_hash <> extensions.crypt(coalesce(p_old,''), v_hash) then
+  select * into v from public.people where id = v_pid for update;
+  -- 與登入共用錯誤次數與鎖定：拿到 session 也不能無限猜舊密碼
+  if v.locked_until is not null and v.locked_until > now() then
+    return jsonb_build_object('ok', false, 'error', 'locked', 'retry_after_minutes', ceil(extract(epoch from v.locked_until - now()) / 60));
+  end if;
+  if v.password_hash is null or v.password_hash <> extensions.crypt(coalesce(p_old,''), v.password_hash) then
+    v_fail := v.failed_logins + 1;
+    if v_fail >= 5 then
+      update public.people set failed_logins = 0, locked_until = now() + interval '15 minutes' where id = v_pid;
+      insert into public.audit_log(actor, action, table_name, row_id) values (v_pid::text, 'password_change_locked', 'people', v_pid);
+      return jsonb_build_object('ok', false, 'error', 'locked', 'retry_after_minutes', 15);
+    end if;
+    update public.people set failed_logins = v_fail where id = v_pid;
     return jsonb_build_object('ok', false, 'error', 'invalid');
   end if;
   update public.people set password_hash = extensions.crypt(p_new, extensions.gen_salt('bf', 10)),
-    password_changed_at = now(), updated_at = now() where id = v_pid;
+    password_changed_at = now(), failed_logins = 0, updated_at = now() where id = v_pid;
   delete from public.sessions where person_id = v_pid
     and token_hash <> encode(extensions.digest(p_token, 'sha256'), 'hex');
   insert into public.audit_log(actor, action, table_name, row_id) values (v_pid::text, 'password_changed', 'people', v_pid);

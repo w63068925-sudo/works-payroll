@@ -290,12 +290,13 @@ function viewPassword() {
     e.preventDefault(); m.innerHTML = '';
     const o = document.getElementById('o').value, n = document.getElementById('n').value, n2 = document.getElementById('n2').value;
     if (n !== n2) { m.innerHTML = '<div class="msg err">兩次輸入的新密碼不一樣。</div>'; return; }
+    if (Array.from(n).length < 7) { m.innerHTML = '<div class="msg err">新密碼至少要 7 個字。</div>'; return; }
     go.disabled = true;
     try {
       const r = await rpc('payroll_change_password', { p_token: state.token, p_old: o, p_new: n });
       if (r.ok) { if (state.person) state.person.default_password = false; viewProfile('密碼已更新。'); return; }
       if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
-      m.innerHTML = '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 7 個字。' : '目前的密碼不正確。') + '</div>';
+      m.innerHTML = '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 7 個字。' : r.error === 'locked' ? '目前的密碼錯太多次，請 ' + Number(r.retry_after_minutes || 15) + ' 分鐘後再試。' : '目前的密碼不正確。') + '</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
     go.disabled = false;
   });
