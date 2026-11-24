@@ -276,6 +276,7 @@ function eventState(e) {
   const t = today(), end = e.end_date || e.start_date;
   if (e.start_date && e.start_date <= t && end >= addDays(t, -1)) return ['進行中', 'dark'];
   if (e.start_date && e.start_date > t) return ['即將開始', ''];
+  if (e.closed_at) return ['已結案', 'ok']; // 管理員直接設為結案（例如沒有薪資單的舊活動）
   // 薪資單全部發佈，且發薪日已到；沒設發薪日的（例如舊表匯入的活動）活動結束後即視為結案
   if (e.total > 0 && e.published === e.total - e.void && (payDateOf(e) ? payDateOf(e) <= t : end < t)) return ['已結案', 'ok'];
   return ['待發薪', 'warn'];

@@ -568,7 +568,7 @@ begin
     'employer', (select jsonb_build_object('id', id, 'name', name, 'legal_name', legal_name, 'tax_id', tax_id) from public.employers order by created_at limit 1),
     'events', coalesce((select jsonb_agg(x order by (x->>'start_date') desc nulls last) from (
       select jsonb_build_object('id', e.id, 'name', e.name, 'start_date', e.start_date, 'end_date', e.end_date,
-        'pay_date', e.pay_date, 'pay_within_days', e.pay_within_days,
+        'pay_date', e.pay_date, 'pay_within_days', e.pay_within_days, 'closed_at', e.closed_at,
         'total', count(s.id), 'draft', count(s.id) filter (where s.status = 'draft'),
         'published', count(s.id) filter (where s.status = 'published'), 'void', count(s.id) filter (where s.status = 'void'),
         'net_sum', coalesce(sum(s.net) filter (where s.status <> 'void'), 0),

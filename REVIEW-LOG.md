@@ -124,3 +124,4 @@
 - 以 SQL 批次發佈 3,372 張（沿用 admin_set_status 的規則：有金額、沒有未處理錯誤），稽核紀錄 detail.bulk = legacy_publish_2026-11-25；這批觸發的 LINE 通知全部標為 skipped（過去的薪資不通知）。
 - 仍為草稿 16 張：8 張沒有金額、8 張有未處理的錯誤（實際數字以查詢為準）。
 - 同日使用者指示：先前已發佈 973 張留下的 843 則待寄薪資通知也一併標為 skipped；目前沒有待寄的薪資通知。之後新發佈的薪資單照常通知。
+- 同日使用者指示：已結束、沒有任何薪資單的活動設為已結案。新增 events.closed_at／closed_by，admin_overview 回傳 closed_at，後台 closed_at 有值即顯示已結案；稽核 action = event_closed。
