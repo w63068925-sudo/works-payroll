@@ -157,18 +157,28 @@ function thumbReq_(id, token) { return { url: 'https://drive.google.com/thumbnai
 function isImage_(res) { return res.getResponseCode() === 200 && /^image\//.test(String(res.getHeaders()['Content-Type'] || res.getHeaders()['content-type'] || '')); }
 
 function importThumbs() {
-  const key = key_(), start = Date.now(), token = ScriptApp.getOAuthToken(), props = PropertiesService.getUserProperties();
+  // 同一時間只跑一輪（手動執行與自動接續重疊時，後到的直接結束）
+  const lock = LockService.getUserLock();
+  if (!lock.tryLock(1000)) { Logger.log('已有一輪在跑，這次略過。'); return; }
+  const props = PropertiesService.getUserProperties();
   const stat = { stored: 0, noThumb: 0, failed: 0 };
   let cursor = props.getProperty('thumbCursor') || '';
-  // 保險：萬一這次中途出錯，15 分鐘後自動再試
-  continueLater_('importThumbs', 15);
+  let pass = Number(props.getProperty('thumbPass') || 1);
   try {
+    const key = key_(), start = Date.now(), token = ScriptApp.getOAuthToken();
+    // 保險：萬一這次中途出錯，15 分鐘後自動再試（連續出錯 5 次就停）
+    continueLater_('importThumbs', 15);
     while (true) {
       const todo = post_({ action: 'legacy_thumb_todo', import_key: key, after: cursor, limit: 100 });
       if (!todo.ok) throw new Error('清單取得失敗：' + todo.error);
-      if (!todo.ids.length) break;
+      if (!todo.ids.length) {
+        // 一輪結束：失敗或暫時拿不到縮圖的會留在清單上，從頭再補，最多 3 輪
+        if (!cursor || pass >= 3) break;
+        pass++; cursor = ''; props.setProperties({ thumbPass: String(pass), thumbCursor: '' });
+        continue;
+      }
       for (let i = 0; i < todo.ids.length; i += 20) {
-        if (Date.now() - start > BUDGET_MS) { props.setProperty('thumbCursor', cursor); continueLater_('importThumbs', 1); return thumbLog_(stat, false); }
+        if (Date.now() - start > BUDGET_MS) { props.setProperty('thumbCursor', cursor); props.deleteProperty('thumbErrors'); continueLater_('importThumbs', 1); return thumbLog_(stat, false); }
         const ids = todo.ids.slice(i, i + 20);
         const items = [];
         UrlFetchApp.fetchAll(ids.map(id => thumbReq_(id, token))).forEach((res, j) => {
@@ -177,24 +187,32 @@ function importThumbs() {
         });
         const groups = [];
         for (let k = 0; k < items.length; k += 4) groups.push(items.slice(k, k + 4));
-        UrlFetchApp.fetchAll(groups.map(g => req_({ action: 'legacy_thumb', import_key: key, items: g }))).forEach(res => {
+        UrlFetchApp.fetchAll(groups.map(g => req_({ action: 'legacy_thumb', import_key: key, items: g }))).forEach((res, gi) => {
           if (res.getResponseCode() === 401) throw new Error('IMPORT_KEY 不正確或已過期');
-          const o = JSON.parse(res.getContentText() || '{}');
-          (o.results || []).forEach(r => { if (r === 'stored') stat.stored++; else stat.failed++; });
-          if (!o.ok) stat.failed += 4;
+          let o = {};
+          try { o = JSON.parse(res.getContentText() || '{}'); } catch (e) { o = {}; }
+          if (!o.ok) { stat.failed += groups[gi].length; return; }
+          o.results.forEach(r => { if (r === 'stored') stat.stored++; else stat.failed++; });
         });
         cursor = ids[ids.length - 1];
         props.setProperty('thumbCursor', cursor);
       }
     }
   } catch (e) {
+    const msg = String(e.message);
+    props.setProperty('thumbCursor', cursor);
+    if (msg.includes('IMPORT_KEY')) { stopTriggers_('importThumbs'); lock.releaseLock(); throw e; }
     // 每日次數用完：3 小時後再接著跑
-    if (/too many times|次數過多|Bandwidth quota|Service invoked/i.test(String(e.message))) { props.setProperty('thumbCursor', cursor); continueLater_('importThumbs', 180); Logger.log('今天的 Google 呼叫次數用完了，3 小時後自動再接著跑。'); return thumbLog_(stat, false); }
-    if (String(e.message).includes('IMPORT_KEY')) stopTriggers_('importThumbs');
+    if (/too many times|次數過多|Bandwidth quota|Service invoked|too much computer time/i.test(msg)) { continueLater_('importThumbs', 180); Logger.log('今天的 Google 配額用完了，3 小時後自動再接著跑。'); lock.releaseLock(); return thumbLog_(stat, false); }
+    const errs = Number(props.getProperty('thumbErrors') || 0) + 1;
+    props.setProperty('thumbErrors', String(errs));
+    if (errs >= 5) { stopTriggers_('importThumbs'); Logger.log('連續出錯 5 次，已停止自動接續。進度有保存，修好後再執行 importThumbs 會接著跑。'); }
+    lock.releaseLock();
     throw e;
   }
   stopTriggers_('importThumbs');
-  props.deleteProperty('thumbCursor');
+  props.deleteProperty('thumbCursor'); props.deleteProperty('thumbPass'); props.deleteProperty('thumbErrors');
+  lock.releaseLock();
   thumbLog_(stat, true);
 }
 function thumbLog_(stat, complete) {
