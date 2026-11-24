@@ -7,9 +7,11 @@
  * 3. 第一步：選 importSheets → 執行（第一次會要求授權）。把每份表的內容送進系統暫存區。
  *    跑不完會自動在 1 分鐘後接著跑，不用一直按；全部完成會在執行紀錄寫「表格全部送出」。
  * 4. 等系統整理好人員資料後，第二步：選 importDocuments → 執行。同樣會自動接續，直到「證件全部完成」。
+ * 5. 第三步：選 importThumbs → 執行。向 Google 雲端要每張證件的 500px 縮圖送進系統（系統再壓到約 8KB），
+ *    後台就能直接看到縮圖；會自動接續，直到「縮圖全部完成」。
  *
  * 規則：系統裡已經有的證件（例如本人自己上傳的）不會被覆蓋；同一人在多份表單都有，以最新一場活動為準。
- * 舊證件不複製進系統：只記錄雲端檔案 ID，管理員點開時直接連到雲端原檔（只有被分享的帳號打得開）。
+ * 舊證件原檔不複製進系統：記錄雲端檔案 ID，另存一張約 8KB 的縮圖；點縮圖會開雲端原檔（只有被分享的帳號打得開）。
  * 資料不經過任何第三方，直接從你的雲端送到系統的私有儲存區。全部完成後可以刪除這個 Apps Script 專案。
  */
 const ENDPOINT = 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/docs';
@@ -45,9 +47,9 @@ function setBig_(name, obj) {
 function done_(name) { return getBig_(name, {}); }
 function saveDone_(name, obj) { setBig_(name, obj); }
 // 時間用完：1 分鐘後自動接著跑
-function continueLater_(fn) {
+function continueLater_(fn, minutes) {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === fn).forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger(fn).timeBased().after(60 * 1000).create();
+  ScriptApp.newTrigger(fn).timeBased().after((minutes || 1) * 60 * 1000).create();
 }
 function stopTriggers_(fn) { ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === fn).forEach(t => ScriptApp.deleteTrigger(t)); }
 function sheetFiles_() {
@@ -149,5 +151,61 @@ function finish_(stat, fails, complete) {
   fails.slice(0, 50).forEach(f => Logger.log('失敗：' + f));
 }
 
+/* ---------- 第三步：證件縮圖 ---------- */
+// 向 Google 雲端要 500px 縮圖（Google 負責縮小，不下載原檔）
+function thumbReq_(id, token) { return { url: 'https://drive.google.com/thumbnail?sz=w500&id=' + encodeURIComponent(id), headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true, followRedirects: true }; }
+function isImage_(res) { return res.getResponseCode() === 200 && /^image\//.test(String(res.getHeaders()['Content-Type'] || res.getHeaders()['content-type'] || '')); }
+
+function importThumbs() {
+  const key = key_(), start = Date.now(), token = ScriptApp.getOAuthToken(), props = PropertiesService.getUserProperties();
+  const stat = { stored: 0, noThumb: 0, failed: 0 };
+  let cursor = props.getProperty('thumbCursor') || '';
+  // 保險：萬一這次中途出錯，15 分鐘後自動再試
+  continueLater_('importThumbs', 15);
+  try {
+    while (true) {
+      const todo = post_({ action: 'legacy_thumb_todo', import_key: key, after: cursor, limit: 100 });
+      if (!todo.ok) throw new Error('清單取得失敗：' + todo.error);
+      if (!todo.ids.length) break;
+      for (let i = 0; i < todo.ids.length; i += 20) {
+        if (Date.now() - start > BUDGET_MS) { props.setProperty('thumbCursor', cursor); continueLater_('importThumbs', 1); return thumbLog_(stat, false); }
+        const ids = todo.ids.slice(i, i + 20);
+        const items = [];
+        UrlFetchApp.fetchAll(ids.map(id => thumbReq_(id, token))).forEach((res, j) => {
+          if (isImage_(res)) items.push({ drive_file_id: ids[j], data: Utilities.base64Encode(res.getContent()) });
+          else stat.noThumb++;
+        });
+        const groups = [];
+        for (let k = 0; k < items.length; k += 4) groups.push(items.slice(k, k + 4));
+        UrlFetchApp.fetchAll(groups.map(g => req_({ action: 'legacy_thumb', import_key: key, items: g }))).forEach(res => {
+          if (res.getResponseCode() === 401) throw new Error('IMPORT_KEY 不正確或已過期');
+          const o = JSON.parse(res.getContentText() || '{}');
+          (o.results || []).forEach(r => { if (r === 'stored') stat.stored++; else stat.failed++; });
+          if (!o.ok) stat.failed += 4;
+        });
+        cursor = ids[ids.length - 1];
+        props.setProperty('thumbCursor', cursor);
+      }
+    }
+  } catch (e) {
+    // 每日次數用完：3 小時後再接著跑
+    if (/too many times|次數過多|Bandwidth quota|Service invoked/i.test(String(e.message))) { props.setProperty('thumbCursor', cursor); continueLater_('importThumbs', 180); Logger.log('今天的 Google 呼叫次數用完了，3 小時後自動再接著跑。'); return thumbLog_(stat, false); }
+    if (String(e.message).includes('IMPORT_KEY')) stopTriggers_('importThumbs');
+    throw e;
+  }
+  stopTriggers_('importThumbs');
+  props.deleteProperty('thumbCursor');
+  thumbLog_(stat, true);
+}
+function thumbLog_(stat, complete) {
+  Logger.log((complete ? '縮圖全部完成。' : '還沒跑完，會自動接著跑。') + ' 本次存入縮圖 ' + stat.stored + '、雲端沒有縮圖 ' + stat.noThumb + '、失敗 ' + stat.failed);
+}
+// 先試一張：看 Google 雲端給的縮圖格式與大小
+function testThumb() {
+  const todo = post_({ action: 'legacy_thumb_todo', import_key: key_(), after: '', limit: 3 });
+  const res = UrlFetchApp.fetchAll(todo.ids.map(id => thumbReq_(id, ScriptApp.getOAuthToken())));
+  res.forEach(r => Logger.log('狀態 ' + r.getResponseCode() + '、格式 ' + (r.getHeaders()['Content-Type'] || '') + '、大小 ' + r.getContent().length + ' bytes'));
+}
+
 // 想從頭重跑時執行（系統已有的資料仍會略過，不會重複）
-function resetProgress() { PropertiesService.getUserProperties().deleteAllProperties(); stopTriggers_('importSheets'); stopTriggers_('importDocuments'); }
+function resetProgress() { PropertiesService.getUserProperties().deleteAllProperties(); stopTriggers_('importSheets'); stopTriggers_('importDocuments'); stopTriggers_('importThumbs'); }

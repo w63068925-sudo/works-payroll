@@ -21,3 +21,7 @@
 
 ## 待處理問題（data_issues）
 legacy_import（info，每場一筆說明來源）、no_pay_data 23、net_mismatch 200、amount_check 9（單人超過 30,000，含駐點月薪合計）、payee_not_self 113、name_mismatch 92、birth_unparsed 9、missing_pay 4（合計列）、row_skipped 47 場。
+
+## 證件（2026-11-24）
+- 舊表證件存雲端檔案 ID（連結 6,538 筆），另存約 8KB 縮圖：Apps Script `importThumbs` 向 Google 雲端取 500px 縮圖，Edge Function `legacy_thumb` 壓到約 8KB 存成 `<person>/<kind>-lthumb-<時間>.jpg`。後台點縮圖開雲端原檔。
+- 本人重新上傳會取代縮圖與連結。

@@ -111,3 +111,4 @@
 - 同批：舊表證件改存 300px／5KB 內縮圖＋雲端原檔 ID（docs Edge Function、people_documents.drive_file_id、後台人員頁顯示縮圖）
 - 狀態：先部署後補審
 - 2026-11-24 更新：使用者改定「1＋2」：舊證件只存雲端檔案 ID（path 可空，Edge Function legacy_link、legacy_unlink_copies 已把 796 筆複本改成連結並刪檔）；本人上傳在瀏覽器壓到 1000px／約 50KB；後台「資料已核對」呼叫 verify_docs 降成 500px／約 8KB 存證圖並刪原檔。先前 5KB 縮圖方案作廢。
+- 2026-11-24 再更新：使用者要舊證件也能直接看縮圖（約 8KB）。Edge Function 新增 legacy_thumb_todo（列出只有連結的雲端檔案 ID）、legacy_thumb（收 Apps Script 從 Google 雲端取得的 500px 縮圖，一次最多 5 張，壓到 ≤9KB、上限 16KB，存成 `-lthumb-`，保留 drive_file_id、設 downgraded_at，只更新仍為 path null 的列）；Apps Script 新增 importThumbs／testThumb；後台舊表證件顯示縮圖並連到雲端原檔。新增部分索引 people_documents_link_only_idx。合成圖測試通過；狀態：先部署後補審。
