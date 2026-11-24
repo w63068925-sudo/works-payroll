@@ -1500,7 +1500,8 @@ AS $function$
 declare v_pid uuid := public.payroll_session_person(p_token); v_hash text;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  if length(coalesce(p_new,'')) < 8 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  -- 工讀生密碼至少 7 個字（與預設的民國生日 7 碼一致）；管理員仍至少 8 個字
+  if length(coalesce(p_new,'')) < 7 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
   select password_hash into v_hash from public.people where id = v_pid for update;
   if v_hash is null or v_hash <> extensions.crypt(coalesce(p_old,''), v_hash) then
     return jsonb_build_object('ok', false, 'error', 'invalid');

@@ -227,5 +227,10 @@ begin
   if (select public.att_minutes(a) from public.attendance a where id = att) <> 270 then fails := fails || ' [19g revoke overtime]'; end if;
   if public.admin_approve_attendance('bad-token', att, 'early', true)->>'error' is distinct from 'session' then fails := fails || ' [19h approve without session]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 19 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 20. 工讀生密碼至少 7 個字（與民國生日 7 碼一致）；管理員仍至少 8 個字
+  if public.payroll_change_password(tok2, '0890101', '123456')->>'error' is distinct from 'too_short' then fails := fails || ' [20a worker 6 accepted]'; end if;
+  if (public.payroll_change_password(tok2, '0890101', '0730407')->>'ok')::boolean is not true then fails := fails || ' [20b worker 7 rejected]'; end if;
+  if (public.payroll_login('Z999990002', '0730407')->>'ok')::boolean is not true then fails := fails || ' [20c login with new 7]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 20 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;
