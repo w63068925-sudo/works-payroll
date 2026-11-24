@@ -1915,7 +1915,7 @@ CREATE OR REPLACE FUNCTION public.payroll_claim(p_national_id text, p_name text,
  SET search_path TO ''
 AS $function$
 -- 舊資料缺生日（沒有密碼）的人自行開通：核對姓名＋匯款帳號末 5 碼或手機，補生日後以民國生日 7 碼為密碼。
--- 查無此人、已有密碼、核對不符、被鎖定一律回同樣的 mismatch，不透露帳號是否存在。
+-- 查無此人、已有密碼或生日、核對不符、被鎖定一律回同樣的 mismatch，不透露帳號是否存在。
 declare
   v public.people;
   v_id text := upper(regexp_replace(public.halfwidth(coalesce(p_national_id,'')), '\s', '', 'g'));
@@ -1928,15 +1928,20 @@ begin
   v_age := extract(year from age((now() at time zone 'Asia/Taipei')::date, v_bd))::int;
   if v_age < 15 then return jsonb_build_object('ok', false, 'error', 'too_young'); end if;
   if not coalesce(p_consent, false) then return jsonb_build_object('ok', false, 'error', 'no_consent'); end if;
-  if length(v_proof) not in (5, 9, 10) then return jsonb_build_object('ok', false, 'error', 'bad_proof'); end if;
+  -- 手機一律正規化成 09 開頭 10 碼；舊資料少了開頭 0 的 9 碼也補 0 後比對
+  if length(v_proof) = 9 and v_proof ~ '^9' then v_proof := '0' || v_proof; end if;
+  if not (length(v_proof) = 5 or v_proof ~ '^09\d{8}$') then return jsonb_build_object('ok', false, 'error', 'bad_proof'); end if;
+  if length(v_name) < 2 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
 
   select * into v from public.people where national_id = v_id for update;
-  if found and v.password_hash is null and not (v.locked_until is not null and v.locked_until > now()) then
+  if found and v.password_hash is null and v.birth_date is null and not (v.locked_until is not null and v.locked_until > now()) then
     v_bank := regexp_replace(coalesce(v.bank_account,''), '\D', '', 'g');
     v_phone := regexp_replace(coalesce(v.phone,''), '\D', '', 'g');
+    if v_phone ~ '^8869\d{8}$' then v_phone := '0' || substr(v_phone, 4); end if;
+    if v_phone ~ '^9\d{8}$' then v_phone := '0' || v_phone; end if;
     v_ok := translate(regexp_replace(coalesce(v.name,''), '\s', '', 'g'), '黄', '黃') = v_name
       and ((length(v_proof) = 5 and length(v_bank) >= 6 and right(v_bank, 5) = v_proof)
-        or (length(v_proof) >= 9 and length(v_phone) >= 9 and right(v_phone, 9) = right(v_proof, 9)));
+        or (length(v_proof) = 10 and v_phone ~ '^09\d{8}$' and v_phone = v_proof));
     if not v_ok then
       v_fail := v.failed_logins + 1;
       if v_fail >= 10 then
@@ -1959,14 +1964,14 @@ begin
   where id = v.id;
   update public.data_issues set resolved = true where person_id = v.id and code = 'birth_unparsed' and not resolved;
   insert into public.data_issues(person_id, severity, code, detail)
-  values (v.id, 'warn', 'self_claimed', '本人於 ' || to_char(now() at time zone 'Asia/Taipei', 'YYYY-MM-DD') || ' 補填生日並開通帳號，請核對身分證影本上的生日');
+  values (v.id, 'warn', 'self_claimed', '本人於 ' || to_char(now() at time zone 'Asia/Taipei', 'YYYY-MM-DD') || ' 補填生日並開通帳號（以' || case when length(v_proof) = 5 then '匯款帳號末 5 碼' else '手機' end || '核對），請核對身分證影本上的生日');
   if v_age < 18 then
     insert into public.data_issues(person_id, severity, code, detail)
     values (v.id, 'warn', 'minor', format('補填的生日顯示未滿 18 歲（%s 歲），請核對年齡證明', v_age));
   end if;
   v_token := encode(extensions.gen_random_bytes(32), 'hex');
   insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(v_token, 'sha256'), 'hex'), v.id, now() + interval '8 hours');
-  insert into public.audit_log(actor, action, table_name, row_id) values (v.id::text, 'account_claimed', 'people', v.id);
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v.id::text, 'account_claimed', 'people', v.id, jsonb_build_object('verified_by', case when length(v_proof) = 5 then 'bank_last5' else 'phone' end));
   return jsonb_build_object('ok', true, 'token', v_token, 'name', v.name);
 end $function$
 ;

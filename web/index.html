@@ -145,6 +145,7 @@ function idProblem(v) {
 const brand = '<div class="brand no-print"><b>WORKS</b><span>沃克思 薪資查詢</span></div>';
 
 function viewLogin(message) {
+  state.flow = (state.flow || 0) + 1; // 離開開通頁後，晚到的開通回應不再寫入登入狀態
   document.title = '登入｜沃克思薪資查詢';
   app.innerHTML = brand + `
     <h1>查詢我的薪資</h1>
@@ -187,6 +188,7 @@ function viewLogin(message) {
 
 // 舊資料缺生日（沒有密碼）的人：核對姓名＋匯款帳號末 5 碼或手機，補生日後開通
 function viewClaim() {
+  const flow = state.flow = (state.flow || 0) + 1;
   document.title = '補生日開通帳號｜沃克思';
   app.innerHTML = brand + `
     <button class="link" id="back">← 回登入</button>
@@ -215,6 +217,7 @@ function viewClaim() {
     go.disabled = true;
     try {
       const r = await rpc('payroll_claim', { p_national_id: nid.value, p_name: document.getElementById('nm').value, p_proof: document.getElementById('pf').value, p_birth_date: bd, p_consent: document.getElementById('ok').checked });
+      if (state.flow !== flow) return;
       if (r.ok) {
         saveToken(r.token);
         const [y, mo, d] = bd.split('-'); const pw = String(Number(y) - 1911).padStart(3, '0') + mo + d;
@@ -222,7 +225,7 @@ function viewClaim() {
         try { inc = (await rpc('payroll_my_payslips', { p_token: state.token })).incomplete || null; } catch (err) {}
         return viewProfile('帳號已開通。之後登入的密碼是你的民國生日 7 碼（' + pw + '）。', false, inc);
       }
-      const msg = { bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', no_consent: '請勾選同意聲明。', bad_proof: '請填匯款帳號最後 5 碼，或 10 碼手機號碼。' }[r.error]
+      const msg = { bad_name: '請填寫姓名。', bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', no_consent: '請勾選同意聲明。', bad_proof: '請填匯款帳號最後 5 碼，或 09 開頭的 10 碼手機號碼。' }[r.error]
         || '資料核對不符。請確認身分證字號、姓名，以及匯款帳號末 5 碼或手機號碼是否和以前給沃克思的一樣；已經能登入的人請直接登入。';
       m.innerHTML = '<div class="msg err">' + esc(msg) + '</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
