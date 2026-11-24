@@ -138,6 +138,21 @@ button.stat.sel{border-bottom-color:var(--ink)}
 .chip{height:34px;padding:0 12px;border-radius:99px;border:1px solid var(--line);background:var(--card);cursor:pointer;font-size:13.5px}
 .chip[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
 .authwrap{max-width:420px;margin:60px auto;padding:0 16px}
+/* 表格篩選排序（仿 Excel 自動篩選） */
+th .xf{border:0;background:none;padding:0 2px;margin-left:4px;cursor:pointer;color:var(--muted);font-size:11px;line-height:1;border-radius:4px;vertical-align:1px}
+th .xf:hover{background:var(--soft);color:var(--ink)}
+th .xf.on{color:var(--accent);font-weight:700}
+.xpop{position:fixed;z-index:50;width:250px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(29,28,26,.14);padding:8px;font-size:13.5px}
+.xpop button.it{display:block;width:100%;text-align:left;border:0;background:none;padding:7px 8px;border-radius:6px;cursor:pointer}
+.xpop button.it:hover{background:var(--soft)}
+.xpop hr{border:0;border-top:1px solid var(--line);margin:6px 0}
+.xpop input[type=search]{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:#fff;margin-bottom:6px}
+.xpop .vals{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+.xpop .vals label{display:flex;gap:6px;align-items:center;padding:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.xpop .acts{display:flex;justify-content:flex-end;gap:6px;margin-top:8px}
+.xpop .acts button{padding:5px 12px;border-radius:7px;border:1px solid var(--line);background:#fff;cursor:pointer}
+.xpop .acts button.ok{background:var(--ink);color:#fff;border-color:var(--ink)}
+.xnote{font-size:12.5px;color:var(--muted);padding:6px 12px}
 </style>
 </head>
 <body>
@@ -1347,6 +1362,83 @@ async function viewSettings(tab) {
   }
   if (f('wf')) f('wf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_min_wages', { p_set: { effective_from: $('wd').value, hourly: $('wh').value, monthly: $('wm').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">請確認日期與金額。</div>'; return; } flash('ok', '最低工資已儲存。'); viewSettings('wages'); };
 }
+
+/* ---------- 表格篩選排序（仿 Excel 自動篩選）：所有有表頭的資料表自動套用，重新繪製後保留條件 ---------- */
+const XF = new Map(); // 以「表頭文字」辨識同一張表：{ col: { sort, vals:Set|null } }
+const xText = td => (td ? td.innerText.split('\n')[0].trim() : '');
+const xKey = t => [...t.tHead.rows[0].cells].map(c => c.dataset.xh || c.textContent.trim()).join('|');
+function xVal(v) {
+  const n = v.replace(/[,\s$NT元]/g, '');
+  if (/^-?\d+(\.\d+)?$/.test(n)) return { t: 0, v: Number(n) };
+  const d = v.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+  if (d) return { t: 1, v: Number(d[1]) * 1e4 + Number(d[2]) * 100 + Number(d[3]) };
+  if (v === '' || v === '—' || v === '-') return { t: 3, v: '' };
+  return { t: 2, v };
+}
+function xCmp(a, b) {
+  const x = xVal(a), y = xVal(b);
+  if (x.t !== y.t) return x.t - y.t;
+  return x.t === 2 ? x.v.localeCompare(y.v, 'zh-Hant') : x.v - y.v;
+}
+function xApply(t) {
+  const st = XF.get(xKey(t)) || {}, body = t.tBodies[0]; if (!body) return;
+  const rows = [...body.rows];
+  if (!t._xorder) t._xorder = rows.slice();
+  let order = t._xorder.filter(r => r.parentNode === body);
+  const sc = Object.keys(st).find(c => st[c].sort);
+  if (sc) order = order.slice().sort((a, b) => (st[sc].sort === 'asc' ? 1 : -1) * xCmp(xText(a.cells[sc]), xText(b.cells[sc])));
+  order.forEach(r => body.appendChild(r));
+  let shown = 0;
+  order.forEach(r => {
+    const ok = Object.keys(st).every(c => !st[c].vals || st[c].vals.has(xText(r.cells[c])));
+    r.style.display = ok ? '' : 'none'; if (ok) shown++;
+  });
+  [...t.tHead.rows[0].cells].forEach((th, i) => { const b = th.querySelector('.xf'); if (!b) return; const s = st[i] || {}; b.classList.toggle('on', !!(s.vals || s.sort)); b.textContent = s.sort === 'asc' ? '▲' : s.sort === 'desc' ? '▼' : s.vals ? '⧩' : '▾'; });
+  let note = t.parentNode.querySelector(':scope > .xnote');
+  const filtered = Object.values(st).some(s => s.vals);
+  if (filtered) { if (!note) { note = document.createElement('div'); note.className = 'xnote'; t.after(note); } note.innerHTML = '篩選後顯示 ' + shown + '／' + order.length + ' 列　<button class="link" type="button">清除全部篩選</button>'; note.querySelector('button').onclick = () => { XF.delete(xKey(t)); xApply(t); }; }
+  else if (note) note.remove();
+}
+function xClose() { const p = document.querySelector('.xpop'); if (p) p.remove(); document.removeEventListener('mousedown', xOutside, true); }
+function xOutside(e) { if (!e.target.closest('.xpop') && !e.target.closest('.xf')) xClose(); }
+function xOpen(t, col, btn) {
+  xClose();
+  const key = xKey(t), st = XF.get(key) || {}, cur = st[col] || {};
+  const all = [...new Set(t._xorder.filter(r => r.parentNode === t.tBodies[0]).map(r => xText(r.cells[col])))].sort(xCmp);
+  const pop = document.createElement('div'); pop.className = 'xpop';
+  pop.innerHTML = `<button class="it" data-s="asc" type="button">↑ 由小到大排序</button><button class="it" data-s="desc" type="button">↓ 由大到小排序</button><hr>
+    <input type="search" placeholder="搜尋"><div class="vals"><label><input type="checkbox" data-all checked> <b>（全選）</b></label>${all.map((v, i) => `<label><input type="checkbox" data-i="${i}" ${!cur.vals || cur.vals.has(v) ? 'checked' : ''}> ${esc(v || '（空白）')}</label>`).join('')}</div>
+    <div class="acts"><button type="button" data-clear>清除</button><button type="button" data-cancel>取消</button><button type="button" class="ok" data-ok>確定</button></div>`;
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - 260)) + 'px';
+  pop.style.top = Math.min(r.bottom + 4, innerHeight - pop.offsetHeight - 8) + 'px';
+  const boxes = [...pop.querySelectorAll('input[data-i]')], allBox = pop.querySelector('[data-all]');
+  const syncAll = () => { const vis = boxes.filter(b => b.parentNode.style.display !== 'none'); allBox.checked = vis.every(b => b.checked); };
+  syncAll();
+  allBox.onchange = () => boxes.forEach(b => { if (b.parentNode.style.display !== 'none') b.checked = allBox.checked; });
+  boxes.forEach(b => b.onchange = syncAll);
+  pop.querySelector('input[type=search]').oninput = e => { const q = e.target.value.trim().toLowerCase(); boxes.forEach((b, i) => { const hit = !q || all[i].toLowerCase().includes(q); b.parentNode.style.display = hit ? '' : 'none'; if (q) b.checked = hit; }); syncAll(); };
+  const save = fn => { const s = XF.get(key) || {}; fn(s); Object.keys(s).forEach(c => { if (!s[c].sort && !s[c].vals) delete s[c]; }); Object.keys(s).length ? XF.set(key, s) : XF.delete(key); xApply(t); xClose(); };
+  pop.querySelectorAll('[data-s]').forEach(b => b.onclick = () => save(s => { Object.keys(s).forEach(c => { s[c].sort = null; }); s[col] = Object.assign(s[col] || {}, { sort: b.dataset.s }); }));
+  pop.querySelector('[data-ok]').onclick = () => save(s => { const sel = new Set(boxes.filter(b => b.checked).map(b => all[Number(b.dataset.i)])); s[col] = Object.assign(s[col] || {}, { vals: sel.size === all.length ? null : sel }); });
+  pop.querySelector('[data-clear]').onclick = () => save(s => { if (s[col]) { s[col].vals = null; s[col].sort = null; } });
+  pop.querySelector('[data-cancel]').onclick = xClose;
+  setTimeout(() => document.addEventListener('mousedown', xOutside, true));
+}
+function xEnhance(t) {
+  if (t._xdone || !t.tHead || !t.tBodies[0] || t.tBodies[0].rows.length < 2) return;
+  t._xdone = true; t._xorder = [...t.tBodies[0].rows];
+  [...t.tHead.rows[0].cells].forEach((th, i) => {
+    if (!th.textContent.trim() || th.querySelector('input,button')) return;
+    th.dataset.xh = th.textContent.trim();
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'xf'; b.textContent = '▾'; b.setAttribute('aria-label', th.dataset.xh + '：篩選與排序');
+    b.onclick = e => { e.stopPropagation(); xOpen(t, i, b); };
+    th.appendChild(b);
+  });
+  xApply(t);
+}
+new MutationObserver(() => document.querySelectorAll('table').forEach(xEnhance)).observe(document.body, { childList: true, subtree: true });
 
 route();
 </script>
