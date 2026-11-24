@@ -129,6 +129,19 @@ const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
 const WD = ['日', '一', '二', '三', '四', '五', '六'];
 function fmtDate(s, withWd) { if (!s) return '—'; const [y, m, d] = s.split('-').map(Number); const w = withWd ? '（' + WD[new Date(y, m - 1, d).getDay()] + '）' : ''; return y + '/' + String(m).padStart(2, '0') + '/' + String(d).padStart(2, '0') + w; }
 function fmtPeriod(a, b) { if (!a) return '—'; return a === b || !b ? fmtDate(a) : fmtDate(a) + ' – ' + fmtDate(b).slice(5); }
+// 手機輸入法常打成全形字（Ｒ２３…）：先轉半形再去掉空白與符號，避免整串被濾掉
+const halfWidth = v => String(v || '').replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/\u3000/g, ' ');
+const cleanId = v => halfWidth(v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+// 身分證字號或居留證號：格式與檢查碼（只在送出前提示，不代表帳號存在）
+function idProblem(v) {
+  if (!/^[A-Z][0-9A-Z]\d{8}$/.test(v)) return '身分證字號要 10 碼：第一個字是英文字母，後面 9 碼。';
+  if (!/^[A-Z][1289]/.test(v)) return '';
+  const n = 'ABCDEFGHJKLMNPQRSTUVXYWZIO'.indexOf(v[0]) + 10;
+  let s = Math.floor(n / 10) + (n % 10) * 9;
+  for (let i = 1; i < 9; i++) s += Number(v[i]) * (9 - i);
+  s += Number(v[9]);
+  return s % 10 ? '身分證字號好像有一碼打錯了，請再核對一次。' : '';
+}
 const brand = '<div class="brand no-print"><b>WORKS</b><span>沃克思 薪資查詢</span></div>';
 
 function viewLogin(message) {
@@ -152,15 +165,19 @@ function viewLogin(message) {
     <p class="foot">連續輸入錯誤 5 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
   if (state.join) document.getElementById('toreg').addEventListener('click', () => viewRegister());
   const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
-  nid.addEventListener('input', () => { nid.value = nid.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+  nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
   document.getElementById('show').addEventListener('click', e => { const on = pw.type === 'password'; pw.type = on ? 'text' : 'password'; e.target.textContent = on ? '隱藏' : '顯示'; });
   f.addEventListener('submit', async e => {
-    e.preventDefault(); go.disabled = true; go.textContent = '登入中…'; m.innerHTML = '';
+    e.preventDefault(); m.innerHTML = '';
+    nid.value = cleanId(nid.value);
+    const bad = idProblem(nid.value);
+    if (bad) { m.innerHTML = '<div class="msg err">' + esc(bad) + '</div>'; nid.focus(); return; }
+    go.disabled = true; go.textContent = '登入中…';
     try {
       const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
       if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList(); }
       if (r.error === 'locked') m.innerHTML = '<div class="msg err">輸入錯誤次數過多，帳號已暫時鎖定。請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。</div>';
-      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。</div>';
+      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。<div class="dim" style="margin-top:4px">請確認身分證字號沒有打錯；密碼是民國生日 7 碼，例如 0900101（改過密碼的請用新密碼）。</div></div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
     go.disabled = false; go.textContent = '登入'; pw.value = ''; pw.focus();
   });
@@ -336,7 +353,7 @@ async function viewRegister() {
     </form>
     <button class="link" id="tologin" style="margin-top:10px">我已經有帳號，直接登入</button>`;
   const nid = document.getElementById('nid'), m = document.getElementById('m'), go = document.getElementById('go');
-  nid.addEventListener('input', () => { nid.value = nid.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+  nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
   document.getElementById('tologin').addEventListener('click', () => viewLogin('登入後繼續報名。'));
   document.getElementById('f').addEventListener('submit', async e => {
     e.preventDefault(); m.innerHTML = ''; go.disabled = true;

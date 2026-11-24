@@ -1896,6 +1896,17 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.halfwidth(p text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+  -- 全形英數符號與全形空白轉半形（手機輸入法常打成全形）
+  select translate(p, '！＂＃＄％＆＇（）＊＋，－．／０１２３４５６７８９：；＜＝＞？＠ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ［＼］＾＿｀ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ｛｜｝～　', '!"#$%&''()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ')
+$function$
+;
+
 CREATE OR REPLACE FUNCTION public.payroll_login(p_national_id text, p_password text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -1904,7 +1915,8 @@ CREATE OR REPLACE FUNCTION public.payroll_login(p_national_id text, p_password t
 AS $function$
 declare
   v public.people;
-  v_id text := upper(btrim(coalesce(p_national_id,'')));
+  v_id text := upper(regexp_replace(public.halfwidth(coalesce(p_national_id,'')), '[^A-Za-z0-9]', '', 'g'));
+  v_pw_half text := public.halfwidth(coalesce(p_password,''));
   v_token text;
   v_fail int;
 begin
@@ -1917,7 +1929,9 @@ begin
     return jsonb_build_object('ok', false, 'error', 'locked',
       'retry_after_minutes', ceil(extract(epoch from v.locked_until - now()) / 60));
   end if;
-  if v.password_hash <> extensions.crypt(coalesce(p_password,''), v.password_hash) then
+  -- 先照原樣比對；不符且含全形字時，再用轉半形後的比對一次（只算一次錯誤）
+  if v.password_hash <> extensions.crypt(coalesce(p_password,''), v.password_hash)
+     and (v_pw_half = coalesce(p_password,'') or v.password_hash <> extensions.crypt(v_pw_half, v.password_hash)) then
     v_fail := v.failed_logins + 1;
     if v_fail >= 5 then
       update public.people set failed_logins = 0, locked_until = now() + interval '15 minutes' where id = v.id;

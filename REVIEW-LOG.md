@@ -127,3 +127,8 @@
 - 同日使用者指示：已結束、沒有任何薪資單的活動設為已結案。新增 events.closed_at／closed_by，admin_overview 回傳 closed_at，後台 closed_at 有值即顯示已結案；稽核 action = event_closed。
 - 同日使用者指示：仍有草稿薪資單的 8 場已結束活動也設為已結案（closed_at，稽核 reason = closed_with_drafts）；那 16 張草稿維持草稿。
 - 同日使用者指示：金額偏高（amount_check）的 8 張草稿標為已處理並發佈（稽核 bulk = amount_check_approved_2026-11-25），通知標 skipped。剩 8 張草稿皆為沒有金額。
+
+## 待補審（登入，sol high）：登入容忍全形字 — 2026-11-25
+- 起因：工讀生用正確生日密碼登不進去，帳號錯誤次數為 0，推測身分證字號欄打成全形字後被前端濾掉。
+- 前端：身分證字號輸入先轉半形再過濾；送出前檢查格式與檢查碼（只提示格式，不透露帳號是否存在）；登入失敗訊息加提示。
+- 後端：新增 public.halfwidth（撤銷 public/anon/authenticated 執行權）；payroll_login 身分證字號轉半形、去空白符號、轉大寫；密碼先原樣比對，不符且含全形時再比對半形版本，只算一次錯誤。regression 第 21 組。
