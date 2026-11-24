@@ -661,7 +661,7 @@ AS $function$
 declare v_actor text := public.admin_actor(p_token); r jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  select jsonb_build_object('id', p.id, 'name', p.name, 'nickname', p.nickname, 'national_id', p.national_id, 'birth_date', p.birth_date, 'birth_raw', p.birth_raw,
+  select jsonb_build_object('id', p.id, 'name', p.name, 'nickname', p.nickname, 'admin_note', p.admin_note, 'national_id', p.national_id, 'birth_date', p.birth_date, 'birth_raw', p.birth_raw,
     'phone', p.phone, 'email', p.email, 'address', p.address, 'bank_code', p.bank_code, 'bank_branch', p.bank_branch, 'bank_account_name', p.bank_account_name,
     'bank_account', p.bank_account, 'source', p.profile_source, 'created_at', p.created_at, 'consent_at', p.consent_at,
     'has_password', p.password_hash is not null, 'password_changed', p.password_changed_at is not null, 'locked', p.locked_until is not null and p.locked_until > now(),

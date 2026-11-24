@@ -1159,6 +1159,7 @@ async function openPerson(id) {
   const r = await rpc('admin_person', { p_id: id }); if (!r.ok) { box.innerHTML = '<p class="empty">找不到這個人</p>'; return; }
   const p = r.person, DOCS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];
   box.innerHTML = `<h1 style="font-size:19px">${esc(p.name)}</h1><p class="sub" style="margin:4px 0 12px">${{ self: '自行登錄', legacy: '舊表匯入', test: '測試資料' }[p.source] || esc(p.source)}　建檔 ${esc(d(p.created_at))}</p>
+    ${p.admin_note ? '<div class="msg warn" style="margin-bottom:10px">備註：' + esc(p.admin_note) + '</div>' : ''}
     <dl class="kv"><dt>身分證字號</dt><dd>${esc(p.national_id)}</dd><dt>生日</dt><dd>${esc(p.birth_date ? d(p.birth_date) : '無法辨識（' + (p.birth_raw || '空白') + '）')}</dd>
       <dt>電話</dt><dd>${esc(p.phone || '—')}</dd><dt>Email</dt><dd>${esc(p.email || '—')}</dd><dt>戶籍地址</dt><dd>${esc(p.address || '—')}</dd>
       <dt>匯款帳戶</dt><dd>${esc([p.bank_code, p.bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.bank_account_name || '')} ${esc(p.bank_account || '')}</dd>
