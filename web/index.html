@@ -162,8 +162,10 @@ function viewLogin(message) {
       <button class="btn" id="go">登入</button>
     </form>
     ${state.join ? '<button class="btn ghost" id="toreg">第一次報名？先填基本資料</button>' : ''}
+    <button class="link" id="toclaim" style="margin-top:10px">合作過但一直登不進去？補生日開通帳號</button>
     <p class="foot">連續輸入錯誤 10 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
   if (state.join) document.getElementById('toreg').addEventListener('click', () => viewRegister());
+  document.getElementById('toclaim').addEventListener('click', () => viewClaim());
   const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
   nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
   document.getElementById('show').addEventListener('click', e => { const on = pw.type === 'password'; pw.type = on ? 'text' : 'password'; e.target.textContent = on ? '隱藏' : '顯示'; });
@@ -183,6 +185,58 @@ function viewLogin(message) {
   nid.focus();
 }
 
+// 舊資料缺生日（沒有密碼）的人：核對姓名＋匯款帳號末 5 碼或手機，補生日後開通
+function viewClaim() {
+  document.title = '補生日開通帳號｜沃克思';
+  app.innerHTML = brand + `
+    <button class="link" id="back">← 回登入</button>
+    <h1 style="margin-top:8px">補生日開通帳號</h1>
+    <p class="sub">以前合作過、但系統缺少你的生日，所以還沒有密碼。核對身分後補上生日，就能用民國生日 7 碼登入。</p>
+    <form id="f" class="card pad" style="margin-top:20px" autocomplete="off">
+      <label for="nid" style="margin-top:0">身分證字號</label><input id="nid" type="text" maxlength="14" autocapitalize="characters" spellcheck="false" required>
+      <label for="nm">姓名（與身分證相同）</label><input id="nm" type="text" required>
+      <label for="pf">匯款帳號末 5 碼，或手機號碼</label><input id="pf" type="text" inputmode="numeric" maxlength="14" placeholder="例如 12345 或 0912345678" required>
+      <p class="hint">填你以前給沃克思的匯款帳號最後 5 碼，或當時留的手機號碼，用來確認是本人。</p>
+      <label for="bd">生日</label><input id="bd" type="date" required>
+      <label class="check"><input id="ok" type="checkbox" required><span>我同意沃克思為了發放薪資、辦理勞工保險與就業保險加退保、所得稅扣繳申報，以及依勞動法令保存紀錄，蒐集、處理並使用我的資料與證件影本。資料依法保存 5 年，我可以隨時登入查閱與更正。</span></label>
+      <div id="m"></div>
+      <button class="btn" id="go">核對並開通</button>
+    </form>
+    <p class="foot">連續核對不符 10 次會暫停 15 分鐘。資料都對卻無法開通，請聯絡沃克思的活動窗口。</p>`;
+  const nid = document.getElementById('nid'), m = document.getElementById('m'), go = document.getElementById('go');
+  nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
+  document.getElementById('back').addEventListener('click', () => viewLogin());
+  document.getElementById('f').addEventListener('submit', async e => {
+    e.preventDefault(); m.innerHTML = '';
+    nid.value = cleanId(nid.value);
+    const bad = idProblem(nid.value);
+    if (bad) { m.innerHTML = '<div class="msg err">' + esc(bad) + '</div>'; return; }
+    const bd = document.getElementById('bd').value;
+    go.disabled = true;
+    try {
+      const r = await rpc('payroll_claim', { p_national_id: nid.value, p_name: document.getElementById('nm').value, p_proof: document.getElementById('pf').value, p_birth_date: bd, p_consent: document.getElementById('ok').checked });
+      if (r.ok) {
+        saveToken(r.token);
+        const [y, mo, d] = bd.split('-'); const pw = String(Number(y) - 1911).padStart(3, '0') + mo + d;
+        let inc = null;
+        try { inc = (await rpc('payroll_my_payslips', { p_token: state.token })).incomplete || null; } catch (err) {}
+        return viewProfile('帳號已開通。之後登入的密碼是你的民國生日 7 碼（' + pw + '）。', false, inc);
+      }
+      const msg = { bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', no_consent: '請勾選同意聲明。', bad_proof: '請填匯款帳號最後 5 碼，或 10 碼手機號碼。' }[r.error]
+        || '資料核對不符。請確認身分證字號、姓名，以及匯款帳號末 5 碼或手機號碼是否和以前給沃克思的一樣；已經能登入的人請直接登入。';
+      m.innerHTML = '<div class="msg err">' + esc(msg) + '</div>';
+    } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+    go.disabled = false;
+  });
+  nid.focus();
+}
+
+// 缺證件或匯款資料：列出還要補的項目
+function gateItems(inc) {
+  const names = { id_front: '身分證正面照片', id_back: '身分證反面照片', bankbook: '存摺封面照片' };
+  return [...(inc.bank ? ['匯款帳戶（銀行代碼與帳號）'] : []), ...(inc.docs || []).map(k => names[k] || k)];
+}
+
 async function viewList() {
   document.title = '我的薪資｜沃克思';
   app.innerHTML = brand + '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
@@ -191,6 +245,7 @@ async function viewList() {
   catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewList()">重新載入</button>'; return; }
   if (!r.ok) { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
   state.person = r.person; state.payslips = r.payslips;
+  if (r.incomplete) return viewProfile(null, false, r.incomplete);
   renderList();
 }
 
@@ -237,7 +292,7 @@ async function viewSlip(id) {
   let r;
   try { r = await rpc('payroll_payslip', { p_token: state.token, p_id: id }); }
   catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="renderList()">返回</button>'; return; }
-  if (!r.ok) { if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); } renderList(); return; }
+  if (!r.ok) { if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); } if (r.error === 'incomplete') return viewProfile(null, false, r.incomplete); renderList(); return; }
   const p = r.payslip, contract = p.relation === 'contract';
   document.title = p.event + '｜薪資單';
   const by = k => p.items.filter(i => i.kind === k);
@@ -429,7 +484,7 @@ function viewDocs(message) {
     state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList();
   });
 }
-async function viewProfile(message, focusLine) {
+async function viewProfile(message, focusLine, gate) {
   document.title = '我的資料｜沃克思';
   app.innerHTML = brand + '<div class="skeleton" style="height:200px"></div>';
   let r;
@@ -441,17 +496,20 @@ async function viewProfile(message, focusLine) {
     <h1 style="margin-top:8px">我的資料</h1>
     <p class="sub">${esc(p.name)}　${esc(p.national_id)}　生日 ${esc(fmtDate(p.birth_date))}</p>
     ${typeof message === 'string' ? '<div class="msg ok">' + esc(message) + '</div>' : ''}
+    ${gate ? '<div class="msg warn">查看薪資前，請先補齊：' + esc(gateItems(gate).join('、')) + '。補好後按最下方「查看我的薪資」。</div>' : ''}
     <form id="f" class="card pad" style="margin-top:18px">
       <div style="margin-top:-16px"></div>${profileFields(p, false)}
       <div id="m"></div><button class="btn" id="go">儲存</button>
     </form>
     <h2>證件影本</h2>${docsBlock(p.documents || {})}
     <h2 id="lineh">LINE 通知</h2><div class="card pad" id="linebox"><p class="sub">載入中…</p></div>
+    ${gate ? '<button class="btn" id="seepay">查看我的薪資</button>' : ''}
     <button class="btn ghost" id="cp">更改密碼</button>
     <p class="foot">姓名、身分證字號或生日有誤無法自行修改，請聯絡沃克思的活動窗口。更改匯款帳戶後請重新上傳存摺封面。</p>`;
   bindDocs();
   document.getElementById('back').addEventListener('click', viewList);
   document.getElementById('cp').addEventListener('click', viewPassword);
+  if (gate) document.getElementById('seepay').addEventListener('click', viewList);
   renderLine();
   if (focusLine) document.getElementById('lineh').scrollIntoView({ block: 'start' });
   document.getElementById('f').addEventListener('submit', async e => {

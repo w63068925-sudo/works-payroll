@@ -1908,6 +1908,87 @@ $function$
 ;
 revoke execute on function public.halfwidth(text) from public, anon, authenticated;
 
+CREATE OR REPLACE FUNCTION public.payroll_claim(p_national_id text, p_name text, p_proof text, p_birth_date text, p_consent boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 舊資料缺生日（沒有密碼）的人自行開通：核對姓名＋匯款帳號末 5 碼或手機，補生日後以民國生日 7 碼為密碼。
+-- 查無此人、已有密碼、核對不符、被鎖定一律回同樣的 mismatch，不透露帳號是否存在。
+declare
+  v public.people;
+  v_id text := upper(regexp_replace(public.halfwidth(coalesce(p_national_id,'')), '\s', '', 'g'));
+  v_name text := translate(regexp_replace(public.halfwidth(coalesce(p_name,'')), '\s', '', 'g'), '黄', '黃');
+  v_proof text := regexp_replace(public.halfwidth(coalesce(p_proof,'')), '\D', '', 'g');
+  v_bank text; v_phone text; v_ok boolean := false; v_bd date; v_age int; v_pw text; v_fail int; v_token text;
+begin
+  begin v_bd := btrim(coalesce(p_birth_date,''))::date; exception when others then v_bd := null; end;
+  if v_bd is null or v_bd < date '1930-01-01' or v_bd > current_date then return jsonb_build_object('ok', false, 'error', 'bad_birth'); end if;
+  v_age := extract(year from age((now() at time zone 'Asia/Taipei')::date, v_bd))::int;
+  if v_age < 15 then return jsonb_build_object('ok', false, 'error', 'too_young'); end if;
+  if not coalesce(p_consent, false) then return jsonb_build_object('ok', false, 'error', 'no_consent'); end if;
+  if length(v_proof) not in (5, 9, 10) then return jsonb_build_object('ok', false, 'error', 'bad_proof'); end if;
+
+  select * into v from public.people where national_id = v_id for update;
+  if found and v.password_hash is null and not (v.locked_until is not null and v.locked_until > now()) then
+    v_bank := regexp_replace(coalesce(v.bank_account,''), '\D', '', 'g');
+    v_phone := regexp_replace(coalesce(v.phone,''), '\D', '', 'g');
+    v_ok := translate(regexp_replace(coalesce(v.name,''), '\s', '', 'g'), '黄', '黃') = v_name
+      and ((length(v_proof) = 5 and length(v_bank) >= 6 and right(v_bank, 5) = v_proof)
+        or (length(v_proof) >= 9 and length(v_phone) >= 9 and right(v_phone, 9) = right(v_proof, 9)));
+    if not v_ok then
+      v_fail := v.failed_logins + 1;
+      if v_fail >= 10 then
+        update public.people set failed_logins = 0, locked_until = now() + interval '15 minutes' where id = v.id;
+        insert into public.audit_log(actor, action, table_name, row_id) values (v.id::text, 'claim_locked', 'people', v.id);
+      else
+        update public.people set failed_logins = v_fail where id = v.id;
+      end if;
+    end if;
+  end if;
+  v_pw := lpad((extract(year from v_bd)::int - 1911)::text, 3, '0') || to_char(v_bd, 'MMDD');
+  if not v_ok then
+    perform extensions.crypt(v_pw, extensions.gen_salt('bf', 10));
+    return jsonb_build_object('ok', false, 'error', 'mismatch');
+  end if;
+
+  update public.people set birth_date = v_bd, birth_raw = to_char(v_bd, 'YYYY-MM-DD'),
+    password_hash = extensions.crypt(v_pw, extensions.gen_salt('bf', 10)), password_changed_at = null,
+    failed_logins = 0, locked_until = null, consent_at = coalesce(consent_at, now()), updated_at = now()
+  where id = v.id;
+  update public.data_issues set resolved = true where person_id = v.id and code = 'birth_unparsed' and not resolved;
+  insert into public.data_issues(person_id, severity, code, detail)
+  values (v.id, 'warn', 'self_claimed', '本人於 ' || to_char(now() at time zone 'Asia/Taipei', 'YYYY-MM-DD') || ' 補填生日並開通帳號，請核對身分證影本上的生日');
+  if v_age < 18 then
+    insert into public.data_issues(person_id, severity, code, detail)
+    values (v.id, 'warn', 'minor', format('補填的生日顯示未滿 18 歲（%s 歲），請核對年齡證明', v_age));
+  end if;
+  v_token := encode(extensions.gen_random_bytes(32), 'hex');
+  insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(v_token, 'sha256'), 'hex'), v.id, now() + interval '8 hours');
+  insert into public.audit_log(actor, action, table_name, row_id) values (v.id::text, 'account_claimed', 'people', v.id);
+  return jsonb_build_object('ok', true, 'token', v_token, 'name', v.name);
+end $function$
+;
+revoke execute on function public.payroll_claim(text, text, text, text, boolean) from public, authenticated;
+grant execute on function public.payroll_claim(text, text, text, text, boolean) to anon;
+
+-- 查看薪資前須補齊：身分證正反面、存摺封面、匯款帳戶（銀行代碼與帳號）
+CREATE OR REPLACE FUNCTION public.person_incomplete(p_person uuid)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select case when docs = '[]'::jsonb and bank_ok then null
+    else jsonb_build_object('docs', docs, 'bank', not bank_ok) end
+  from (select public.person_missing_docs(p.id) docs,
+      coalesce(p.bank_code,'') ~ '^\d{3}$' and coalesce(p.bank_account,'') ~ '^\d{6,16}$' bank_ok
+    from public.people p where p.id = p_person) t;
+$function$
+;
+revoke execute on function public.person_incomplete(uuid) from public, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public.payroll_login(p_national_id text, p_password text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -2023,19 +2104,21 @@ CREATE OR REPLACE FUNCTION public.payroll_my_payslips(p_token text)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_pid uuid := public.payroll_session_person(p_token);
+declare v_pid uuid := public.payroll_session_person(p_token); v_inc jsonb;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  v_inc := public.person_incomplete(v_pid);
   return jsonb_build_object('ok', true,
     'person', (select jsonb_build_object('name', p.name, 'national_id', public.payroll_mask_id(p.national_id),
                  'default_password', p.password_changed_at is null) from public.people p where p.id = v_pid),
-    'payslips', coalesce((
+    'incomplete', v_inc,
+    'payslips', case when v_inc is not null then '[]'::jsonb else coalesce((
       select jsonb_agg(jsonb_build_object(
         'id', s.id, 'event', e.name, 'employer', em.name, 'relation', s.relation, 'role', s.role,
         'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
         'gross', s.gross, 'net', s.net) order by coalesce(s.pay_date, s.period_end) desc nulls last, s.created_at desc)
       from public.payslips s join public.events e on e.id = s.event_id join public.employers em on em.id = e.employer_id
-      where s.person_id = v_pid and s.status = 'published'), '[]'::jsonb));
+      where s.person_id = v_pid and s.status = 'published'), '[]'::jsonb) end);
 end $function$
 ;
 
@@ -2045,9 +2128,11 @@ CREATE OR REPLACE FUNCTION public.payroll_payslip(p_token text, p_id uuid)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_pid uuid := public.payroll_session_person(p_token); r jsonb;
+declare v_pid uuid := public.payroll_session_person(p_token); r jsonb; v_inc jsonb;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  v_inc := public.person_incomplete(v_pid);
+  if v_inc is not null then return jsonb_build_object('ok', false, 'error', 'incomplete', 'incomplete', v_inc); end if;
   select jsonb_build_object(
     'id', s.id, 'event', e.name,
     'employer', jsonb_build_object('name', em.name, 'legal_name', em.legal_name, 'tax_id', em.tax_id),

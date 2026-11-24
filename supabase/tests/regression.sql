@@ -7,6 +7,7 @@ declare
   emp uuid; ev uuid; ev2 uuid; ev3 uuid; s1 uuid; s2 uuid; s3 uuid; s_other uuid;
   p1 uuid; p2 uuid; tok1 text := encode(extensions.gen_random_bytes(16), 'hex'); tok2 text := encode(extensions.gen_random_bytes(16), 'hex');
   atok text := encode(extensions.gen_random_bytes(16), 'hex'); ev4 uuid; ev5 uuid; att uuid; a1 uuid; a2 uuid; r jsonb; r2 jsonb; c jsonb; v_code text; v_slip uuid; i int; n int; txt text; nid uuid;
+  p3 uuid; tok3 text := encode(extensions.gen_random_bytes(16), 'hex'); sl uuid; base jsonb;
   fails text := '';
 begin
   -- 隔離既有佇列，避免影響通知測試
@@ -254,5 +255,33 @@ begin
   perform public.payroll_login('Z999990001', 'wrong');
   if (select locked_until from public.people where id = p1) is null then fails := fails || ' [22b not locked after 10]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 22 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 23. 缺生日的人自行開通：核對姓名＋帳號末 5 碼或手機；不符、查無此人、已有密碼回應相同；開通後不能再改生日
+  insert into public.people(national_id, name, bank_account, phone, profile_source) values ('Z999990003', '黃測試', '00012345678901', '912345678', 'test') returning id into p3;
+  base := public.payroll_claim('Z999990099', '黃測試', '78901', '2001-02-03', true);
+  if base->>'error' is distinct from 'mismatch' then fails := fails || ' [23a]'; end if;
+  if public.payroll_claim('Z999990001', '測試甲', '78901', '2001-02-03', true) <> base then fails := fails || ' [23b has password differs]'; end if;
+  if public.payroll_claim('Z999990003', '黃測試', '78900', '2001-02-03', true) <> base then fails := fails || ' [23c wrong proof differs]'; end if;
+  if public.payroll_claim('Z999990003', '王測試', '78901', '2001-02-03', true) <> base then fails := fails || ' [23d wrong name differs]'; end if;
+  r := public.payroll_claim('ｚ999990003', '黄 測試', '0912-345-678', '2001-02-03', true);
+  if (r->>'ok')::boolean is not true then fails := fails || ' [23e claim ' || r::text || ']'; end if;
+  if (public.payroll_login('Z999990003', '0900203')->>'ok')::boolean is not true then fails := fails || ' [23f login after claim]'; end if;
+  if public.payroll_claim('Z999990003', '黃測試', '78901', '1999-01-01', true) <> base or (select birth_date from public.people where id = p3) <> '2001-02-03' then fails := fails || ' [23g reclaim]'; end if;
+  update public.people set password_hash = null, failed_logins = 0 where id = p3;
+  for i in 1..10 loop perform public.payroll_claim('Z999990003', '黃測試', '00000', '2001-02-03', true); end loop;
+  if public.payroll_claim('Z999990003', '黃測試', '78901', '2001-02-03', true) <> base then fails := fails || ' [23h locked claim allowed]'; end if;
+
+  -- 24. 缺證件或匯款資料時看不到薪資單；補齊後才看得到（舊表雲端連結的證件也算有）
+  update public.people set locked_until = null, password_hash = 'x', bank_code = null, bank_account = null where id = p3;
+  insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(tok3, 'sha256'), 'hex'), p3, now() + interval '1 hour');
+  insert into public.payslips(person_id, event_id, gross, net, deductions, status) values (p3, ev, 100, 100, 0, 'published') returning id into sl;
+  r := public.payroll_my_payslips(tok3);
+  if r->'incomplete' = 'null'::jsonb or jsonb_array_length(r->'payslips') <> 0 or (r->'incomplete'->>'bank')::boolean is not true then fails := fails || ' [24a gate ' || r::text || ']'; end if;
+  if public.payroll_payslip(tok3, sl)->>'error' is distinct from 'incomplete' then fails := fails || ' [24b slip gate]'; end if;
+  update public.people set bank_code = '822', bank_account = '123456789012' where id = p3;
+  insert into public.people_documents(person_id, kind, path, drive_file_id) values (p3, 'id_front', p3 || '/id_front-1.jpg', null), (p3, 'id_back', p3 || '/id_back-1.jpg', null), (p3, 'bankbook', null, 'DRIVEaaaaaaaaaaaaaaaaaaaaaa');
+  r := public.payroll_my_payslips(tok3);
+  if r->'incomplete' <> 'null'::jsonb or jsonb_array_length(r->'payslips') <> 1 then fails := fails || ' [24c complete ' || r::text || ']'; end if;
+  if (public.payroll_payslip(tok3, sl)->>'ok')::boolean is not true then fails := fails || ' [24d slip]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 24 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;
