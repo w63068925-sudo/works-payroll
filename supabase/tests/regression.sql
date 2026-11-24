@@ -21,6 +21,10 @@ begin
   -- 1. 登入失敗不洩漏帳號是否存在
   r := public.payroll_login('Z999990001', 'wrong'); r2 := public.payroll_login('Z999990099', 'wrong');
   if r <> r2 then fails := fails || ' [1 login responses differ]'; end if;
+  -- 已鎖定的帳號也回同樣的失敗（不透露帳號存在或被鎖），鎖定中輸入正確也不能登入
+  update public.people set locked_until = now() + interval '5 minutes' where id = p1;
+  if public.payroll_login('Z999990001', 'wrong') <> r2 or public.payroll_login('Z999990001', '0890101') <> r2 then fails := fails || ' [1b locked response differs]'; end if;
+  update public.people set locked_until = null, failed_logins = 0 where id = p1;
 
   -- 2. LINE 綁定碼：一次性、錯 5 次暫停
   update public.app_settings set value = '@regress' where key = 'line_basic_id';
@@ -232,8 +236,8 @@ begin
   if public.payroll_change_password(tok2, 'wrong00', '0730407')->>'error' is distinct from 'invalid' then fails := fails || ' [20d wrong old password accepted]'; end if;
   if (public.payroll_change_password(tok2, '0890101', '0730407')->>'ok')::boolean is not true then fails := fails || ' [20b worker 7 rejected]'; end if;
   if (public.payroll_login('Z999990002', '0730407')->>'ok')::boolean is not true then fails := fails || ' [20c login with new 7]'; end if;
-  -- 改密碼時猜舊密碼也算錯誤次數：錯 5 次鎖定，鎖定中輸入正確也拒絕
-  for i in 1..5 loop perform public.payroll_change_password(tok2, 'wrong00', '7654321'); end loop;
+  -- 改密碼時猜舊密碼也算錯誤次數：錯 10 次鎖定，鎖定中輸入正確也拒絕
+  for i in 1..10 loop perform public.payroll_change_password(tok2, 'wrong00', '7654321'); end loop;
   if public.payroll_change_password(tok2, '0730407', '7654321')->>'error' is distinct from 'locked' then fails := fails || ' [20e change-password guessing not locked]'; end if;
 
   -- 21. 登入容忍全形字、小寫與空白；全形密碼猜錯只算一次
@@ -243,5 +247,12 @@ begin
   perform public.payroll_login('Z999990001', '０８９０１０２');
   if (select failed_logins from public.people where id = p1) <> 1 then fails := fails || ' [21c wrong fullwidth counted twice]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 21 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 22. 登入錯 9 次不鎖、錯 10 次鎖 15 分鐘
+  update public.people set failed_logins = 0, locked_until = null where id = p1;
+  for i in 1..9 loop perform public.payroll_login('Z999990001', 'wrong'); end loop;
+  if (select locked_until from public.people where id = p1) is not null then fails := fails || ' [22a locked after 9]'; end if;
+  perform public.payroll_login('Z999990001', 'wrong');
+  if (select locked_until from public.people where id = p1) is null then fails := fails || ' [22b not locked after 10]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 22 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

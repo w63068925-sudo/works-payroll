@@ -131,11 +131,11 @@ function fmtDate(s, withWd) { if (!s) return '—'; const [y, m, d] = s.split('-
 function fmtPeriod(a, b) { if (!a) return '—'; return a === b || !b ? fmtDate(a) : fmtDate(a) + ' – ' + fmtDate(b).slice(5); }
 // 手機輸入法常打成全形字（Ｒ２３…）：先轉半形再去掉空白與符號，避免整串被濾掉
 const halfWidth = v => String(v || '').replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/\u3000/g, ' ');
-const cleanId = v => halfWidth(v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+const cleanId = v => halfWidth(v).toUpperCase().replace(/\s/g, '');
 // 身分證字號或居留證號：格式與檢查碼（只在送出前提示，不代表帳號存在）
 function idProblem(v) {
-  if (!/^[A-Z][0-9A-Z]\d{8}$/.test(v)) return '身分證字號要 10 碼：第一個字是英文字母，後面 9 碼。';
-  if (!/^[A-Z][1289]/.test(v)) return '';
+  if (!/^[A-Z][1289A-D]\d{8}$/.test(v)) return '身分證字號要 10 碼：第一個字是英文字母，後面 9 碼數字（舊式居留證第二碼是 A～D）。';
+  if (/^[A-Z][A-D]/.test(v)) return '';
   const n = 'ABCDEFGHJKLMNPQRSTUVXYWZIO'.indexOf(v[0]) + 10;
   let s = Math.floor(n / 10) + (n % 10) * 9;
   for (let i = 1; i < 9; i++) s += Number(v[i]) * (9 - i);
@@ -151,7 +151,7 @@ function viewLogin(message) {
     <p class="sub">登入後可隨時查看、列印每一筆薪資明細。</p>
     <form id="f" class="card pad" style="margin-top:22px" autocomplete="off">
       <label for="nid" style="margin-top:0">身分證字號</label>
-      <input id="nid" type="text" maxlength="10" autocapitalize="characters" autocomplete="username" spellcheck="false" placeholder="A123456789" required>
+      <input id="nid" type="text" maxlength="14" autocapitalize="characters" autocomplete="username" spellcheck="false" placeholder="A123456789" required>
       <label for="pw">密碼</label>
       <div class="field">
         <input id="pw" type="password" autocomplete="current-password" required>
@@ -162,7 +162,7 @@ function viewLogin(message) {
       <button class="btn" id="go">登入</button>
     </form>
     ${state.join ? '<button class="btn ghost" id="toreg">第一次報名？先填基本資料</button>' : ''}
-    <p class="foot">連續輸入錯誤 5 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
+    <p class="foot">連續輸入錯誤 10 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
   if (state.join) document.getElementById('toreg').addEventListener('click', () => viewRegister());
   const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
   nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
@@ -176,8 +176,7 @@ function viewLogin(message) {
     try {
       const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
       if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList(); }
-      if (r.error === 'locked') m.innerHTML = '<div class="msg err">輸入錯誤次數過多，帳號已暫時鎖定。請 ' + esc(r.retry_after_minutes) + ' 分鐘後再試。</div>';
-      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。<div class="dim" style="margin-top:4px">請確認身分證字號沒有打錯；密碼是民國生日 7 碼，例如 0900101（改過密碼的請用新密碼）。</div></div>';
+      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。<div class="dim" style="margin-top:4px">請確認身分證字號沒有打錯；密碼是民國生日 7 碼，例如 0900101（改過密碼的請用新密碼）。連續錯 10 次會暫停 15 分鐘。</div></div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
     go.disabled = false; go.textContent = '登入'; pw.value = ''; pw.focus();
   });
@@ -343,7 +342,7 @@ async function viewRegister() {
     <p class="sub">只需要填一次，之後每場活動都不用重填。</p>
     <form id="f" class="card pad" style="margin-top:20px" autocomplete="on">
       <label for="nm" style="margin-top:0">姓名（與身分證相同）</label><input id="nm" type="text" autocomplete="name" required>
-      <label for="nid">身分證字號</label><input id="nid" type="text" maxlength="10" autocapitalize="characters" spellcheck="false" required>
+      <label for="nid">身分證字號</label><input id="nid" type="text" maxlength="14" autocapitalize="characters" spellcheck="false" required>
       <label for="bd">生日</label><input id="bd" type="date" required>
       ${profileFields({}, true)}
       <p class="hint">戶名會自動使用你的姓名。</p>

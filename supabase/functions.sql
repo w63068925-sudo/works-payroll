@@ -1503,13 +1503,13 @@ begin
   -- 工讀生密碼至少 7 個字（與預設的民國生日 7 碼一致）；管理員仍至少 8 個字
   if length(coalesce(p_new,'')) < 7 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
   select * into v from public.people where id = v_pid for update;
-  -- 與登入共用錯誤次數與鎖定：拿到 session 也不能無限猜舊密碼
+  -- 與登入共用錯誤次數與鎖定（錯 10 次鎖 15 分鐘）：拿到 session 也不能無限猜舊密碼
   if v.locked_until is not null and v.locked_until > now() then
     return jsonb_build_object('ok', false, 'error', 'locked', 'retry_after_minutes', ceil(extract(epoch from v.locked_until - now()) / 60));
   end if;
   if v.password_hash is null or v.password_hash <> extensions.crypt(coalesce(p_old,''), v.password_hash) then
     v_fail := v.failed_logins + 1;
-    if v_fail >= 5 then
+    if v_fail >= 10 then
       update public.people set failed_logins = 0, locked_until = now() + interval '15 minutes' where id = v_pid;
       insert into public.audit_log(actor, action, table_name, row_id) values (v_pid::text, 'password_change_locked', 'people', v_pid);
       return jsonb_build_object('ok', false, 'error', 'locked', 'retry_after_minutes', 15);
@@ -1906,6 +1906,7 @@ AS $function$
   select translate(p, '！＂＃＄％＆＇（）＊＋，－．／０１２３４５６７８９：；＜＝＞？＠ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ［＼］＾＿｀ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ｛｜｝～　', '!"#$%&''()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ')
 $function$
 ;
+revoke execute on function public.halfwidth(text) from public, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.payroll_login(p_national_id text, p_password text)
  RETURNS jsonb
@@ -1915,30 +1916,32 @@ CREATE OR REPLACE FUNCTION public.payroll_login(p_national_id text, p_password t
 AS $function$
 declare
   v public.people;
-  v_id text := upper(regexp_replace(public.halfwidth(coalesce(p_national_id,'')), '[^A-Za-z0-9]', '', 'g'));
-  v_pw_half text := public.halfwidth(coalesce(p_password,''));
-  v_token text;
+  -- 身分證字號：全形轉半形、去空白、轉大寫（不刪其他符號，避免導向別的帳號）
+  v_id text := upper(regexp_replace(public.halfwidth(coalesce(p_national_id,'')), '\s', '', 'g'));
+  v_pw text := coalesce(p_password,'');
   v_fail int;
+  v_token text;
 begin
   select * into v from public.people where national_id = v_id for update;
+  -- 失敗一律回同樣的 invalid，不透露帳號是否存在或被鎖；每條路徑都做一次同成本雜湊
   if not found or v.password_hash is null then
-    perform extensions.crypt(coalesce(p_password,''), extensions.gen_salt('bf', 10));
+    perform extensions.crypt(v_pw, extensions.gen_salt('bf', 10));
     return jsonb_build_object('ok', false, 'error', 'invalid');
   end if;
   if v.locked_until is not null and v.locked_until > now() then
-    return jsonb_build_object('ok', false, 'error', 'locked',
-      'retry_after_minutes', ceil(extract(epoch from v.locked_until - now()) / 60));
+    perform extensions.crypt(v_pw, v.password_hash);
+    return jsonb_build_object('ok', false, 'error', 'invalid');
   end if;
-  -- 先照原樣比對；不符且含全形字時，再用轉半形後的比對一次（只算一次錯誤）
-  if v.password_hash <> extensions.crypt(coalesce(p_password,''), v.password_hash)
-     and (v_pw_half = coalesce(p_password,'') or v.password_hash <> extensions.crypt(v_pw_half, v.password_hash)) then
+  -- 還在用預設生日密碼的人，輸入轉半形（手機常打成全形數字）；改過密碼的照原樣比對。每次只比對一次
+  if v.password_changed_at is null then v_pw := public.halfwidth(v_pw); end if;
+  if v.password_hash <> extensions.crypt(v_pw, v.password_hash) then
     v_fail := v.failed_logins + 1;
-    if v_fail >= 5 then
+    if v_fail >= 10 then
       update public.people set failed_logins = 0, locked_until = now() + interval '15 minutes' where id = v.id;
       insert into public.audit_log(actor, action, table_name, row_id) values (v.id::text, 'login_locked', 'people', v.id);
-      return jsonb_build_object('ok', false, 'error', 'locked', 'retry_after_minutes', 15);
+    else
+      update public.people set failed_logins = v_fail where id = v.id;
     end if;
-    update public.people set failed_logins = v_fail where id = v.id;
     return jsonb_build_object('ok', false, 'error', 'invalid');
   end if;
   update public.people set failed_logins = 0, locked_until = null where id = v.id;
