@@ -1708,8 +1708,11 @@ begin
   v_rh := case when v_type = 'daily' then v_rate / 8 else v_rate end;
   v_base_rh := v_rh;
 
-  for a in select * from public.attendance where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null order by work_date loop
-    m := (select public.att_minutes(t) from public.attendance t where t.id = a.id);
+  -- 同一天多筆出勤（中途離開再簽到）合併成一天計算；兩段之間的空檔算休息
+  for a in select work_date, sum(public.att_minutes(t))::int as mins,
+      (sum(t.break_minutes) + round(extract(epoch from max(t.clock_out) - min(t.clock_in)) / 60 - sum(extract(epoch from t.clock_out - t.clock_in) / 60)))::int as break_minutes
+    from public.attendance t where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null group by work_date order by work_date loop
+    m := a.mins;
     if m <= 0 then continue; end if;
     n_days := n_days + 1; v_first := coalesce(v_first, a.work_date); v_last := a.work_date;
     v_rh := v_base_rh;
@@ -1777,8 +1780,9 @@ begin
 
   if n_days = 0 then return jsonb_build_object('ok', false, 'error', 'no_attendance'); end if;
 
-  for wk in select date_trunc('week', work_date)::date w, sum(least(public.att_minutes(attendance.*), 480)) mins
-            from public.attendance where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null group by 1 loop
+  for wk in select date_trunc('week', q.d)::date w, sum(least(q.dm, 480)) mins
+            from (select work_date d, sum(public.att_minutes(attendance.*)) dm from public.attendance
+                  where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null group by 1) q group by 1 loop
     if wk.mins > 2400 then warns := warns || jsonb_build_object('severity','warn','code','week_over_40','detail', format('%s 起該週正常工時合計 %s 小時，超過 40 小時的部分應依加班計算，請人工確認', wk.w, round(wk.mins/60.0,1))); end if;
   end loop;
 
