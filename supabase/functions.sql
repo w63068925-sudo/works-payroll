@@ -349,56 +349,41 @@ CREATE OR REPLACE FUNCTION public.admin_generate_payslips(p_token text, p_event 
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); e public.events; pr record; c jsonb; v_id uuid; it jsonb; w jsonb;
-  v_created int := 0; v_replaced int := 0; skipped jsonb := '[]'::jsonb; v_pay date; v_existing public.payslips;
+declare v_actor text := public.admin_actor(p_token); e public.events; pr record; g jsonb;
+  v_created int := 0; v_replaced int := 0; skipped jsonb := '[]'::jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into e from public.events where id = p_event;
   if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
-  v_pay := coalesce(e.pay_date, e.end_date + e.pay_within_days);
-  for pr in select distinct p.id, p.name, p.bank_code, p.bank_branch, p.bank_account_name, p.bank_account
+  for pr in select distinct p.id, p.name
             from public.attendance a join public.people p on p.id = a.person_id
             where a.event_id = p_event and a.source in ('qr','manual') order by p.name loop
-    if coalesce((select relation from public.event_staff where event_id = p_event and person_id = pr.id), 'employment') = 'contract' then
-      skipped := skipped || jsonb_build_object('name', pr.name, 'reason', '承攬人員不自動算薪'); continue;
-    end if;
-    select * into v_existing from public.payslips where event_id = p_event and person_id = pr.id and status <> 'void' order by generated desc limit 1;
-    if v_existing.id is not null and v_existing.status = 'published' then
-      skipped := skipped || jsonb_build_object('name', pr.name, 'reason', '薪資單已發布，請先取消發布再重算'); continue;
-    end if;
-    if v_existing.id is not null and not v_existing.generated then
-      skipped := skipped || jsonb_build_object('name', pr.name, 'reason', '已有人工匯入的薪資單'); continue;
-    end if;
-    c := public.payroll_compute(p_event, pr.id);
-    if not (c->>'ok')::boolean then
-      skipped := skipped || jsonb_build_object('name', pr.name, 'reason', case c->>'error' when 'no_rate' then '尚未設定時薪或日薪' when 'open_attendance' then '有尚未簽退的出勤' else '沒有完整的出勤紀錄' end); continue;
-    end if;
-    if v_existing.id is not null then delete from public.payslips where id = v_existing.id; v_replaced := v_replaced + 1; else v_created := v_created + 1; end if;
-    insert into public.payslips(person_id, event_id, relation, role, period_start, period_end, pay_date, basis, gross, allowances, deductions, net,
-      status, generated, pay_bank_code, pay_bank_branch, pay_account_name, pay_account)
-    values (pr.id, p_event, 'employment', c->>'role', (c->>'period_start')::date, (c->>'period_end')::date, v_pay, 'hourly',
-      (c->>'gross')::numeric, 0, (c->>'deductions')::numeric, (c->>'net')::numeric, 'draft', true, pr.bank_code, pr.bank_branch, pr.bank_account_name, pr.bank_account)
-    returning id into v_id;
-    for it in select * from jsonb_array_elements(c->'items') loop
-      insert into public.payslip_items(payslip_id, kind, code, label, work_date, hours, rate, amount, sort)
-      values (v_id, 'earning', it->>'code', it->>'label', (it->>'work_date')::date, (it->>'hours')::numeric, (it->>'rate')::numeric, (it->>'amount')::numeric, (it->>'sort')::int);
-    end loop;
-    if (c->>'deductions')::numeric > 0 then
-      insert into public.payslip_items(payslip_id, kind, code, label, amount, sort)
-      values (v_id, 'deduction', 'labor_ins', format('勞保與就保自付額（%s 日，投保薪資 %s）', c->>'days', c->>'insured_salary'), (c->>'deductions')::numeric, 30);
-    end if;
-    for w in select * from jsonb_array_elements(c->'warnings') loop
-      insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, w->>'severity', w->>'code', w->>'detail');
-    end loop;
-    if pr.bank_account is null then
-      insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, 'warn', 'no_bank_account', '沒有匯款帳號');
-    end if;
-    if v_pay is null then
-      insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, 'warn', 'no_pay_date', '尚未設定發薪日');
-    end if;
+    g := public.payslip_regenerate(p_event, pr.id);
+    if g->>'result' = 'created' then v_created := v_created + 1;
+    elsif g->>'result' = 'replaced' then v_replaced := v_replaced + 1;
+    else skipped := skipped || jsonb_build_object('name', pr.name, 'reason', g->>'reason'); end if;
   end loop;
   insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'payslips_generated', 'events', p_event, jsonb_build_object('created', v_created, 'replaced', v_replaced, 'skipped', skipped));
   return jsonb_build_object('ok', true, 'created', v_created, 'replaced', v_replaced, 'skipped', skipped);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_recompute_payslip(p_token text, p_event uuid, p_person uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 核對時改完某人的出勤後，只重算這個人的薪資單草稿
+declare v_actor text := public.admin_actor(p_token); g jsonb;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  perform 1 from public.events where id = p_event for update;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  g := public.payslip_regenerate(p_event, p_person);
+  if g->>'result' = 'skipped' then return jsonb_build_object('ok', false, 'error', 'skipped', 'reason', g->>'reason'); end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'payslip_recomputed', 'payslips', (g->>'id')::uuid, jsonb_build_object('event', p_event, 'person', p_person, 'gross', g->'gross', 'net', g->'net'));
+  return jsonb_build_object('ok', true, 'id', g->>'id', 'gross', g->'gross', 'net', g->'net');
 end $function$
 ;
 
@@ -638,7 +623,7 @@ AS $function$
 declare v_actor text := public.admin_actor(p_token); r jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  select jsonb_build_object('id', s.id, 'status', s.status, 'relation', s.relation, 'role', s.role, 'basis', s.basis,
+  select jsonb_build_object('id', s.id, 'status', s.status, 'relation', s.relation, 'role', s.role, 'basis', s.basis, 'generated', s.generated,
     'work_dates_text', s.work_dates_text, 'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
     'gross', s.gross, 'allowances', s.allowances, 'deductions', s.deductions, 'net', s.net, 'note', s.note,
     'pay_bank_code', s.pay_bank_code, 'pay_bank_branch', s.pay_bank_branch, 'pay_account_name', s.pay_account_name, 'pay_account', s.pay_account,
@@ -1689,7 +1674,7 @@ AS $function$
 declare
   e public.events; st public.event_staff; a record;
   v_rate numeric; v_type text; v_rh numeric; v_ins numeric; v_deduct boolean;
-  m int; c int; pos int; dtype text; hol text; nm int; ot int; ot1 int; ot2 int; x int; y int; z int;
+  m int; c int; pos int; dtype text; hol text; nm int; ot int; ot1 int; ot2 int; ot3 int; x int; y int; z int;
   items jsonb := '[]'::jsonb; warns jsonb := '[]'::jsonb; gross numeric := 0; ded numeric := 0; n_days int := 0;
   v_min numeric; r public.labor_ins_rates; v_first date; v_last date; wk record;
   -- 產生一筆應發項目
@@ -1741,19 +1726,22 @@ begin
     if m > 240 and a.break_minutes < 30 then warns := warns || jsonb_build_object('severity','warn','code','no_break','detail', format('%s 連續工作超過 4 小時但休息不足 30 分鐘（勞基法第35條）', a.work_date)); end if;
 
     if dtype in ('weekday','holiday') then
-      nm := least(m, 480); ot := greatest(m - 480, 0); ot1 := least(ot, 120); ot2 := greatest(ot - 120, 0);
+      -- 8 小時內 ×1；第 9–10 小時 ×1.34；第 11–12 小時 ×1.67；超過 12 小時 ×2
+      nm := least(m, 480); ot := greatest(m - 480, 0); ot1 := least(ot, 120); ot2 := least(greatest(ot - 120, 0), 120); ot3 := greatest(ot - 240, 0);
       if dtype = 'weekday' then
         amt := case when v_type = 'daily' then ceil(v_rate) else ceil(nm / 60.0 * v_rh) end;
-        items := items || jsonb_build_object('code','regular','label', case when v_type = 'daily' then '日薪' else '正常工時工資' end, 'work_date', a.work_date, 'hours', round(nm/60.0,2), 'rate', case when v_type = 'daily' then null else v_rh end, 'amount', amt, 'sort', 10);
+        items := items || jsonb_build_object('code','regular','label', case when v_type = 'daily' then '日薪' else '一般工時（×1）' end, 'work_date', a.work_date, 'hours', round(nm/60.0,2), 'rate', case when v_type = 'daily' then null else v_rh end, 'amount', amt, 'sort', 10);
       else
         amt := case when v_type = 'daily' then ceil(v_rate * 2) else ceil(nm / 60.0 * v_rh * 2) end;
         items := items || jsonb_build_object('code','holiday','label', '國定假日出勤（' || hol || '，加倍）', 'work_date', a.work_date, 'hours', round(nm/60.0,2), 'rate', round(v_rh * 2, 2), 'amount', amt, 'sort', 10);
       end if;
       gross := gross + amt;
       if ot1 > 0 then amt := ceil(ot1 / 60.0 * v_rh * 1.34); gross := gross + amt;
-        items := items || jsonb_build_object('code','ot_1','label','加班前2小時（×1.34）','work_date', a.work_date, 'hours', round(ot1/60.0,2), 'rate', round(v_rh*1.34,2), 'amount', amt, 'sort', 11); end if;
+        items := items || jsonb_build_object('code','ot_1','label','加班第9–10小時（×1.34）','work_date', a.work_date, 'hours', round(ot1/60.0,2), 'rate', round(v_rh*1.34,2), 'amount', amt, 'sort', 11); end if;
       if ot2 > 0 then amt := ceil(ot2 / 60.0 * v_rh * 1.67); gross := gross + amt;
-        items := items || jsonb_build_object('code','ot_2','label','加班第3小時起（×1.67）','work_date', a.work_date, 'hours', round(ot2/60.0,2), 'rate', round(v_rh*1.67,2), 'amount', amt, 'sort', 12); end if;
+        items := items || jsonb_build_object('code','ot_2','label','加班第11–12小時（×1.67）','work_date', a.work_date, 'hours', round(ot2/60.0,2), 'rate', round(v_rh*1.67,2), 'amount', amt, 'sort', 12); end if;
+      if ot3 > 0 then amt := ceil(ot3 / 60.0 * v_rh * 2); gross := gross + amt;
+        items := items || jsonb_build_object('code','ot_3','label','加班超過12小時（×2）','work_date', a.work_date, 'hours', round(ot3/60.0,2), 'rate', round(v_rh*2,2), 'amount', amt, 'sort', 13); end if;
     elsif dtype = 'rest' then
       if v_type = 'daily' then m := greatest(m, 480); end if;
       x := least(m, 120); y := least(greatest(m - 120, 0), 360); z := greatest(m - 480, 0);
@@ -1788,6 +1776,60 @@ begin
   end if;
   return jsonb_build_object('ok', true, 'items', items, 'gross', gross, 'deductions', ded, 'net', gross - ded, 'days', n_days,
     'period_start', v_first, 'period_end', v_last, 'warnings', warns, 'insured_salary', v_ins, 'role', st.role);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payslip_regenerate(p_event uuid, p_person uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 依出勤重算一個人在一場活動的薪資單草稿（產生全部與單人重算共用）
+declare e public.events; pr public.people; c jsonb; v_id uuid; it jsonb; w jsonb; v_pay date; v_existing public.payslips; v_replaced boolean := false;
+begin
+  select * into e from public.events where id = p_event;
+  select * into pr from public.people where id = p_person;
+  if e.id is null or pr.id is null then return jsonb_build_object('result', 'skipped', 'reason', '找不到活動或人員'); end if;
+  v_pay := coalesce(e.pay_date, e.end_date + e.pay_within_days);
+  if coalesce((select relation from public.event_staff where event_id = p_event and person_id = pr.id), 'employment') = 'contract' then
+    return jsonb_build_object('result', 'skipped', 'reason', '承攬人員不自動算薪');
+  end if;
+  select * into v_existing from public.payslips where event_id = p_event and person_id = pr.id and status <> 'void' order by generated desc limit 1;
+  if v_existing.id is not null and v_existing.status = 'published' then
+    return jsonb_build_object('result', 'skipped', 'reason', '薪資單已發布，請先取消發布再重算');
+  end if;
+  if v_existing.id is not null and not v_existing.generated then
+    return jsonb_build_object('result', 'skipped', 'reason', '已有人工匯入的薪資單');
+  end if;
+  c := public.payroll_compute(p_event, pr.id);
+  if not (c->>'ok')::boolean then
+    return jsonb_build_object('result', 'skipped', 'reason', case c->>'error' when 'no_rate' then '尚未設定時薪或日薪' when 'open_attendance' then '有尚未簽退的出勤' else '沒有完整的出勤紀錄' end);
+  end if;
+  if v_existing.id is not null then delete from public.payslips where id = v_existing.id; v_replaced := true; end if;
+  insert into public.payslips(person_id, event_id, relation, role, period_start, period_end, pay_date, basis, gross, allowances, deductions, net,
+    status, generated, pay_bank_code, pay_bank_branch, pay_account_name, pay_account)
+  values (pr.id, p_event, 'employment', c->>'role', (c->>'period_start')::date, (c->>'period_end')::date, v_pay, 'hourly',
+    (c->>'gross')::numeric, 0, (c->>'deductions')::numeric, (c->>'net')::numeric, 'draft', true, pr.bank_code, pr.bank_branch, pr.bank_account_name, pr.bank_account)
+  returning id into v_id;
+  for it in select * from jsonb_array_elements(c->'items') loop
+    insert into public.payslip_items(payslip_id, kind, code, label, work_date, hours, rate, amount, sort)
+    values (v_id, 'earning', it->>'code', it->>'label', (it->>'work_date')::date, (it->>'hours')::numeric, (it->>'rate')::numeric, (it->>'amount')::numeric, (it->>'sort')::int);
+  end loop;
+  if (c->>'deductions')::numeric > 0 then
+    insert into public.payslip_items(payslip_id, kind, code, label, amount, sort)
+    values (v_id, 'deduction', 'labor_ins', format('勞保與就保自付額（%s 日，投保薪資 %s）', c->>'days', c->>'insured_salary'), (c->>'deductions')::numeric, 30);
+  end if;
+  for w in select * from jsonb_array_elements(c->'warnings') loop
+    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, w->>'severity', w->>'code', w->>'detail');
+  end loop;
+  if pr.bank_account is null then
+    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, 'warn', 'no_bank_account', '沒有匯款帳號');
+  end if;
+  if v_pay is null then
+    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, 'warn', 'no_pay_date', '尚未設定發薪日');
+  end if;
+  return jsonb_build_object('result', case when v_replaced then 'replaced' else 'created' end, 'id', v_id, 'gross', (c->>'gross')::numeric, 'net', (c->>'net')::numeric);
 end $function$
 ;
 

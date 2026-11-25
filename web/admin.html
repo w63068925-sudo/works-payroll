@@ -836,7 +836,19 @@ async function openDetail(kind, key, e, keepScroll) {
       <h2>金額</h2>
       <table>${p.items.map(i => `<tr><td>${esc(i.label)}${i.work_date ? '<div class="dim">' + esc(md(i.work_date)) + (i.hours != null ? '　' + Number(i.hours) + ' 小時 × ' + money(i.rate) : '') + '</div>' : ''}</td><td class="r">${i.kind === 'deduction' ? '−' : ''}${money(i.amount)}</td></tr>`).join('')}
         <tr><td><b>實發</b></td><td class="r"><b>${money(p.net)}</b></td></tr></table>
-      ${p.attendance.length ? '<h2>出勤</h2><table>' + p.attendance.map(a => `<tr><td>${esc(md(a.work_date))}</td><td class="r">${a.clock_in ? esc(a.clock_in) + '–' + esc(a.clock_out || '') : '<span class="dim">' + esc(a.scheduled_text || '無時間') + '</span>'}</td></tr>`).join('') + '</table>' : ''}
+      ${(() => {
+        // 核對時可直接調整這個人的上下班時間，存檔後自動重算薪資單
+        const rows = S.cache.att.filter(a => a.person_id === p.person.id);
+        if (!rows.length) return p.attendance.length ? '<h2>出勤</h2><table>' + p.attendance.map(a => `<tr><td>${esc(md(a.work_date))}</td><td class="r">${a.clock_in ? esc(a.clock_in) + '–' + esc(a.clock_out || '') : '<span class="dim">' + esc(a.scheduled_text || '無時間') + '</span>'}</td></tr>`).join('') + '</table>' : '';
+        const edit = p.status === 'draft' && p.generated !== false;
+        return '<h2>出勤' + (edit ? '（可調整）' : '') + '</h2>' + rows.map(a => `<div class="card pad" style="margin-bottom:8px" data-att="${esc(a.id)}">
+          <b>${esc(d(a.work_date))}</b>${a.sched_in ? '<span class="dim">　表定 ' + esc(hm(a.sched_in)) + '–' + esc(hm(a.sched_out)) + '</span>' : ''}<span class="dim">　計薪 ${esc(dur(a.minutes))}</span>
+          <div class="row" style="margin-top:6px"><div class="grow"><label style="margin-top:0">上班</label><input type="datetime-local" data-f="in" value="${esc(a.clock_in || '')}" ${edit ? '' : 'disabled'}></div>
+          <div class="grow"><label style="margin-top:0">下班</label><input type="datetime-local" data-f="out" value="${esc(a.clock_out || '')}" ${edit ? '' : 'disabled'}></div>
+          <div style="width:90px"><label style="margin-top:0">休息（分）</label><input type="text" inputmode="numeric" data-f="br" value="${esc(a.break_minutes)}" ${edit ? '' : 'disabled'}></div></div></div>`).join('')
+          + (edit ? '<label for="areason">修改原因</label><input id="areason" type="text" placeholder="依現場負責人確認"><div id="am" style="margin-top:10px"></div><button class="btn block" id="recalc">儲存出勤並重算薪資</button><p class="sub" style="margin-top:6px">8 小時內 ×1、第 9–10 小時 ×1.34、第 11–12 小時 ×1.67、超過 12 小時 ×2。重算後這張薪資單的問題標記會重新檢查。</p>'
+            : '<p class="sub">' + (p.status === 'published' ? '已發布的薪資單要先在「發布」改回草稿，才能調整出勤重算。' : '這張是舊表匯入的薪資單，不會依出勤重算。') + '</p>');
+      })()}
       <h2>匯款</h2><dl class="kv"><dt>帳戶</dt><dd>${esc([p.pay_bank_code, p.pay_bank_branch].filter(Boolean).join(' ') || '—')}<br>${esc(p.pay_account_name || '')} ${esc(p.pay_account || '')}</dd><dt>發薪日</dt><dd>${esc(d(p.pay_date))}</dd></dl>
       <h2>設定</h2>
       <label for="rel" style="margin-top:0">性質</label><select id="rel"><option value="employment" ${p.relation === 'employment' ? 'selected' : ''}>僱傭（適用勞基法）</option><option value="contract" ${p.relation === 'contract' ? 'selected' : ''}>承攬（勞務報酬）</option></select>
@@ -846,6 +858,25 @@ async function openDetail(kind, key, e, keepScroll) {
       <button class="link" id="toperson" style="margin-top:12px">查看人員資料與證件</button>`;
     bindClose(); bindIssues(e);
     $('toperson').onclick = () => go('#/people/' + p.person.id);
+    const rc = $('recalc'); if (rc) rc.onclick = async () => {
+      rc.disabled = true;
+      const msg = t => { $('am').innerHTML = '<div class="msg err">' + esc(t) + '</div>'; rc.disabled = false; };
+      try {
+        let changed = 0;
+        for (const box of document.querySelectorAll('[data-att]')) {
+          const a = S.cache.att.find(x => x.id === box.dataset.att), v = f => box.querySelector('[data-f="' + f + '"]').value;
+          if (v('in') === (a.clock_in || '') && v('out') === (a.clock_out || '') && String(v('br')) === String(a.break_minutes)) continue;
+          if (!v('in') || !v('out')) return msg(md(a.work_date) + ' 請填上班與下班時間。');
+          const r3 = await rpc('admin_set_attendance', { p_id: a.id, p_patch: { clock_in: v('in'), clock_out: v('out'), break_minutes: v('br'), note: $('areason').value || a.note || '核對時調整' } });
+          if (!r3.ok) return msg(md(a.work_date) + (r3.error === 'out_before_in' ? ' 下班時間必須晚於上班時間。' : ' 輸入的內容有誤（休息 0–240 分）。'));
+          changed++;
+        }
+        const r4 = await rpc('admin_recompute_payslip', { p_event: e.id, p_person: p.person.id });
+        if (!r4.ok) return msg(r4.reason || '重算失敗，請再試一次。');
+        flash('ok', (changed ? '已更新 ' + changed + ' 天出勤，' : '') + '薪資已重算：應發 ' + money(r4.gross) + '，實發 ' + money(r4.net) + '。');
+        S.detail = { kind: 'slip', key: r4.id }; refreshEvent(e, 'review');
+      } catch (err) { if (err.message !== 'session') msg(err.message); }
+    };
     $('save').onclick = async () => {
       const r2 = await rpc('admin_update_payslip', { p_id: key, p_patch: { relation: $('rel').value, pay_date: $('pdate').value, note: $('note').value } });
       if (r2.ok) { flash('ok', '已儲存。'); refreshEvent(e); }
