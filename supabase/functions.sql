@@ -2590,29 +2590,36 @@ end $function$
 revoke all on function public.payslip_regenerate(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.payroll_contract_text_v1(uuid) from public, anon, authenticated;
 
-CREATE OR REPLACE FUNCTION public.admin_accepted_export(p_token text, p_event uuid)
+CREATE OR REPLACE FUNCTION public.admin_event_people_export(p_token text, p_event uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
--- 錄取名單匯出（姓名、身分證字號、生日、地址、存摺照片）：含個資，先寫紀錄再回傳
+-- 活動人員資料下載：錄取、出勤或有薪資單的人；含個資與證件資訊，先寫紀錄再回傳
 declare v_actor text := public.admin_actor(p_token); v_rows jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if not exists (select 1 from public.events where id = p_event) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   select coalesce(jsonb_agg(jsonb_build_object('person_id', p.id, 'name', p.name, 'national_id', p.national_id, 'birth_date', p.birth_date,
-      'address', p.address, 'bankbook_file', d.path is not null, 'bankbook_ext', lower(substring(d.path from '\.([A-Za-z0-9]+)$')),
-      'bankbook_drive', case when d.drive_file_id is not null then 'https://drive.google.com/file/d/' || d.drive_file_id || '/view' end) order by p.name), '[]'::jsonb)
+      'address', p.address, 'bank_code', p.bank_code, 'bank_branch', p.bank_branch, 'bank_account_name', p.bank_account_name, 'bank_account', p.bank_account,
+      'docs', (select coalesce(jsonb_object_agg(d.kind, jsonb_build_object('file', d.path is not null,
+                 'ext', lower(substring(d.path from '\.([A-Za-z0-9]+)$')),
+                 'drive', case when d.drive_file_id is not null then 'https://drive.google.com/file/d/' || d.drive_file_id || '/view' end)), '{}'::jsonb)
+               from public.people_documents d where d.person_id = p.id and d.kind in ('id_front', 'id_back', 'bankbook')))
+    order by p.name), '[]'::jsonb)
   into v_rows
   from public.people p
-  left join public.people_documents d on d.person_id = p.id and d.kind = 'bankbook'
-  where p.id in (select ap.person_id from public.applications ap join public.application_shifts x on x.application_id = ap.id
-                 where ap.event_id = p_event and ap.status = 'active' and x.status = 'accepted');
+  where p.id in (
+    select ap.person_id from public.applications ap join public.application_shifts x on x.application_id = ap.id
+      where ap.event_id = p_event and ap.status = 'active' and x.status = 'accepted'
+    union select person_id from public.attendance where event_id = p_event
+    union select person_id from public.payslips where event_id = p_event and status <> 'void');
   insert into public.audit_log(actor, action, table_name, row_id, detail)
-  values (v_actor, 'export_accepted_with_docs', 'events', p_event, jsonb_build_object('rows', jsonb_array_length(v_rows),
+  values (v_actor, 'export_event_people', 'events', p_event, jsonb_build_object('rows', jsonb_array_length(v_rows),
     'people', (select coalesce(jsonb_agg(x->'person_id'), '[]'::jsonb) from jsonb_array_elements(v_rows) x)));
   return jsonb_build_object('ok', true, 'rows', v_rows);
 end $function$
 ;
-revoke all on function public.admin_accepted_export(text, uuid) from public;
-grant execute on function public.admin_accepted_export(text, uuid) to anon, authenticated;
+revoke all on function public.admin_event_people_export(text, uuid) from public;
+grant execute on function public.admin_event_people_export(text, uuid) to anon, authenticated;
