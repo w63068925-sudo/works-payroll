@@ -91,6 +91,30 @@ th{font-size:12px;color:var(--muted);letter-spacing:.06em}
 .dim{color:var(--muted);font-size:12.5px}
 .total td{font-weight:700;border-top:1px solid var(--ink);border-bottom:0}
 .neg{color:var(--danger)}
+/* 薪資單：逐日明細 */
+.day{padding:16px 18px;margin-bottom:12px}
+.day .dh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.day .dd{font-family:var(--num);font-size:19px;font-weight:700;color:var(--accent)}
+.day .wd{font-size:13px;color:var(--muted)}
+.tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-weight:600}
+.day .rate{margin-left:auto;font-size:13px;color:var(--muted)}
+.day .rate b{font-family:var(--num);color:var(--ink);font-weight:600}
+.day .tm{font-size:14px;margin-top:6px}
+.day .tm .sep{color:var(--line);margin:0 8px}
+.day .lines{margin-top:10px;border-top:1px dashed var(--line);padding-top:4px}
+.day .ln{display:flex;justify-content:space-between;gap:12px;padding:6px 0;font-size:14px;color:#3d3a35}
+.day .ln .x{color:var(--muted);font-size:12.5px;margin-left:4px}
+.day .ln .a{font-family:var(--num)}
+.day .df{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:6px;padding-top:10px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+.day .df .a{font-family:var(--num)}
+.day .df .pay{font-size:15px;color:var(--ink);font-weight:700}
+.day .df .pay .a{color:var(--accent);font-size:17px}
+.sum{background:var(--accent-soft);border-color:transparent;padding:16px 18px}
+.sum .row2{display:flex;justify-content:space-between;font-size:14px;padding:3px 0;color:#3d3a35}
+.sum .row2 .a{font-family:var(--num)}
+.sum .grand{display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;padding-top:10px;border-top:1px solid rgba(31,92,74,.25)}
+.sum .grand b{font-size:15px}
+.sum .grand .a{font-family:var(--num);font-size:28px;font-weight:700;color:var(--accent)}
 .foot{font-size:12.5px;color:var(--muted);margin-top:22px;line-height:1.7}
 .empty{padding:36px 18px;text-align:center;color:var(--muted)}
 .skeleton{height:74px;border-radius:var(--radius);background:linear-gradient(90deg,#ece8df,#f4f1ea,#ece8df);background-size:200% 100%;animation:sh 1.2s infinite;margin-bottom:10px}
@@ -290,6 +314,54 @@ function renderList() {
   document.getElementById('me').addEventListener('click', viewProfile);
 }
 
+// 逐日明細：每天一張卡（班別、時薪、上下班、各倍率工時），最後彙總應發、扣款與撥款
+const MULT = { regular: 1, ot_1: 1.34, ot_2: 1.67, ot_3: 2, holiday: 2, rest_1: 1.34, rest_2: 1.67, rest_3: 2.67, regular_leave: 2 };
+const KIND_NAME = { regular: '一般', ot_1: '加班', ot_2: '加班', ot_3: '加班', holiday: '國定假日', rest_1: '休息日', rest_2: '休息日', rest_3: '休息日', regular_leave: '例假' };
+const hrs = h => String(Math.round(Number(h) * 100) / 100);
+function slipDays(p) {
+  const earn = p.items.filter(i => i.kind === 'earning' && i.work_date);
+  if (!earn.length) return null;
+  const dates = [...new Set(earn.map(i => i.work_date))].sort();
+  const ins = p.items.filter(i => i.kind === 'deduction' && i.code === 'labor_ins').reduce((a, i) => a + Number(i.amount || 0), 0);
+  // 勞保自付額按天平均分攤（除不盡的零頭放最後一天）
+  const per = Math.floor(ins / dates.length), remain = ins - per * dates.length;
+  const att = new Map(p.attendance.map(a => [a.work_date, a]));
+  const cards = dates.map((dt, k) => {
+    const its = earn.filter(i => i.work_date === dt), a = att.get(dt) || {};
+    const reg = its.find(i => i.code === 'regular' && i.rate != null);
+    const first = its.find(i => i.rate != null && MULT[i.code]);
+    const base = reg ? Number(reg.rate) : first ? Number(first.rate) / MULT[first.code] : null;
+    const gross = its.reduce((t, i) => t + Number(i.amount || 0), 0), ded = per + (k === dates.length - 1 ? remain : 0);
+    const [y, m, d] = dt.split('-').map(Number);
+    const line = i => {
+      const mult = MULT[i.code];
+      const name = i.code === 'regular' && i.rate == null ? '日薪' : (KIND_NAME[i.code] || i.label);
+      const detail = i.hours != null && mult && !(i.code === 'regular' && i.rate == null) ? hrs(i.hours) + ' 小時<span class="x">× ' + mult + ' 倍</span>' : (KIND_NAME[i.code] ? '' : '');
+      return '<div class="ln"><span>' + esc(name) + ' ' + detail + '</span><span class="a">$' + money(i.amount) + '</span></div>';
+    };
+    return '<div class="card day">'
+      + '<div class="dh"><span class="dd">' + m + '/' + d + '</span><span class="wd">週' + WD[new Date(y, m - 1, d).getDay()] + '</span>'
+      + (p.role ? '<span class="tag">' + esc(p.role) + '</span>' : '')
+      + (base ? '<span class="rate">時薪 <b>$' + money(Math.round(base * 100) / 100) + '</b></span>' : '') + '</div>'
+      + (a.clock_in ? '<div class="tm">' + esc(a.clock_in) + '–' + esc(a.clock_out || '') + (a.overnight ? '<span class="dim">（翌日）</span>' : '')
+          + '<span class="sep">|</span>計薪 ' + (a.minutes != null ? hrs(a.minutes / 60) : '—') + ' 小時'
+          + (Number(a.break_minutes) ? '<span class="dim">（休息 ' + esc(a.break_minutes) + ' 分不計）</span>' : '') + '</div>' : '')
+      + '<div class="lines">' + its.map(line).join('') + '</div>'
+      + '<div class="df"><span>應發 <span class="a">$' + money(gross) + '</span>' + (ded ? '　勞保 <span class="a">−$' + money(ded) + '</span>' : '') + '</span>'
+      + '<span class="pay">當日撥款 <span class="a">$' + money(gross - ded) + '</span></span></div></div>';
+  }).join('');
+  const others = p.items.filter(i => (i.kind === 'earning' && !i.work_date) || i.kind === 'allowance');
+  const otherDed = p.items.filter(i => i.kind === 'deduction' && i.code !== 'labor_ins');
+  const payable = Number(p.gross || 0) + Number(p.allowances || 0);
+  return cards
+    + (others.length ? '<div class="card day"><div class="dh"><span class="dd" style="font-size:16px">其他應發</span></div><div class="lines">' + others.map(i => '<div class="ln"><span>' + esc(i.label) + '</span><span class="a">$' + money(i.amount) + '</span></div>').join('') + '</div></div>' : '')
+    + '<div class="card sum">'
+    + '<div class="row2"><span>應發合計（' + dates.length + ' 天）</span><span class="a">$' + money(payable) + '</span></div>'
+    + (ins ? '<div class="row2"><span>勞保、就保自付額</span><span class="a">−$' + money(ins) + '</span></div>' : '')
+    + otherDed.map(i => '<div class="row2"><span>' + esc(i.label) + '</span><span class="a">−$' + money(i.amount) + '</span></div>').join('')
+    + '<div class="grand"><b>合計撥款</b><span class="a">$' + money(p.net) + '</span></div></div>';
+}
+
 async function viewSlip(id) {
   app.innerHTML = brand + '<div class="skeleton" style="height:150px"></div><div class="skeleton"></div>';
   let r;
@@ -302,6 +374,7 @@ async function viewSlip(id) {
   const rows = list => list.map(i => `<tr><td>${esc(i.label)}${i.work_date ? '<div class="dim">' + esc(fmtDate(i.work_date, true)) + (i.hours != null ? '　' + esc(Number(i.hours)) + ' 小時 × ' + money(i.rate) : '') + '</div>' : ''}</td><td class="r">${money(i.amount)}</td></tr>`).join('');
   const hours = a => a.minutes == null ? null : Math.round(a.minutes / 6) / 10;
   const payable = Number(p.gross || 0) + Number(p.allowances || 0);
+  const days = p.basis === 'hourly' ? slipDays(p) : null;
   app.innerHTML = brand + `
     <button class="link no-print" id="back">← 返回列表</button>
     <div class="card" style="margin-top:8px">
@@ -322,7 +395,7 @@ async function viewSlip(id) {
       </div>
     </div>
     ${p.basis !== 'hourly' ? '<div class="msg warn">這一場的原始紀錄只有每日工資總額，沒有逐時明細。若需要時數與加班的計算方式，請向沃克思索取。</div>' : ''}
-    <h2>${contract ? '報酬項目' : '應發項目'}</h2>
+    ${days ? '<h2>逐日明細</h2>' + days : `<h2>${contract ? '報酬項目' : '應發項目'}</h2>
     <div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>
       ${rows(by('earning'))}${rows(by('allowance'))}
       <tr class="total"><td>${contract ? '報酬合計' : '應發合計'}</td><td class="r">${money(payable)}</td></tr>
@@ -331,9 +404,9 @@ async function viewSlip(id) {
     <div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>
       ${by('deduction').length ? rows(by('deduction')) : '<tr><td class="dim">沒有扣款</td><td></td></tr>'}
       <tr class="total"><td>應扣合計</td><td class="r neg">${Number(p.deductions) ? '−' + money(p.deductions) : '0'}</td></tr>
-    </table></div>
+    </table></div>`}
     ${by('employer').length ? '<h2>雇主負擔（不從薪資扣除）</h2><div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>' + rows(by('employer')) + '</table></div>' : ''}
-    ${p.attendance.length ? `<h2>出勤紀錄</h2>
+    ${!days && p.attendance.length ? `<h2>出勤紀錄</h2>
     <div class="card pad" style="padding-top:6px;padding-bottom:6px"><table>
       <tr><th>日期</th><th>上班</th><th>下班</th><th class="r">休息</th><th class="r">工時</th></tr>
       ${p.attendance.map(a => `<tr><td>${esc(fmtDate(a.work_date, true).slice(5))}${a.source === 'legacy' && a.clock_in ? '<div class="dim">排定時段</div>' : ''}</td><td>${esc(a.clock_in || '—')}</td><td>${esc(a.clock_out || '—')}${a.overnight ? '<div class="dim">翌日</div>' : ''}</td><td class="r">${a.clock_in ? esc(a.break_minutes) + ' 分' : '—'}</td><td class="r">${hours(a) != null ? hours(a) + ' 時' : '—'}</td></tr>`).join('')}
