@@ -2607,9 +2607,10 @@ begin
   from public.people p
   left join public.people_documents d on d.person_id = p.id and d.kind = 'bankbook'
   where p.id in (select ap.person_id from public.applications ap join public.application_shifts x on x.application_id = ap.id
-                 where ap.event_id = p_event and x.status = 'accepted');
+                 where ap.event_id = p_event and ap.status = 'active' and x.status = 'accepted');
   insert into public.audit_log(actor, action, table_name, row_id, detail)
-  values (v_actor, 'export_accepted_with_docs', 'events', p_event, jsonb_build_object('rows', jsonb_array_length(v_rows)));
+  values (v_actor, 'export_accepted_with_docs', 'events', p_event, jsonb_build_object('rows', jsonb_array_length(v_rows),
+    'people', (select coalesce(jsonb_agg(x->'person_id'), '[]'::jsonb) from jsonb_array_elements(v_rows) x)));
   return jsonb_build_object('ok', true, 'rows', v_rows);
 end $function$
 ;

@@ -1124,7 +1124,7 @@ async function exportAcceptedPack(e) {
   try {
     const r = await rpc('admin_accepted_export', { p_event: e.id });
     if (!r.ok) throw new Error('讀取錄取名單失敗，請再試一次。');
-    if (!r.rows.length) { flash('warn', '這場活動還沒有錄取的人。'); return; }
+    if (!r.rows.length) { flash('warn', '這場活動還沒有錄取的人。'); return viewEvent(e.id, 'staff'); }
     const safe = t => String(t || '').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
     const files = [], rows = [], warn = new Set(); let got = 0, failed = 0;
     for (let i = 0; i < r.rows.length; i++) {
@@ -1133,11 +1133,14 @@ async function exportAcceptedPack(e) {
         try {
           const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: x.person_id, kind: 'bankbook' }) });
           const v = await res.json();
+          if (v.ok && !v.url && v.drive_url) { photo = v.drive_url; throw new Error('drive_only'); }
           if (!v.ok || !v.url) throw new Error('no_url');
-          const img = new Uint8Array(await (await fetch(v.url)).arrayBuffer());
+          const ir = await fetch(v.url);
+          if (!ir.ok) throw new Error('fetch');
+          const img = new Uint8Array(await ir.arrayBuffer());
           const fname = '存摺/' + String(i + 1).padStart(3, '0') + '_' + safe(x.name) + '.' + (x.bankbook_ext || 'jpg');
           files.push([fname, img]); photo = fname + (v.proof || v.legacy_thumb ? '（縮圖）' : ''); got++;
-        } catch (err) { failed++; photo = x.bankbook_drive ? '' : '下載失敗'; }
+        } catch (err) { if (err.message !== 'drive_only') { failed++; photo = x.bankbook_drive ? '' : '下載失敗'; } }
       }
       if (!photo) photo = x.bankbook_drive || (x.bankbook_file ? '下載失敗' : '未上傳');
       if (!x.name || !x.national_id || !x.birth_date || !x.address || /未上傳|失敗/.test(photo)) warn.add(i);
