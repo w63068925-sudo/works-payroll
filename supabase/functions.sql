@@ -353,7 +353,7 @@ declare v_actor text := public.admin_actor(p_token); e public.events; pr record;
   v_created int := 0; v_replaced int := 0; skipped jsonb := '[]'::jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  select * into e from public.events where id = p_event;
+  select * into e from public.events where id = p_event for update;
   if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   for pr in select distinct p.id, p.name
             from public.attendance a join public.people p on p.id = a.person_id
@@ -1468,7 +1468,7 @@ begin
     if v_open = v_hash then return jsonb_build_object('ok', true, 'already', true); end if;
   end if;
   update public.contract_history set superseded_at = now() where application_id = a.id and superseded_at is null;
-  v_text := v_text || E'\n\n' || '勞工於 ' || to_char(now() at time zone 'Asia/Taipei', 'YYYY/MM/DD HH24:MI') || ' 以本人帳號登入系統線上確認同意。';
+  v_text := v_text || E'\n\n' || '乙方於 ' || to_char(now() at time zone 'Asia/Taipei', 'YYYY/MM/DD HH24:MI') || ' 以本人帳號登入系統線上確認同意。';
   update public.applications set contract_text = v_text, contract_accepted_at = now(), updated_at = now() where id = a.id;
   insert into public.contract_history(application_id, text, text_hash, accepted_at) values (a.id, v_text, v_hash, now());
   insert into public.audit_log(actor, action, table_name, row_id) values (v_pid::text, 'contract_accepted', 'applications', a.id);
@@ -1801,7 +1801,9 @@ CREATE OR REPLACE FUNCTION public.payslip_regenerate(p_event uuid, p_person uuid
  SET search_path TO ''
 AS $function$
 -- 依出勤重算一個人在一場活動的薪資單草稿（產生全部與單人重算共用）
+-- 重算時保留管理員手動設定的備註與發薪日，以及已標為處理過、內容沒變的問題
 declare e public.events; pr public.people; c jsonb; v_id uuid; it jsonb; w jsonb; v_pay date; v_existing public.payslips; v_replaced boolean := false;
+  v_done text[] := '{}';
 begin
   select * into e from public.events where id = p_event;
   select * into pr from public.people where id = p_person;
@@ -1817,15 +1819,22 @@ begin
   if v_existing.id is not null and not v_existing.generated then
     return jsonb_build_object('result', 'skipped', 'reason', '已有人工匯入的薪資單');
   end if;
+  if v_existing.id is not null and v_existing.relation = 'contract' then
+    return jsonb_build_object('result', 'skipped', 'reason', '這張薪資單已改為承攬，不依出勤重算');
+  end if;
   c := public.payroll_compute(p_event, pr.id);
   if not (c->>'ok')::boolean then
     return jsonb_build_object('result', 'skipped', 'reason', case c->>'error' when 'no_rate' then '尚未設定時薪或日薪' when 'open_attendance' then '有尚未簽退的出勤' else '沒有完整的出勤紀錄' end);
   end if;
-  if v_existing.id is not null then delete from public.payslips where id = v_existing.id; v_replaced := true; end if;
+  if v_existing.id is not null then
+    if v_existing.pay_date is not null then v_pay := v_existing.pay_date; end if;
+    select coalesce(array_agg(code || '|' || detail), '{}') into v_done from public.data_issues where payslip_id = v_existing.id and resolved;
+    delete from public.payslips where id = v_existing.id; v_replaced := true;
+  end if;
   insert into public.payslips(person_id, event_id, relation, role, period_start, period_end, pay_date, basis, gross, allowances, deductions, net,
-    status, generated, pay_bank_code, pay_bank_branch, pay_account_name, pay_account)
+    status, generated, note, pay_bank_code, pay_bank_branch, pay_account_name, pay_account)
   values (pr.id, p_event, 'employment', c->>'role', (c->>'period_start')::date, (c->>'period_end')::date, v_pay, 'hourly',
-    (c->>'gross')::numeric, 0, (c->>'deductions')::numeric, (c->>'net')::numeric, 'draft', true, pr.bank_code, pr.bank_branch, pr.bank_account_name, pr.bank_account)
+    (c->>'gross')::numeric, 0, (c->>'deductions')::numeric, (c->>'net')::numeric, 'draft', true, v_existing.note, pr.bank_code, pr.bank_branch, pr.bank_account_name, pr.bank_account)
   returning id into v_id;
   for it in select * from jsonb_array_elements(c->'items') loop
     insert into public.payslip_items(payslip_id, kind, code, label, work_date, hours, rate, amount, sort)
@@ -1836,13 +1845,14 @@ begin
     values (v_id, 'deduction', 'labor_ins', format('勞保與就保自付額（%s 日，投保薪資 %s）', c->>'days', c->>'insured_salary'), (c->>'deductions')::numeric, 30);
   end if;
   for w in select * from jsonb_array_elements(c->'warnings') loop
-    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, w->>'severity', w->>'code', w->>'detail');
+    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail, resolved)
+    values (p_event, v_id, pr.id, w->>'severity', w->>'code', w->>'detail', (w->>'code') || '|' || (w->>'detail') = any(v_done));
   end loop;
   if pr.bank_account is null then
-    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, 'warn', 'no_bank_account', '沒有匯款帳號');
+    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail, resolved) values (p_event, v_id, pr.id, 'warn', 'no_bank_account', '沒有匯款帳號', 'no_bank_account|沒有匯款帳號' = any(v_done));
   end if;
   if v_pay is null then
-    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (p_event, v_id, pr.id, 'warn', 'no_pay_date', '尚未設定發薪日');
+    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail, resolved) values (p_event, v_id, pr.id, 'warn', 'no_pay_date', '尚未設定發薪日', 'no_pay_date|尚未設定發薪日' = any(v_done));
   end if;
   return jsonb_build_object('result', case when v_replaced then 'replaced' else 'created' end, 'id', v_id, 'gross', (c->>'gross')::numeric, 'net', (c->>'net')::numeric);
 end $function$
@@ -2571,3 +2581,7 @@ begin
   return s % 10 = 0;
 end $function$
 ;
+
+-- 內部函式（沒有登入檢查）只給資料庫內部呼叫
+revoke all on function public.payslip_regenerate(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.payroll_contract_text_v1(uuid) from public, anon, authenticated;

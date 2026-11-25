@@ -379,7 +379,7 @@ async function viewEvent(id, step) {
   shell('events', `
     <div class="crumb"><a href="#/events">活動</a> / ${esc(e.name)}</div>
     <div class="head"><div><h1>${esc(e.name)}</h1><p class="sub">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(d(e.end_date)) : ''}　${st}${e.archived_at ? '　<span class="badge">已封存</span>' : ''}</p></div>
-      <div class="row"><button class="btn ghost" id="editev">編輯活動</button><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : '確定封存？') : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xstep">匯出${esc((STEPS.find(([k]) => k === step) || STEPS[3])[1])}資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
+      <div class="row"><button class="btn ghost" id="editev">編輯活動</button><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : (e.total - e.void - e.published > 0 || (payDateOf(e) && payDateOf(e) > today()) ? '還有薪資沒發完，仍要封存？' : '確定封存？')) : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xstep">匯出${esc((STEPS.find(([k]) => k === step) || STEPS[3])[1])}資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
     <div class="steps" role="tablist" aria-label="流程">
       ${STEPS.map(([k, t], i) => `<button class="step ${info[k].done ? 'done' : ''}" role="tab" aria-selected="${k === step}" data-s="${k}">
         <span class="n"><i>${info[k].done ? '✓' : i + 1}</i>${['一', '二', '三', '四', '五'][i]}</span><b>${t}</b><span class="s ${info[k].attn ? 'attn' : ''}">${esc(info[k].s)}</span></button>`).join('')}
@@ -905,7 +905,11 @@ async function openDetail(kind, key, e, keepScroll) {
           if (v('in') === (a.clock_in || '') && v('out') === (a.clock_out || '') && String(v('br')) === String(a.break_minutes)) continue;
           if (!v('in') || !v('out')) return msg(md(a.work_date) + ' 請填上班與下班時間。');
           const r3 = await rpc('admin_set_attendance', { p_id: a.id, p_patch: { clock_in: v('in'), clock_out: v('out'), break_minutes: v('br'), note: $('areason').value || a.note || '核對時調整' } });
-          if (!r3.ok) return msg(md(a.work_date) + (r3.error === 'out_before_in' ? ' 下班時間必須晚於上班時間。' : ' 輸入的內容有誤（休息 0–240 分）。'));
+          if (!r3.ok) {
+            const why = md(a.work_date) + (r3.error === 'out_before_in' ? ' 下班時間必須晚於上班時間。' : ' 輸入的內容有誤（休息 0–240 分）。');
+            if (changed) { const r5 = await rpc('admin_recompute_payslip', { p_event: e.id, p_person: p.person.id }); if (r5.ok) { flash('warn', '已存的 ' + changed + ' 天已重算；' + why); S.detail = { kind: 'slip', key: r5.id }; return refreshEvent(e, 'review'); } }
+            return msg(why);
+          }
           changed++;
         }
         const r4 = await rpc('admin_recompute_payslip', { p_event: e.id, p_person: p.person.id });
@@ -1153,7 +1157,7 @@ async function exportStep(e, step) {
         rows: pay.map((x, i) => { if (!x.pay_account || x.status !== 'published') warn.add(i); return [x.name || '', x.national_id || '', x.pay_bank_code || '', x.pay_bank_branch || '', x.pay_account_name || '', x.pay_account || '', x.net == null ? '' : x.net, slash(x.pay_date), STATUS[x.status] || x.status]; }), warnRows: warn });
     }
     const n = sheets.reduce((a, sh) => a + sh.rows.length, 0);
-    if (!sheets.length || !n) { flash('warn', '這個階段沒有資料可以匯出。'); return; }
+    if (!sheets.length || !n) { flash('warn', '這個階段沒有資料可以匯出。'); return viewEvent(e.id, step); }
     const log = await rpc('admin_log_export', { p_kind: 'event_step', p_rows: n, p_detail: { event_id: e.id, step } });
     if (!log.ok) throw new Error('無法寫入匯出紀錄，這次沒有產生檔案。');
     const name = String(e.name || '活動').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
@@ -1198,8 +1202,8 @@ async function viewRoster() {
   S.rsel = S.rsel || new Set();
   const r = await rpc('admin_roster', { p_filter: { q: F.q, event_id: F.event_id, from: F.from, to: F.to, statuses: F.statuses } });
   if (r.ok === false) { shell('roster', '<div class="msg err">篩選條件有誤，請檢查日期。</div>'); return; }
-  const archR = new Set(S.ov.archived.map(e => e.id));
-  const groups = rosterGroups(r.rows.filter(x => !archR.has(x.event_id))), keys = new Set(groups.map(g => g.key));
+  // 封存的活動仍列入加保名冊，避免漏保
+  const groups = rosterGroups(r.rows), keys = new Set(groups.map(g => g.key));
   S.rsel.forEach(k => { if (!keys.has(k)) S.rsel.delete(k); });
   const bad = groups.filter(g => g.problems.length), need = groups.filter(g => g.needIns);
   const list = F.view === 'bad' ? bad : F.view === 'need' ? need : groups;
