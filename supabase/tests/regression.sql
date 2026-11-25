@@ -283,5 +283,12 @@ begin
   if r->'incomplete' <> 'null'::jsonb or jsonb_array_length(r->'payslips') <> 1 then fails := fails || ' [24c complete ' || r::text || ']'; end if;
   if (public.payroll_payslip(tok3, sl)->>'ok')::boolean is not true then fails := fails || ' [24d slip]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 24 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 25. 活動人員資料下載：需要登入、活動要存在、一定留下含人員清單的紀錄
+  if public.admin_event_people_export('bad-token', ev)->>'error' is distinct from 'session' then fails := fails || ' [25a no session]'; end if;
+  if public.admin_event_people_export(atok, gen_random_uuid())->>'error' is distinct from 'not_found' then fails := fails || ' [25b unknown event]'; end if;
+  r := public.admin_event_people_export(atok, ev);
+  if not exists (select 1 from jsonb_array_elements(r->'rows') x where (x->>'person_id')::uuid = p1) then fails := fails || ' [25c accepted person missing]'; end if;
+  if not exists (select 1 from public.audit_log where actor = 'regression-admin' and action = 'export_event_people' and row_id = ev and detail->'people' @> to_jsonb(array[p1::text])) then fails := fails || ' [25d export not audited]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 25 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

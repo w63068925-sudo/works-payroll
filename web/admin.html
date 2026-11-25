@@ -1129,8 +1129,10 @@ async function exportEventPack(e, step) {
     const safe = t => String(t || '').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
     const files = [], rows = [], warn = new Set(); let got = 0, failed = 0;
     for (let i = 0; i < r.rows.length; i++) {
-      const x = r.rows[i], dir = String(i + 1).padStart(3, '0') + '_' + safe(x.name) + '/', cells = [];
-      for (const [kind, label] of DOC_KINDS) {
+      const x = r.rows[i], dir = String(i + 1).padStart(3, '0') + '_' + safe(x.name) + '/';
+      let rowFailed = false;
+      // 同一人的三張證件同時下載
+      const cells = await Promise.all(DOC_KINDS.map(async ([kind, label]) => {
         const d = (x.docs || {})[kind]; let cell = '';
         if (d && d.file) {
           try {
@@ -1143,25 +1145,27 @@ async function exportEventPack(e, step) {
               if (!ir.ok) throw new Error('fetch');
               const fname = dir + label + '.' + (d.ext || 'jpg');
               files.push([fname, new Uint8Array(await ir.arrayBuffer())]); got++;
-              cell = fname + (v.proof || v.legacy_thumb ? '（縮圖）' : '');
+              cell = fname + (v.proof || v.legacy_thumb ? '（縮圖' + (v.drive_url ? '，原檔 ' + v.drive_url : '') + '）' : '');
             }
-          } catch (err) { failed++; cell = d.drive || '下載失敗'; }
+          } catch (err) { failed++; rowFailed = true; cell = d.drive ? d.drive + '（下載失敗，改附雲端連結）' : '下載失敗'; }
         } else cell = d && d.drive ? d.drive : '未上傳';
-        cells.push(cell);
-      }
-      if (!x.name || !x.national_id || !x.birth_date || !x.address || !x.bank_account || cells.some(c => /未上傳|失敗/.test(c))) warn.add(i);
+        return cell;
+      }));
+      if (rowFailed || !x.name || !x.national_id || !x.birth_date || !x.address || !x.bank_account || cells.some(c => /未上傳|失敗/.test(c))) warn.add(i);
       rows.push([i + 1, x.name || '', x.national_id || '', x.birth_date ? x.birth_date.replace(/-/g, '/') : '', x.address || '',
         x.bank_account_name || '', [x.bank_code, x.bank_branch].filter(Boolean).join(' '), x.bank_account || '', ...cells]);
       if (b) b.textContent = '準備中 ' + (i + 1) + '/' + r.rows.length;
     }
     const xlsx = buildXlsx([{ name: '人員資料', cols: [{ title: '序號', width: 6, num: true }, { title: '姓名', width: 12 }, { title: '身分證字號', width: 14 }, { title: '生日', width: 12 },
-      { title: '地址', width: 44 }, { title: '戶名', width: 12 }, { title: '銀行代碼', width: 12 }, { title: '銀行帳號', width: 18 },
+      { title: '地址', width: 44 }, { title: '戶名', width: 12 }, { title: '銀行／分行', width: 14 }, { title: '銀行帳號', width: 18 },
       { title: '身分證正面', width: 34 }, { title: '身分證反面', width: 34 }, { title: '存摺', width: 34 }], rows, warnRows: warn }]);
     files.unshift(['人員資料.xlsx', new Uint8Array(await xlsx.arrayBuffer())]);
     downloadBlob(zipStore(files, 'application/zip'), `人員資料_${safe(e.name)}_${today()}.zip`);
+    S.flash = null;
     flash(warn.size || failed ? 'warn' : 'ok', `已下載 ${r.rows.length} 人，證件照 ${got} 張${failed ? '（' + failed + ' 張下載失敗）' : ''}${warn.size ? '；' + warn.size + ' 人資料不完整，已在名單中標黃' : ''}。`);
   } catch (err) { if (err.message === 'session') return; flash('err', err.message); }
-  viewEvent(e.id, step);
+  // 下載期間若已切到別的頁面，就不把畫面拉回來
+  if (location.hash.split('/')[2] === e.id) viewEvent(e.id, step);
 }
 
 /* ---------- 加保名冊 ---------- */
