@@ -1116,6 +1116,7 @@ CREATE OR REPLACE FUNCTION public.att_minutes(a attendance)
  RETURNS integer
  LANGUAGE sql
  IMMUTABLE
+ SET search_path TO ''
 AS $function$
   select case when a.clock_in is null or a.clock_out is null then null
     else greatest(floor(extract(epoch from public.att_pay_out(a) - public.att_pay_in(a)) / 60)::int - a.break_minutes, 0) end $function$
@@ -1125,6 +1126,7 @@ CREATE OR REPLACE FUNCTION public.att_pay_in(a attendance)
  RETURNS timestamp with time zone
  LANGUAGE sql
  IMMUTABLE
+ SET search_path TO ''
 AS $function$
   select case when a.sched_in is not null and a.clock_in < a.sched_in and a.early_approved_at is null then a.sched_in else a.clock_in end $function$
 ;
@@ -1133,6 +1135,7 @@ CREATE OR REPLACE FUNCTION public.att_pay_out(a attendance)
  RETURNS timestamp with time zone
  LANGUAGE sql
  IMMUTABLE
+ SET search_path TO ''
 AS $function$
   select case when a.sched_out is not null and a.clock_out > a.sched_out and a.ot_approved_at is null then a.sched_out else a.clock_out end $function$
 ;
