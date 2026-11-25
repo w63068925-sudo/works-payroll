@@ -479,7 +479,7 @@ AS $function$
 declare v_actor text := public.admin_actor(p_token);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  if p_kind is distinct from 'insurance_roster' then return jsonb_build_object('ok', false, 'error', 'bad_kind'); end if;
+  if p_kind is null or p_kind not in ('insurance_roster', 'accepted_list') then return jsonb_build_object('ok', false, 'error', 'bad_kind'); end if;
   insert into public.audit_log(actor, action, table_name, detail)
   values (v_actor, 'export_' || p_kind, 'people', jsonb_build_object('rows', greatest(coalesce(p_rows, 0), 0), 'filter', left(coalesce(p_detail, '{}'::jsonb)::text, 2000)));
   return jsonb_build_object('ok', true);

@@ -426,11 +426,12 @@ const stepRecruit = {
     const pend = rc.applicants.filter(a => Object.values(a.shifts).some(v => v === 'applied')).length;
     const tabs = `<div class="tabs" role="tablist" aria-label="招募">${RTABS.map(([k, n]) => `<button class="tab" role="tab" aria-selected="${k === t}" data-rt="${k}">${n}${k === 'apps' && pend ? ' <span class="badge warn">' + pend + '</span>' : k === 'shifts' ? ' <span class="dim">' + rc.shifts.length + '</span>' : ''}</button>`).join('')}</div>`;
     const bar = `<div class="row" style="margin-bottom:12px;align-items:center"><span class="badge ${rc.event.recruiting ? 'ok' : ''}">${rc.event.recruiting ? '招募中' : '已停止招募'}</span>
-      <span class="sub grow">${rc.applicants.length} 人報名</span><button class="btn ghost sm" id="copyjoin">複製報名連結</button></div>`;
+      <span class="sub grow">${rc.applicants.length} 人報名</span><button class="btn ghost sm" id="xacc">匯出錄取名單</button><button class="btn ghost sm" id="copyjoin">複製報名連結</button></div>`;
     return tabs + bar + ({ apps: recruitApps, shifts: recruitShifts, form: recruitForm, pay: stepStaff }[t]).html(e);
   },
   bind: e => {
     on('[data-rt]', 'click', (ev, b) => { S.filter.rtab = b.dataset.rt; S.detail = null; S.sel = new Set(); viewEvent(e.id, 'staff'); });
+    $('xacc').onclick = () => exportAccepted(e);
     $('copyjoin').onclick = async () => { const url = new URL('./', location.href).href + '?join=' + S.cache.rc.event.signup_code; try { await navigator.clipboard.writeText(url); $('copyjoin').textContent = '已複製'; } catch (err) { prompt('複製這個連結', url); } };
     ({ apps: recruitApps, shifts: recruitShifts, form: recruitForm, pay: stepStaff }[stepRecruit.tab()]).bind(e);
   }
@@ -1031,6 +1032,26 @@ ${sh.rows.length ? `<autoFilter ref="A1:${colName(sh.cols.length - 1)}${sh.rows.
   return zipStore(files);
 }
 function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+
+/* ---------- 錄取名單匯出（姓名、身分證字號、生日；每次匯出留紀錄） ---------- */
+async function exportAccepted(e) {
+  const b = $('xacc'); if (b) b.disabled = true;
+  try {
+    const r = await rpc('admin_roster', { p_filter: { event_id: e.id, statuses: ['accepted'] } });
+    if (r.ok === false) throw new Error('讀取錄取名單失敗，請再試一次。');
+    const people = [...new Map(r.rows.map(x => [x.person_id, x])).values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant'));
+    if (!people.length) { flash('warn', '這場活動還沒有錄取的人。'); return; }
+    const log = await rpc('admin_log_export', { p_kind: 'accepted_list', p_rows: people.length, p_detail: { event_id: e.id } });
+    if (!log.ok) throw new Error('無法寫入匯出紀錄，這次沒有產生檔案。');
+    const warn = new Set();
+    const rows = people.map((p, i) => { if (!p.name || !p.national_id || !p.birth_date) warn.add(i); return [p.name || '', p.national_id || '', p.birth_date ? p.birth_date.replace(/-/g, '/') : '']; });
+    const blob = buildXlsx([{ name: '錄取名單', cols: [{ title: '姓名', width: 12 }, { title: '身分證字號', width: 14 }, { title: '生日', width: 12 }], rows, warnRows: warn }]);
+    const name = String(e.name || '活動').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
+    downloadBlob(blob, `錄取名單_${name}_${today()}.xlsx`);
+    flash(warn.size ? 'warn' : 'ok', `已匯出 ${people.length} 人${warn.size ? '，其中 ' + warn.size + ' 人缺姓名、身分證字號或生日，已在檔案中標黃' : ''}。`);
+  } catch (err) { if (err.message !== 'session') flash('err', err.message); }
+  finally { if (b) b.disabled = false; }
+}
 
 /* ---------- 加保名冊 ---------- */
 const R_STATUS = [['accepted', '已錄取'], ['attended', '出勤紀錄（舊活動）'], ['applied', '待審'], ['waitlist', '備取'], ['rejected', '未錄取']];
