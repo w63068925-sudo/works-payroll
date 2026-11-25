@@ -1073,20 +1073,35 @@ CREATE OR REPLACE FUNCTION public.admin_update_event(p_token text, p_id uuid, p_
  SET search_path TO ''
 AS $function$
 declare v_actor text := public.admin_actor(p_token); v_n int := 0; e public.events; v_pay date; v_days int; v_apply boolean := coalesce((p_patch->>'apply_to_payslips')::boolean, false);
+  v_name text; v_start date; v_end date; v_out int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into e from public.events where id = p_id for update;
   if e.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  -- 活動名稱與日期（可不帶，沒帶就維持原值）
+  v_name := case when p_patch ? 'name' then btrim(coalesce(p_patch->>'name','')) else e.name end;
+  if v_name = '' or length(v_name) > 100 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
+  begin
+    v_start := case when p_patch ? 'start_date' then nullif(p_patch->>'start_date','')::date else e.start_date end;
+    v_end := case when p_patch ? 'end_date' then nullif(p_patch->>'end_date','')::date else e.end_date end;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_date'); end;
+  if v_start is null or (v_end is not null and v_end < v_start) then return jsonb_build_object('ok', false, 'error', 'bad_date'); end if;
+  -- 已開的班次或出勤不能落在新的日期範圍外
+  select count(*) into v_out from (
+    select work_date from public.shifts where event_id = p_id union all select work_date from public.attendance where event_id = p_id) x
+  where x.work_date < v_start or x.work_date > coalesce(v_end, v_start);
+  if v_out > 0 then return jsonb_build_object('ok', false, 'error', 'outside_dates', 'count', v_out); end if;
   begin
     v_pay := case when p_patch ? 'pay_date' then nullif(p_patch->>'pay_date','')::date else e.pay_date end;
     v_days := case when p_patch ? 'pay_within_days' then nullif(p_patch->>'pay_within_days','')::int else e.pay_within_days end;
   exception when others then return jsonb_build_object('ok', false, 'error', 'bad_pay'); end;
-  if p_patch ? 'pay_date' and v_pay is not null and v_pay < coalesce(e.end_date, e.start_date) then return jsonb_build_object('ok', false, 'error', 'pay_before_end'); end if;
+  if v_pay is not null and v_pay < coalesce(v_end, v_start) and (p_patch ? 'pay_date' or p_patch ? 'end_date' or p_patch ? 'start_date') then return jsonb_build_object('ok', false, 'error', 'pay_before_end'); end if;
   if v_days is not null and (v_days < 0 or v_days > 90) then return jsonb_build_object('ok', false, 'error', 'bad_pay'); end if;
   -- 兩種方式互斥：指定日期優先
   if p_patch ? 'pay_date' and v_pay is not null then v_days := null; end if;
   begin
     update public.events set
+      name = v_name, start_date = v_start, end_date = v_end,
       pay_date = v_pay, pay_within_days = v_days,
       default_break_minutes = case when p_patch ? 'default_break_minutes' then coalesce(nullif(p_patch->>'default_break_minutes','')::int, 0) else default_break_minutes end,
       default_hourly_rate = case when p_patch ? 'default_hourly_rate' then nullif(p_patch->>'default_hourly_rate','')::numeric else default_hourly_rate end,
@@ -1094,12 +1109,12 @@ begin
     where id = p_id;
   exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
   if v_apply and (p_patch ? 'pay_date' or p_patch ? 'pay_within_days') then
-    update public.payslips set pay_date = coalesce(v_pay, case when v_days is not null then coalesce(e.end_date, e.start_date) + v_days end)
+    update public.payslips set pay_date = coalesce(v_pay, case when v_days is not null then coalesce(v_end, v_start) + v_days end)
     where event_id = p_id and status <> 'void';
     get diagnostics v_n = row_count;
   end if;
   insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'event_updated', 'events', p_id, p_patch);
-  return jsonb_build_object('ok', true, 'payslips_updated', v_n, 'pay_date', coalesce(v_pay, case when v_days is not null then coalesce(e.end_date, e.start_date) + v_days end));
+  return jsonb_build_object('ok', true, 'payslips_updated', v_n, 'pay_date', coalesce(v_pay, case when v_days is not null then coalesce(v_end, v_start) + v_days end));
 end $function$
 ;
 
@@ -1729,32 +1744,32 @@ begin
       -- 8 小時內 ×1；第 9–10 小時 ×1.34；第 11–12 小時 ×1.67；超過 12 小時 ×2
       nm := least(m, 480); ot := greatest(m - 480, 0); ot1 := least(ot, 120); ot2 := least(greatest(ot - 120, 0), 120); ot3 := greatest(ot - 240, 0);
       if dtype = 'weekday' then
-        amt := case when v_type = 'daily' then ceil(v_rate) else ceil(nm / 60.0 * v_rh) end;
+        amt := case when v_type = 'daily' then round(v_rate) else round(nm / 60.0 * v_rh) end;
         items := items || jsonb_build_object('code','regular','label', case when v_type = 'daily' then '日薪' else '一般工時（×1）' end, 'work_date', a.work_date, 'hours', round(nm/60.0,2), 'rate', case when v_type = 'daily' then null else v_rh end, 'amount', amt, 'sort', 10);
       else
-        amt := case when v_type = 'daily' then ceil(v_rate * 2) else ceil(nm / 60.0 * v_rh * 2) end;
+        amt := case when v_type = 'daily' then round(v_rate * 2) else round(nm / 60.0 * v_rh * 2) end;
         items := items || jsonb_build_object('code','holiday','label', '國定假日出勤（' || hol || '，加倍）', 'work_date', a.work_date, 'hours', round(nm/60.0,2), 'rate', round(v_rh * 2, 2), 'amount', amt, 'sort', 10);
       end if;
       gross := gross + amt;
-      if ot1 > 0 then amt := ceil(ot1 / 60.0 * v_rh * 1.34); gross := gross + amt;
+      if ot1 > 0 then amt := round(ot1 / 60.0 * v_rh * 1.34); gross := gross + amt;
         items := items || jsonb_build_object('code','ot_1','label','加班第9–10小時（×1.34）','work_date', a.work_date, 'hours', round(ot1/60.0,2), 'rate', round(v_rh*1.34,2), 'amount', amt, 'sort', 11); end if;
-      if ot2 > 0 then amt := ceil(ot2 / 60.0 * v_rh * 1.67); gross := gross + amt;
+      if ot2 > 0 then amt := round(ot2 / 60.0 * v_rh * 1.67); gross := gross + amt;
         items := items || jsonb_build_object('code','ot_2','label','加班第11–12小時（×1.67）','work_date', a.work_date, 'hours', round(ot2/60.0,2), 'rate', round(v_rh*1.67,2), 'amount', amt, 'sort', 12); end if;
-      if ot3 > 0 then amt := ceil(ot3 / 60.0 * v_rh * 2); gross := gross + amt;
+      if ot3 > 0 then amt := round(ot3 / 60.0 * v_rh * 2); gross := gross + amt;
         items := items || jsonb_build_object('code','ot_3','label','加班超過12小時（×2）','work_date', a.work_date, 'hours', round(ot3/60.0,2), 'rate', round(v_rh*2,2), 'amount', amt, 'sort', 13); end if;
     elsif dtype = 'rest' then
       if v_type = 'daily' then m := greatest(m, 480); end if;
       x := least(m, 120); y := least(greatest(m - 120, 0), 360); z := greatest(m - 480, 0);
-      amt := ceil(x / 60.0 * v_rh * 1.34); gross := gross + amt;
+      amt := round(x / 60.0 * v_rh * 1.34); gross := gross + amt;
       items := items || jsonb_build_object('code','rest_1','label','休息日出勤前2小時（×1.34）','work_date', a.work_date, 'hours', round(x/60.0,2), 'rate', round(v_rh*1.34,2), 'amount', amt, 'sort', 10);
-      if y > 0 then amt := ceil(y / 60.0 * v_rh * 1.67); gross := gross + amt;
+      if y > 0 then amt := round(y / 60.0 * v_rh * 1.67); gross := gross + amt;
         items := items || jsonb_build_object('code','rest_2','label','休息日出勤第3至8小時（×1.67）','work_date', a.work_date, 'hours', round(y/60.0,2), 'rate', round(v_rh*1.67,2), 'amount', amt, 'sort', 11); end if;
-      if z > 0 then amt := ceil(z / 60.0 * v_rh * 2.67); gross := gross + amt;
+      if z > 0 then amt := round(z / 60.0 * v_rh * 2.67); gross := gross + amt;
         items := items || jsonb_build_object('code','rest_3','label','休息日出勤第9小時起（×2.67）','work_date', a.work_date, 'hours', round(z/60.0,2), 'rate', round(v_rh*2.67,2), 'amount', amt, 'sort', 12); end if;
       warns := warns || jsonb_build_object('severity','warn','code','rest_day','detail', format('%s 是連續出勤第 6 天，已依休息日加給計算', a.work_date));
     else
       if v_type = 'daily' then m := greatest(m, 480); end if;
-      amt := ceil(m / 60.0 * v_rh * 2); gross := gross + amt;
+      amt := round(m / 60.0 * v_rh * 2); gross := gross + amt;
       items := items || jsonb_build_object('code','regular_leave','label','例假出勤（加倍）','work_date', a.work_date, 'hours', round(m/60.0,2), 'rate', round(v_rh*2,2), 'amount', amt, 'sort', 10);
       warns := warns || jsonb_build_object('severity','error','code','regular_leave_work','detail', format('%s 是連續出勤第 7 天（例假），除天災事變外不得出勤（勞基法第36、40條），已加倍計算並應另給補休', a.work_date));
     end if;

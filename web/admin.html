@@ -379,7 +379,7 @@ async function viewEvent(id, step) {
   shell('events', `
     <div class="crumb"><a href="#/events">活動</a> / ${esc(e.name)}</div>
     <div class="head"><div><h1>${esc(e.name)}</h1><p class="sub">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(d(e.end_date)) : ''}　${st}${e.archived_at ? '　<span class="badge">已封存</span>' : ''}</p></div>
-      <div class="row"><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : '確定封存？') : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xstep">匯出${esc((STEPS.find(([k]) => k === step) || STEPS[3])[1])}資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
+      <div class="row"><button class="btn ghost" id="editev">編輯活動</button><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : '確定封存？') : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xstep">匯出${esc((STEPS.find(([k]) => k === step) || STEPS[3])[1])}資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
     <div class="steps" role="tablist" aria-label="流程">
       ${STEPS.map(([k, t], i) => `<button class="step ${info[k].done ? 'done' : ''}" role="tab" aria-selected="${k === step}" data-s="${k}">
         <span class="n"><i>${info[k].done ? '✓' : i + 1}</i>${['一', '二', '三', '四', '五'][i]}</span><b>${t}</b><span class="s ${info[k].attn ? 'attn' : ''}">${esc(info[k].s)}</span></button>`).join('')}
@@ -399,14 +399,51 @@ async function viewEvent(id, step) {
   };
   $('xstep').onclick = () => exportStep(e, (STEPS.find(([k]) => k === step) || STEPS[3])[0]);
   $('join').onclick = () => toggleJoin(e);
+  $('editev').onclick = () => toggleEditEvent(e, step);
   body.bind(e);
   if (S.detail) openDetail(S.detail.kind, S.detail.key, e, true);
 }
 async function refreshEvent(e, step) { await loadOverview(); S.cache.stale = true; return viewEvent(e.id, step || location.hash.split('/')[3]); }
 
+// 編輯活動基本資料：名稱、日期、地點、說明（時薪、發薪日等在各步驟裡設定）
+async function toggleEditEvent(e, step) {
+  const box = $('joinbox');
+  if (box.dataset.k === 'edit' && box.innerHTML) { box.innerHTML = ''; box.dataset.k = ''; return; }
+  box.dataset.k = 'edit';
+  const rc = (S.cache.rc && S.cache.rc.event) || {};
+  box.innerHTML = `<form id="ef" class="card pad" style="margin-bottom:18px">
+    <div class="row"><div class="grow" style="min-width:220px"><label for="efn">活動名稱</label><input id="efn" type="text" maxlength="100" value="${esc(e.name)}" required></div>
+      <div><label for="efs">開始日</label><input id="efs" type="date" value="${esc(e.start_date || '')}" required></div>
+      <div><label for="efe">結束日（單日可留空）</label><input id="efe" type="date" value="${esc(e.end_date && e.end_date !== e.start_date ? e.end_date : '')}"></div></div>
+    <label for="efl">工作地點</label><input id="efl" type="text" value="${esc(rc.location || '')}" placeholder="國立成功大學 光復校區">
+    <label for="efd">活動說明（顯示在報名頁）</label><textarea id="efd" style="height:90px" placeholder="集合時間、服裝、注意事項">${esc(rc.description || '')}</textarea>
+    <p class="sub" style="margin-top:8px">改名稱或地點時，已確認契約的人需要重新確認。時薪、休息、投保薪資在「出勤」設定，發薪日在「匯款」設定。</p>
+    <div id="efm" style="margin-top:10px"></div>
+    <div class="row" style="margin-top:6px"><span class="grow"></span><button type="button" class="btn ghost" id="efc">取消</button><button class="btn" id="efsave">儲存</button></div></form>`;
+  $('efn').focus();
+  $('efc').onclick = () => { box.innerHTML = ''; box.dataset.k = ''; };
+  $('ef').onsubmit = async ev => {
+    ev.preventDefault();
+    const err = t => { $('efm').innerHTML = '<div class="msg err">' + esc(t) + '</div>'; $('efsave').disabled = false; };
+    $('efsave').disabled = true;
+    const patch = { name: $('efn').value };
+    const ns = $('efs').value, ne = $('efe').value;
+    if (ns !== (e.start_date || '')) patch.start_date = ns;
+    if ((ne || ns) !== (e.end_date || e.start_date || '')) patch.end_date = ne || ns;
+    const r = await rpc('admin_update_event', { p_id: e.id, p_patch: patch });
+    if (!r.ok) return err({ bad_name: '請填活動名稱（100 字以內）。', bad_date: '請確認日期，結束日不能早於開始日。', outside_dates: '有 ' + (r.count || '') + ' 筆班次或出勤落在新日期範圍外，請先調整班次再改日期。', pay_before_end: '發薪日早於新的結束日，請先到「匯款」調整發薪日。' }[r.error] || '儲存失敗，請再試一次。');
+    if ((rc.location || '') !== $('efl').value.trim() || (rc.description || '') !== $('efd').value.trim()) {
+      const r2 = await rpc('admin_save_event_info', { p_event: e.id, p_patch: { location: $('efl').value, description: $('efd').value } });
+      if (!r2.ok) return err('名稱與日期已儲存，但地點或說明儲存失敗，請再試一次。');
+    }
+    flash('ok', '活動資料已更新。'); box.innerHTML = ''; box.dataset.k = '';
+    refreshEvent(e, step);
+  };
+}
 function toggleJoin(e) {
   const box = $('joinbox');
-  if (box.innerHTML) { box.innerHTML = ''; return; }
+  if (box.innerHTML && box.dataset.k !== 'edit') { box.innerHTML = ''; box.dataset.k = ''; return; }
+  box.dataset.k = 'join';
   rpc('admin_signup_code', { p_event: e.id }).then(r => {
     const url = new URL('./', location.href).href + '?join=' + r.code;
     const q = qrcode(0, 'M'); q.addData(url); q.make();
