@@ -261,6 +261,7 @@ async function route() {
     if (sec === 'calendar') return viewCalendar(parts[1], parts[2]);
     if (sec === 'roster') return viewRoster();
     if (sec === 'people') return viewPeople(parts[1]);
+    if (sec === 'doc') return viewDocLink(parts[1], parts[2]);
     if (sec === 'payouts') return viewPayouts();
     if (sec === 'settings') return viewSettings();
     go('#/events');
@@ -1095,6 +1096,7 @@ function buildXlsx(sheets) {
   const sheetXml = sh => {
     const rowXml = (cells, r, style) => `<row r="${r}">${cells.map((v, c) => {
       const ref = colName(c) + r, st = style != null ? style : (sh.cols[c].num && v !== '' && v != null && !isNaN(v) ? 3 : 0);
+      if (v && typeof v === 'object' && v.link) { const q = t => String(t).replace(/"/g, '""'); return `<c r="${ref}" t="str" s="${sh.warnRows && sh.warnRows.has(r - 2) ? 2 : 0}"><f>${xesc('HYPERLINK("' + q(v.link) + '","' + q(v.text || v.link) + '")')}</f><v>${xesc(v.text || v.link)}</v></c>`; }
       if (style == null && sh.cols[c].num && v !== '' && v != null && !isNaN(v)) return `<c r="${ref}" s="${sh.warnRows && sh.warnRows.has(r - 2) ? 4 : st}"><v>${Number(v)}</v></c>`;
       return `<c r="${ref}" t="inlineStr" s="${style != null ? style : (sh.warnRows && sh.warnRows.has(r - 2) ? 2 : 0)}"><is><t xml:space="preserve">${xesc(v)}</t></is></c>`;
     }).join('')}</row>`;
@@ -1118,54 +1120,48 @@ ${sh.rows.length ? `<autoFilter ref="A1:${colName(sh.cols.length - 1)}${sh.rows.
 function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
 
 /* ---------- 活動人員資料下載（五個階段共用一個按鈕）
-   ZIP：人員資料.xlsx ＋ 每人一個資料夾（身分證正面、反面、存摺）。名單先留紀錄，每張證件照也各留調閱紀錄 ---------- */
-const DOC_KINDS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺']];
+   Excel：人員基本資料＋證件連結。連結指向後台「#/doc/人員/種類」，要登入才能開，每次開啟都留調閱紀錄 ---------- */
+const DOC_KINDS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];
 async function exportEventPack(e, step) {
   const b = $('xpack'); if (b) { b.disabled = true; b.textContent = '準備中…'; }
   try {
     const r = await rpc('admin_event_people_export', { p_event: e.id });
     if (!r.ok) throw new Error('讀取人員資料失敗，請再試一次。');
     if (!r.rows.length) { flash('warn', '這場活動還沒有錄取、出勤或薪資單的人。'); return viewEvent(e.id, step); }
-    const safe = t => String(t || '').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
-    const files = [], rows = [], warn = new Set(); let got = 0, failed = 0;
-    for (let i = 0; i < r.rows.length; i++) {
-      const x = r.rows[i], dir = String(i + 1).padStart(3, '0') + '_' + safe(x.name) + '/';
-      let rowFailed = false;
-      // 同一人的三張證件同時下載
-      const cells = await Promise.all(DOC_KINDS.map(async ([kind, label]) => {
-        const d = (x.docs || {})[kind]; let cell = '';
-        if (d && d.file) {
-          try {
-            const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: x.person_id, kind }) });
-            const v = await res.json();
-            if (v.ok && !v.url && v.drive_url) cell = v.drive_url;
-            else {
-              if (!v.ok || !v.url) throw new Error('no_url');
-              const ir = await fetch(v.url);
-              if (!ir.ok) throw new Error('fetch');
-              const fname = dir + label + '.' + (d.ext || 'jpg');
-              files.push([fname, new Uint8Array(await ir.arrayBuffer())]); got++;
-              cell = fname + (v.proof || v.legacy_thumb ? '（縮圖' + (v.drive_url ? '，原檔 ' + v.drive_url : '') + '）' : '');
-            }
-          } catch (err) { failed++; rowFailed = true; cell = d.drive ? d.drive + '（下載失敗，改附雲端連結）' : '下載失敗'; }
-        } else cell = d && d.drive ? d.drive : '未上傳';
-        return cell;
-      }));
-      if (rowFailed || !x.name || !x.national_id || !x.birth_date || !x.address || !x.bank_account || cells.some(c => /未上傳|失敗/.test(c))) warn.add(i);
-      rows.push([i + 1, x.name || '', x.national_id || '', x.birth_date ? x.birth_date.replace(/-/g, '/') : '', x.address || '',
-        x.bank_account_name || '', [x.bank_code, x.bank_branch].filter(Boolean).join(' '), x.bank_account || '', ...cells]);
-      if (b) b.textContent = '準備中 ' + (i + 1) + '/' + r.rows.length;
-    }
+    const base = new URL('admin.html', location.href).href.split('#')[0];
+    const warn = new Set();
+    const rows = r.rows.map((x, i) => {
+      const docs = DOC_KINDS.map(([kind]) => { const d = (x.docs || {})[kind]; return d && (d.file || d.drive) ? { link: base + '#/doc/' + x.person_id + '/' + kind, text: '開啟' } : '未上傳'; });
+      if (!x.name || !x.national_id || !x.birth_date || !x.address || !x.bank_account || docs.includes('未上傳')) warn.add(i);
+      return [i + 1, x.name || '', x.national_id || '', x.birth_date ? x.birth_date.replace(/-/g, '/') : '', x.address || '',
+        x.bank_account_name || '', [x.bank_code, x.bank_branch].filter(Boolean).join(' '), x.bank_account || '', ...docs];
+    });
     const xlsx = buildXlsx([{ name: '人員資料', cols: [{ title: '序號', width: 6, num: true }, { title: '姓名', width: 12 }, { title: '身分證字號', width: 14 }, { title: '生日', width: 12 },
       { title: '地址', width: 44 }, { title: '戶名', width: 12 }, { title: '銀行／分行', width: 14 }, { title: '銀行帳號', width: 18 },
-      { title: '身分證正面', width: 34 }, { title: '身分證反面', width: 34 }, { title: '存摺', width: 34 }], rows, warnRows: warn }]);
-    files.unshift(['人員資料.xlsx', new Uint8Array(await xlsx.arrayBuffer())]);
-    downloadBlob(zipStore(files, 'application/zip'), `人員資料_${safe(e.name)}_${today()}.zip`);
-    S.flash = null;
-    flash(warn.size || failed ? 'warn' : 'ok', `已下載 ${r.rows.length} 人，證件照 ${got} 張${failed ? '（' + failed + ' 張下載失敗）' : ''}${warn.size ? '；' + warn.size + ' 人資料不完整，已在名單中標黃' : ''}。`);
+      { title: '身分證正面', width: 12 }, { title: '身分證反面', width: 12 }, { title: '存摺封面', width: 12 }], rows, warnRows: warn }]);
+    const safe = t => String(t || '').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
+    downloadBlob(xlsx, `人員資料_${safe(e.name)}_${today()}.xlsx`);
+    flash(warn.size ? 'warn' : 'ok', `已下載 ${r.rows.length} 人${warn.size ? '，其中 ' + warn.size + ' 人資料或證件不完整，已標黃' : ''}。證件連結要登入後台才能開啟。`);
   } catch (err) { if (err.message === 'session') return; flash('err', err.message); }
-  // 下載期間若已切到別的頁面，就不把畫面拉回來
   if (location.hash.split('/')[2] === e.id) viewEvent(e.id, step);
+}
+
+/* ---------- 證件連結頁：從 Excel 點進來看單一證件（每次開啟都留調閱紀錄） ---------- */
+async function viewDocLink(personId, kind) {
+  const label = (DOC_KINDS.find(([k]) => k === kind) || [])[1];
+  if (!label || !/^[0-9a-f-]{36}$/.test(personId || '')) return go('#/people');
+  shell('people', '<div class="skeleton" style="height:300px"></div>');
+  let j;
+  try {
+    const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'view_url', admin_token: S.token, person_id: personId, kind }) });
+    j = await res.json();
+  } catch (err) { j = { ok: false }; }
+  if (j.error === 'session') { saveToken(null); return viewAuth('login', '登入已逾時，請重新登入。'); }
+  const body = !j.ok ? '<div class="msg err">' + (j.error === 'missing' ? '這個人還沒有上傳' + esc(label) + '。' : '無法開啟證件，請稍後再試。') + '</div>'
+    : (j.url ? `<div class="card pad" style="text-align:center"><img src="${esc(j.url)}" alt="${esc(label)}" referrerpolicy="no-referrer" style="max-width:100%;max-height:75vh;border-radius:8px"></div>` : '')
+      + (j.drive_url ? `<p class="sub" style="margin-top:10px">${j.url ? '這是縮圖。' : ''}<a href="${esc(j.drive_url)}" target="_blank" rel="noopener noreferrer">開啟雲端原檔</a>（需用有分享權限的 Google 帳號）</p>` : '');
+  shell('people', `<div class="crumb"><a href="#/people/${esc(personId)}">人員資料</a> / ${esc(label)}</div>
+    <div class="head"><div><h1>${esc(label)}</h1><p class="sub">這次開啟已留下調閱紀錄。圖片連結 2 分鐘後失效，需要時重新整理這頁。</p></div></div>${body}`);
 }
 
 /* ---------- 加保名冊 ---------- */
