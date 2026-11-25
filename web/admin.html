@@ -1096,7 +1096,7 @@ function buildXlsx(sheets) {
   const sheetXml = sh => {
     const rowXml = (cells, r, style) => `<row r="${r}">${cells.map((v, c) => {
       const ref = colName(c) + r, st = style != null ? style : (sh.cols[c].num && v !== '' && v != null && !isNaN(v) ? 3 : 0);
-      if (v && typeof v === 'object' && v.link) { const q = t => String(t).replace(/"/g, '""'); return `<c r="${ref}" t="str" s="${sh.warnRows && sh.warnRows.has(r - 2) ? 2 : 0}"><f>${xesc('HYPERLINK("' + q(v.link) + '","' + q(v.text || v.link) + '")')}</f><v>${xesc(v.text || v.link)}</v></c>`; }
+      if (v && typeof v === 'object' && v.link) { const q = t => String(t).replace(/"/g, '""'); return `<c r="${ref}" t="str" s="5"><f>${xesc('HYPERLINK("' + q(v.link) + '","' + q(v.text || v.link) + '")')}</f><v>${xesc(v.text || v.link)}</v></c>`; }
       if (style == null && sh.cols[c].num && v !== '' && v != null && !isNaN(v)) return `<c r="${ref}" s="${sh.warnRows && sh.warnRows.has(r - 2) ? 4 : st}"><v>${Number(v)}</v></c>`;
       return `<c r="${ref}" t="inlineStr" s="${style != null ? style : (sh.warnRows && sh.warnRows.has(r - 2) ? 2 : 0)}"><is><t xml:space="preserve">${xesc(v)}</t></is></c>`;
     }).join('')}</row>`;
@@ -1112,7 +1112,7 @@ ${sh.rows.length ? `<autoFilter ref="A1:${colName(sh.cols.length - 1)}${sh.rows.
     ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sh, i) => `<sheet name="${xesc(sh.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`],
     ['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
     // 樣式：0 文字、1 標題（粗體灰底）、2 有缺漏的列（淡黃底文字）、3 數字千分位、4 有缺漏的數字
-    ['xl/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEFEBE3"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFBF1D9"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="5"><xf numFmtId="49" applyNumberFormat="1"/><xf numFmtId="49" fontId="1" fillId="2" applyNumberFormat="1" applyFont="1" applyFill="1"/><xf numFmtId="49" fillId="3" applyNumberFormat="1" applyFill="1"/><xf numFmtId="164" applyNumberFormat="1"/><xf numFmtId="164" fillId="3" applyNumberFormat="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`],
+    ['xl/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0"/></numFmts><fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEFEBE3"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFBF1D9"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="6"><xf numFmtId="49" applyNumberFormat="1"/><xf numFmtId="49" fontId="1" fillId="2" applyNumberFormat="1" applyFont="1" applyFill="1"/><xf numFmtId="49" fillId="3" applyNumberFormat="1" applyFill="1"/><xf numFmtId="164" applyNumberFormat="1"/><xf numFmtId="164" fillId="3" applyNumberFormat="1" applyFill="1"/><xf numFmtId="49" fontId="2" applyNumberFormat="1" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`],
     ...sheets.map((sh, i) => [`xl/worksheets/sheet${i + 1}.xml`, sheetXml(sh)]),
   ];
   return zipStore(files);
@@ -1128,7 +1128,7 @@ async function exportEventPack(e, step) {
     const r = await rpc('admin_event_people_export', { p_event: e.id });
     if (!r.ok) throw new Error('讀取人員資料失敗，請再試一次。');
     if (!r.rows.length) { flash('warn', '這場活動還沒有錄取、出勤或薪資單的人。'); return viewEvent(e.id, step); }
-    const base = new URL('admin.html', location.href).href.split('#')[0];
+    const base = 'https://w63068925-sudo.github.io/works-payroll/admin.html';
     const warn = new Set();
     const rows = r.rows.map((x, i) => {
       const docs = DOC_KINDS.map(([kind]) => { const d = (x.docs || {})[kind]; return d && (d.file || d.drive) ? { link: base + '#/doc/' + x.person_id + '/' + kind, text: '開啟' } : '未上傳'; });
@@ -1574,7 +1574,17 @@ function xEnhance(t) {
 }
 new MutationObserver(() => document.querySelectorAll('table').forEach(xEnhance)).observe(document.body, { childList: true, subtree: true });
 
-route();
+// 從 Excel 證件連結開新分頁時沒有登入狀態：先問同一瀏覽器裡已登入的後台分頁，有就沿用，沒有才顯示登入
+const TAB_CH = (() => { try { return new BroadcastChannel('payroll-admin'); } catch (e) { return null; } })();
+if (TAB_CH) TAB_CH.onmessage = ev => { if (ev.data === 'need-token' && S.token) TAB_CH.postMessage({ token: S.token }); };
+(async () => {
+  if (!S.token && TAB_CH) {
+    const t = await new Promise(res => { const h = ev => { if (ev.data && ev.data.token) { TAB_CH.removeEventListener('message', h); res(ev.data.token); } };
+      TAB_CH.addEventListener('message', h); TAB_CH.postMessage('need-token'); setTimeout(() => { TAB_CH.removeEventListener('message', h); res(null); }, 400); });
+    if (t) saveToken(t);
+  }
+  route();
+})();
 </script>
 </body>
 </html>
