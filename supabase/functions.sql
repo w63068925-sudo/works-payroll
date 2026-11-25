@@ -2589,3 +2589,29 @@ end $function$
 -- 內部函式（沒有登入檢查）只給資料庫內部呼叫
 revoke all on function public.payslip_regenerate(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.payroll_contract_text_v1(uuid) from public, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_accepted_export(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 錄取名單匯出（姓名、身分證字號、生日、地址、存摺照片）：含個資，先寫紀錄再回傳
+declare v_actor text := public.admin_actor(p_token); v_rows jsonb;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select coalesce(jsonb_agg(jsonb_build_object('person_id', p.id, 'name', p.name, 'national_id', p.national_id, 'birth_date', p.birth_date,
+      'address', p.address, 'bankbook_file', d.path is not null, 'bankbook_ext', lower(substring(d.path from '\.([A-Za-z0-9]+)$')),
+      'bankbook_drive', case when d.drive_file_id is not null then 'https://drive.google.com/file/d/' || d.drive_file_id || '/view' end) order by p.name), '[]'::jsonb)
+  into v_rows
+  from public.people p
+  left join public.people_documents d on d.person_id = p.id and d.kind = 'bankbook'
+  where p.id in (select ap.person_id from public.applications ap join public.application_shifts x on x.application_id = ap.id
+                 where ap.event_id = p_event and x.status = 'accepted');
+  insert into public.audit_log(actor, action, table_name, row_id, detail)
+  values (v_actor, 'export_accepted_with_docs', 'events', p_event, jsonb_build_object('rows', jsonb_array_length(v_rows)));
+  return jsonb_build_object('ok', true, 'rows', v_rows);
+end $function$
+;
+revoke all on function public.admin_accepted_export(text, uuid) from public;
+grant execute on function public.admin_accepted_export(text, uuid) to anon, authenticated;
