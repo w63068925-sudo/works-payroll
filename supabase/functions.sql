@@ -52,6 +52,33 @@ begin
 end $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.admin_archive_event(p_token text, p_event uuid, p_archived boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 封存只影響後台顯示：活動、薪資單、工讀生端都不變，可隨時取消封存
+declare v_actor text := public.admin_actor(p_token); e public.events;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into e from public.events where id = p_event for update;
+  if e.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if coalesce(p_archived, false) then
+    if e.archived_at is null then
+      update public.events set archived_at = now(), archived_by = v_actor where id = e.id;
+      insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, 'event_archived', 'events', e.id);
+    end if;
+  else
+    if e.archived_at is not null then
+      update public.events set archived_at = null, archived_by = null where id = e.id;
+      insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, 'event_unarchived', 'events', e.id);
+    end if;
+  end if;
+  return jsonb_build_object('ok', true, 'archived', coalesce(p_archived, false));
+end $function$
+;
+
 CREATE OR REPLACE FUNCTION public.admin_attendance(p_token text, p_event uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -568,7 +595,7 @@ begin
     'employer', (select jsonb_build_object('id', id, 'name', name, 'legal_name', legal_name, 'tax_id', tax_id) from public.employers order by created_at limit 1),
     'events', coalesce((select jsonb_agg(x order by (x->>'start_date') desc nulls last) from (
       select jsonb_build_object('id', e.id, 'name', e.name, 'start_date', e.start_date, 'end_date', e.end_date,
-        'pay_date', e.pay_date, 'pay_within_days', e.pay_within_days, 'closed_at', e.closed_at,
+        'pay_date', e.pay_date, 'pay_within_days', e.pay_within_days, 'closed_at', e.closed_at, 'archived_at', e.archived_at,
         'total', count(s.id), 'draft', count(s.id) filter (where s.status = 'draft'),
         'published', count(s.id) filter (where s.status = 'published'), 'void', count(s.id) filter (where s.status = 'void'),
         'net_sum', coalesce(sum(s.net) filter (where s.status <> 'void'), 0),

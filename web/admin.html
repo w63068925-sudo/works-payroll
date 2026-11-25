@@ -245,7 +245,8 @@ function shell(section, html) {
   S.flash = null;
   $('logout').onclick = async () => { try { await rpc('admin_logout'); } catch (e) {} saveToken(null); S.ov = null; viewAuth('login'); };
 }
-async function loadOverview() { const r = await rpc('admin_overview'); S.ov = r; S.user = r.username; return r; }
+// 封存的活動只出現在「活動 › 已封存」；其他畫面（今日、班表、名冊、發放、徽章）都看不到
+async function loadOverview() { const r = await rpc('admin_overview'); r.allEvents = r.events || []; r.events = r.allEvents.filter(e => !e.archived_at); r.archived = r.allEvents.filter(e => e.archived_at); S.ov = r; S.user = r.username; return r; }
 
 async function route() {
   clearTimers(); overlay.innerHTML = '';
@@ -298,20 +299,20 @@ function eventState(e) {
 }
 function viewEvents() {
   const f = S.filter.events || 'all', q = (S.filter.eventsQ || '').trim();
-  const list = S.ov.events.filter(e => (f === 'all' || eventState(e)[0] === f) && (!q || e.name.includes(q)));
+  const list = (f === '已封存' ? S.ov.archived : S.ov.events).filter(e => (f === 'all' || f === '已封存' || eventState(e)[0] === f) && (!q || e.name.includes(q)));
   const counts = k => S.ov.events.filter(e => eventState(e)[0] === k).length;
   shell('events', `
-    <div class="head"><div><h1>活動</h1><p class="sub">共 ${S.ov.events.length} 場</p></div><button class="btn" id="new">新增活動</button></div>
+    <div class="head"><div><h1>活動</h1><p class="sub">共 ${S.ov.events.length} 場${S.ov.archived.length ? '，另有 ' + S.ov.archived.length + ' 場已封存' : ''}</p></div><button class="btn" id="new">新增活動</button></div>
     <div id="newbox"></div>
     <div class="row" style="margin-bottom:12px;align-items:center">
-      <div class="chips" style="margin:0">${[['all', '全部', S.ov.events.length], ['進行中', '進行中', counts('進行中')], ['即將開始', '即將開始', counts('即將開始')], ['待發薪', '待發薪', counts('待發薪')], ['已結案', '已結案', counts('已結案')]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
+      <div class="chips" style="margin:0">${[['all', '全部', S.ov.events.length], ['進行中', '進行中', counts('進行中')], ['即將開始', '即將開始', counts('即將開始')], ['待發薪', '待發薪', counts('待發薪')], ['已結案', '已結案', counts('已結案')], ['已封存', '已封存', S.ov.archived.length]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
       <span class="grow"></span><input id="q" type="search" placeholder="搜尋活動名稱" value="${esc(q)}" style="width:220px" aria-label="搜尋活動">
     </div>
     <div class="card tablebox"><table>
       <thead><tr><th>活動</th><th>日期</th><th>狀態</th><th class="r">薪資單</th><th class="r">已發布</th><th class="r">待處理</th><th>發薪日</th><th class="r">實發合計</th></tr></thead>
       <tbody>${list.map(e => { const [st, cls] = eventState(e); return `<tr data-k="${esc(e.id)}">
         <td><b>${esc(e.name)}</b></td><td>${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(md(e.end_date)) : ''}</td>
-        <td><span class="badge ${cls}">${st}</span></td><td class="r">${e.total}</td><td class="r">${e.published}</td>
+        <td><span class="badge ${cls}">${st}</span>${e.archived_at ? ' <span class="badge">已封存</span>' : ''}</td><td class="r">${e.total}</td><td class="r">${e.published}</td>
         <td class="r">${e.open_issues ? '<span class="badge warn">' + e.open_issues + '</span>' : '—'}</td>
         <td>${payDateOf(e) ? esc(d(payDateOf(e))) + (e.pay_date ? '' : ' <span class="dim">結束後 ' + esc(e.pay_within_days) + ' 天</span>') : '<span class="dim">未設</span>'}</td><td class="r">${money(e.net_sum)}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">沒有符合的活動</td></tr>'}</tbody>
     </table></div>`);
@@ -366,7 +367,7 @@ function stepInfo(e) {
   };
 }
 async function viewEvent(id, step) {
-  const e = S.ov.events.find(x => x.id === id);
+  const e = S.ov.allEvents.find(x => x.id === id);
   if (!e) return go('#/events');
   if (S.cache.id !== id) { S.filter.rtab = S.filter.nextRtab || null; S.filter.nextRtab = null; S.filter.rshift = ''; S.filter.qdraft = null; }
   if (S.cache.id !== id || !step || S.cache.stale) { const keep = S.flash; shell('events', '<div class="skeleton"></div><div class="skeleton"></div>'); S.flash = keep; await loadEventData(id); }
@@ -377,16 +378,25 @@ async function viewEvent(id, step) {
   const body = { staff: stepRecruit, att: stepAtt, review: stepReview, publish: stepPublish, payout: stepPayout }[step] || stepPublish;
   shell('events', `
     <div class="crumb"><a href="#/events">活動</a> / ${esc(e.name)}</div>
-    <div class="head"><div><h1>${esc(e.name)}</h1><p class="sub">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(d(e.end_date)) : ''}　${st}</p></div>
-      <div class="row"><button class="btn ghost" id="xstep">匯出${esc((STEPS.find(([k]) => k === step) || STEPS[3])[1])}資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
+    <div class="head"><div><h1>${esc(e.name)}</h1><p class="sub">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(d(e.end_date)) : ''}　${st}${e.archived_at ? '　<span class="badge">已封存</span>' : ''}</p></div>
+      <div class="row"><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : '確定封存？') : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xstep">匯出${esc((STEPS.find(([k]) => k === step) || STEPS[3])[1])}資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
     <div class="steps" role="tablist" aria-label="流程">
       ${STEPS.map(([k, t], i) => `<button class="step ${info[k].done ? 'done' : ''}" role="tab" aria-selected="${k === step}" data-s="${k}">
         <span class="n"><i>${info[k].done ? '✓' : i + 1}</i>${['一', '二', '三', '四', '五'][i]}</span><b>${t}</b><span class="s ${info[k].attn ? 'attn' : ''}">${esc(info[k].s)}</span></button>`).join('')}
     </div>
     <div id="joinbox"></div>
     <div id="stepbody">${body.html(e)}</div>`);
-  on('.step', 'click', (ev, b) => { S.sel = new Set(); S.detail = null; S.confirm = null; go('#/events/' + id + '/' + b.dataset.s); });
+  on('.step', 'click', (ev, b) => { S.sel = new Set(); S.detail = null; S.confirm = null; S.confirmArch = null; go('#/events/' + id + '/' + b.dataset.s); });
   $('qr').onclick = () => showQr(e);
+  $('arch').onclick = async () => {
+    if (S.confirmArch !== e.id) { S.confirmArch = e.id; return viewEvent(e.id, step); }  // 按兩次才執行
+    S.confirmArch = null;
+    const r = await rpc('admin_archive_event', { p_event: e.id, p_archived: !e.archived_at });
+    if (!r.ok) { flash('err', '操作失敗，請再試一次。'); return refreshEvent(e, step); }
+    flash('ok', e.archived_at ? '已取消封存，活動回到清單。' : '已封存。活動清單、今日現場、班表、名冊都不再顯示；薪資單與工讀生端不受影響，可到「活動 › 已封存」取消封存。');
+    if (e.archived_at) return refreshEvent(e, step);
+    await loadOverview(); go('#/events');
+  };
   $('xstep').onclick = () => exportStep(e, (STEPS.find(([k]) => k === step) || STEPS[3])[0]);
   $('join').onclick = () => toggleJoin(e);
   body.bind(e);
@@ -922,6 +932,8 @@ async function viewCalendar(ym, evId) {
   const gridStart = addDays(first, -new Date(first + 'T00:00:00Z').getUTCDay());
   const gridEnd = addDays(last, 6 - new Date(last + 'T00:00:00Z').getUTCDay());
   const r = await rpc('admin_calendar', { p_from: gridStart, p_to: gridEnd });
+  const arch = new Set(S.ov.archived.map(e => e.id));
+  r.events = r.events.filter(e => !arch.has(e.id)); r.shifts = r.shifts.filter(s => !arch.has(s.event_id));
   if (evSel) { r.events = r.events.filter(e => e.id === evSel); r.shifts = r.shifts.filter(s => s.event_id === evSel); }
   const color = {}; r.events.forEach((e, i) => { color[e.id] = CAL_COLORS[i % CAL_COLORS.length]; });
   const evName = {}; r.events.forEach(e => { evName[e.id] = e.name; });
@@ -1118,7 +1130,8 @@ async function viewRoster() {
   S.rsel = S.rsel || new Set();
   const r = await rpc('admin_roster', { p_filter: { q: F.q, event_id: F.event_id, from: F.from, to: F.to, statuses: F.statuses } });
   if (r.ok === false) { shell('roster', '<div class="msg err">篩選條件有誤，請檢查日期。</div>'); return; }
-  const groups = rosterGroups(r.rows), keys = new Set(groups.map(g => g.key));
+  const archR = new Set(S.ov.archived.map(e => e.id));
+  const groups = rosterGroups(r.rows.filter(x => !archR.has(x.event_id))), keys = new Set(groups.map(g => g.key));
   S.rsel.forEach(k => { if (!keys.has(k)) S.rsel.delete(k); });
   const bad = groups.filter(g => g.problems.length), need = groups.filter(g => g.needIns);
   const list = F.view === 'bad' ? bad : F.view === 'need' ? need : groups;
