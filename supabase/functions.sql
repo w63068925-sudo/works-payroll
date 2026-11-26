@@ -2697,6 +2697,11 @@ begin
       select id into v_dup from public.events where source_key = 'g:' || v_file;
       if v_dup is not null then return jsonb_build_object('ok', false, 'error', 'duplicate_source', 'event', v_dup); end if;
     end if;
+    if p_commit and coalesce(p_payload->>'allow_similar', '') <> 'true' and exists (select 1 from public.events z
+        where lower(regexp_replace(z.name, '\s', '', 'g')) = lower(regexp_replace(coalesce(ev->>'name',''), '\s', '', 'g'))
+          and z.start_date <= v_e and coalesce(z.end_date, z.start_date) >= v_s) then
+      return jsonb_build_object('ok', false, 'error', 'similar_event');
+    end if;
   end if;
 
   -- 班別
@@ -2860,7 +2865,10 @@ begin
   end if;
   return jsonb_build_object('ok', true, 'preview', true,
     'event', case when p_event is not null then jsonb_build_object('id', e.id, 'name', e.name, 'start_date', v_s, 'end_date', v_e, 'pay_date', v_pay, 'existing', true)
-      else jsonb_build_object('name', btrim(ev->>'name'), 'start_date', v_s, 'end_date', v_e, 'pay_date', v_pay, 'location', ev->>'location', 'existing', false) end,
+      else jsonb_build_object('name', btrim(ev->>'name'), 'start_date', v_s, 'end_date', v_e, 'pay_date', v_pay, 'location', ev->>'location', 'existing', false,
+        'similar', coalesce((select jsonb_agg(jsonb_build_object('id', z.id, 'name', z.name, 'start_date', z.start_date, 'end_date', z.end_date, 'archived', z.archived_at is not null) order by z.start_date desc)
+          from (select * from public.events z where lower(regexp_replace(z.name, '\s', '', 'g')) = lower(regexp_replace(coalesce(ev->>'name',''), '\s', '', 'g'))
+                  and z.start_date <= v_e and coalesce(z.end_date, z.start_date) >= v_s order by z.start_date desc limit 5) z), '[]'::jsonb)) end,
     'shifts', v_shifts, 'people', v_rows);
 end $function$
 ;

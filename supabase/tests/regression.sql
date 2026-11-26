@@ -387,5 +387,26 @@ begin
     if not has_function_privilege('anon', 'public.payroll_contact()', 'execute') then fails := fails || ' [28i anon contact]'; end if;
   end;
 
-  if fails = '' then raise exception 'PASS 全部 28 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 29. AI 匯入預覽：同名（忽略空白、大小寫）且日期重疊的活動要列在 similar，日期不重疊不列
+  declare e30 uuid; v jsonb;
+  begin
+    select id into e30 from public.events where source_key = 'g:regressionAiImportFile000001';
+    v := jsonb_build_object('v', 1, 'event', jsonb_build_object('name', ' 回歸 ai 匯入 ', 'start_date', v_today + 31, 'end_date', v_today + 33), 'people', '[]'::jsonb);
+    r := public.admin_ai_import(atok, v);
+    if not exists (select 1 from jsonb_array_elements(r#>'{event,similar}') x where (x->>'id')::uuid = e30) then fails := fails || ' [29a similar missing ' || coalesce(r::text, '') || ']'; end if;
+    r := public.admin_ai_import(atok, jsonb_set(v, '{event}', jsonb_build_object('name', '回歸 AI 匯入', 'start_date', v_today + 40)));
+    if jsonb_array_length(r#>'{event,similar}') <> 0 then fails := fails || ' [29b non-overlap listed]'; end if;
+    -- 寫入時伺服器也擋：沒帶 allow_similar 不能另建；帶了才建
+    r := public.admin_ai_import(atok, v, null, true);
+    if r->>'error' is distinct from 'similar_event' then fails := fails || ' [29c commit not blocked ' || coalesce(r::text, '') || ']'; end if;
+    if (select count(*) from public.events where lower(regexp_replace(name, '\s', '', 'g')) = '回歸ai匯入') <> 1 then fails := fails || ' [29d blocked commit created event]'; end if;
+    r := public.admin_ai_import(atok, v || '{"allow_similar": true}'::jsonb, null, true);
+    if (r->>'ok')::boolean is not true then fails := fails || ' [29e allow_similar commit ' || coalesce(r::text, '') || ']'; end if;
+    -- 既有活動沒有結束日：以開始日判斷重疊
+    update public.events set end_date = null where id = e30;
+    r := public.admin_ai_import(atok, jsonb_set(v, '{event}', jsonb_build_object('name', '回歸AI匯入', 'start_date', v_today + 30)));
+    if not exists (select 1 from jsonb_array_elements(r#>'{event,similar}') x where (x->>'id')::uuid = e30) then fails := fails || ' [29f null end_date]'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 29 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

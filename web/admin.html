@@ -1234,6 +1234,7 @@ async function viewImport() {
   const ok = people.filter(x => x.status !== 'error').length, okShifts = shifts.filter(x => !x.errors.length).length;
   const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
   const ev = p && p.event;
+  const sim = ev && !ev.existing && Array.isArray(ev.similar) ? ev.similar : [];
   shell('import', `
     <div class="head"><div><h1>AI 匯入</h1><p class="sub">在匯入台跟 AI 對話：貼上表單回覆試算表、截圖或活動需求，AI 整理成活動、班別與人員名單。整理好按「匯入到後台」會自動帶到這裡並檢查，確認後才寫入。也可以把匯入碼貼在下面。</p></div>
       <a class="btn" href="${esc(AI_IMPORT_URL)}" target="_blank" rel="noopener noreferrer">開啟 AI 匯入台 ↗</a></div>
@@ -1252,6 +1253,10 @@ async function viewImport() {
       <span class="dim">發薪日</span><span style="font-family:var(--num)">${esc(ev.pay_date || '未設定')}</span>
       ${ev.location ? `<span class="dim">地點</span><span>${esc(ev.location)}</span>` : ''}
     </div></div>
+    ${sim.length ? `<div class="card pad" style="margin-bottom:14px;border-color:var(--warn)"><b>已經有同名、日期重疊的活動，可能是重複匯入</b>
+      <ul style="margin:8px 0">${sim.map(z => `<li>${esc(z.name)}（<span style="font-family:var(--num)">${esc(z.start_date || '')}${z.end_date && z.end_date !== z.start_date ? ' – ' + esc(z.end_date) : ''}</span>）${z.archived ? ' <span class="badge">已封存</span>' : ''}
+        <a href="#/events/${esc(z.id)}" target="_blank" rel="noopener">查看 ↗</a>${!z.archived && evOpts.some(o => o.id === z.id) ? ` <button class="btn ghost" data-simto="${esc(z.id)}">改成加到這場</button>` : ''}</li>`).join('')}</ul>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:normal"><input type="checkbox" id="isimok" ${I.simOk ? 'checked' : ''}> 我確定這是另一場活動，要再建一場新的</label></div>` : ''}
     ${shifts.length ? `<div class="card tablebox" style="margin-bottom:14px"><table><thead><tr><th>班別日期</th><th>時間</th><th>職務</th><th class="r">人數</th><th class="r">時薪</th><th>檢查</th></tr></thead><tbody>
       ${shifts.map(s => `<tr><td style="font-family:var(--num)">${esc(s.work_date)}</td><td style="font-family:var(--num)">${esc(s.start_time || '')}–${esc(s.end_time || '')}</td><td>${esc(s.role || '—')}</td><td class="r">${esc(s.headcount || '')}</td><td class="r">${esc(s.rate || '—')}</td>
         <td>${s.errors.length ? s.errors.map(x => `<span class="badge error">${esc(x)}</span>`).join(' ') : '<span class="badge ok">可匯入</span>'}</td></tr>`).join('')}</tbody></table></div>` : ''}
@@ -1267,31 +1272,33 @@ async function viewImport() {
         <td>${[...x.errors.map(m => `<span class="badge error">${esc(m)}</span>`), ...x.warnings.map(m => `<span class="badge warn">${esc(m)}</span>`)].join(' ') || '<span class="badge ok">完整</span>'}</td></tr>`).join('')}
       </tbody></table>` : '<p class="empty">沒有符合條件的人。</p>'}</div>` : ''}
     <div class="bulk"><span class="grow">${ev.existing ? '加到「' + esc(ev.name) + '」' : '建立新活動'}：${ok} 人${okShifts ? '、' + okShifts + ' 個班別' : ''}${cnt('error') ? '，' + cnt('error') + ' 列有錯會略過' : ''}。有金額的人建薪資單草稿，發布前請在「核對」確認。</span>
-      <button class="btn" id="icommit" ${ok || okShifts || (!ev.existing && !people.length) ? '' : 'disabled'}>確認匯入</button></div>` : ''}`);
+      <button class="btn" id="icommit" ${(ok || okShifts || (!ev.existing && !people.length)) && (!sim.length || I.simOk) ? '' : 'disabled'}>確認匯入</button></div>` : ''}`);
   const ERR = { bad_payload: '匯入碼格式不對或版本太舊，請在匯入台重新產生。', bad_name: '活動名稱太短。', bad_date: '活動日期不對。', pay_before_end: '發薪日早於活動結束日。',
-    duplicate_source: '這份試算表已經匯入過了。要補人請選「加到既有活動」。', not_found: '找不到這場活動。', too_many: '名單超過 500 人，請分批匯入。', all_rows_invalid: '每一列都有錯，沒有可匯入的資料。' };
+    duplicate_source: '這份試算表已經匯入過了。要補人請選「加到既有活動」。', not_found: '找不到這場活動。', too_many: '名單超過 500 人，請分批匯入。', all_rows_invalid: '每一列都有錯，沒有可匯入的資料。', similar_event: '已經有同名、日期重疊的活動。確定要另建請重新檢查並勾選確認。' };
   // 匯入碼或目標一改，舊預覽立刻作廢；確認匯入只送「預覽當時」的資料與目標
-  $('icode').oninput = () => { I.code = $('icode').value; I.seq++; if (I.preview) { I.preview = null; viewImport().then(() => { const x = $('icode'); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }); } };
-  $('itarget').onchange = () => { I.target = $('itarget').value; I.seq++; I.preview = null; viewImport(); };
+  $('icode').oninput = () => { I.code = $('icode').value; I.seq++; I.simOk = false; if (I.preview) { I.preview = null; viewImport().then(() => { const x = $('icode'); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }); } };
+  $('itarget').onchange = () => { I.target = $('itarget').value; I.seq++; I.simOk = false; I.preview = null; viewImport(); };
   $('icheck').onclick = async () => {
     const b = $('icheck'); b.disabled = true; b.textContent = '檢查中…';
-    const seq = ++I.seq, target = I.target || null;
+    const seq = ++I.seq, target = I.target || null; I.simOk = false;
     try {
       I.code = $('icode').value; const payload = await decodeImportCode(I.code);
       const r = await rpc('admin_ai_import', { p_payload: payload, p_event: target, p_commit: false });
       if (seq !== I.seq || S.imp !== I) { if (S.imp === I && location.hash === '#/import') viewImport(); return; }
       if (!r.ok) { I.preview = null; flash('err', ERR[r.error] || '檢查失敗，請再試一次。'); if (r.error === 'duplicate_source' && r.event) I.target = r.event; }
-      else { r.payloadRef = payload; r.target = target; I.preview = r; I.view = 'all'; }
+      else { r.payloadRef = payload; r.target = target; I.preview = r; I.view = 'all'; I.simOk = false; }
     } catch (err) { if (err.message === 'session') return; if (seq !== I.seq) { if (S.imp === I && location.hash === '#/import') viewImport(); return; } I.preview = null; flash('err', err instanceof SyntaxError ? '匯入碼不完整，請重新複製。' : err.message); }
     viewImport();
   };
   document.querySelectorAll('.stat[data-v]').forEach(b => b.onclick = () => { I.view = b.dataset.v; viewImport(); });
+  if ($('isimok')) $('isimok').onchange = () => { I.simOk = $('isimok').checked; const c = $('icommit'); if (c) c.disabled = !I.simOk || !(ok || okShifts || (!ev.existing && !people.length)); };
+  document.querySelectorAll('[data-simto]').forEach(b => b.onclick = () => { I.target = b.dataset.simto; I.seq++; I.simOk = false; I.preview = null; viewImport().then(() => $('icheck').click()); });
   if (I.auto) { I.auto = false; $('icheck').click(); }
   if ($('icommit')) $('icommit').onclick = async () => {
     const b = $('icommit'); b.disabled = true; b.textContent = '匯入中…';
     try {
       const pv = I.preview; if (!pv) return viewImport();
-      const r = await rpc('admin_ai_import', { p_payload: pv.payloadRef, p_event: pv.target, p_commit: true });
+      const r = await rpc('admin_ai_import', { p_payload: pv.event && pv.event.similar && pv.event.similar.length && I.simOk ? { ...pv.payloadRef, allow_similar: true } : pv.payloadRef, p_event: pv.target, p_commit: true });
       if (!r.ok) { flash('err', ERR[r.error] || '匯入失敗，請再試一次。'); return viewImport(); }
       S.imp = null; S.ov = null;
       flash('ok', `已匯入：新建 ${r.new_people} 人、補資料 ${r.filled} 人、出勤 ${r.attendance} 天、薪資單草稿 ${r.payslips} 張${r.shifts ? '、班別 ' + r.shifts + ' 個' : ''}${r.skipped ? '；' + r.skipped + ' 列有錯已略過' : ''}。`);
