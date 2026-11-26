@@ -1612,7 +1612,12 @@ async function viewSettings(tab) {
       <label for="tx">統一編號（8 碼）</label><input id="tx" type="text" inputmode="numeric" maxlength="8" value="${esc(em.tax_id || '')}">
       <label for="ct">工讀生聯絡窗口</label><input id="ct" type="text" maxlength="200" value="${esc(em.contact || '')}" placeholder="例如 LINE ID：@works，或 02-1234-5678（週一至週五 10–18 點）">
       <p class="sub" style="margin:4px 0 0">會顯示在工讀生的登入頁，忘記密碼或資料有誤時找得到人。</p>
-      <div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form>`;
+      <div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form>
+      <form id="mf" class="card pad" style="max-width:520px;margin-top:16px"><b>新人建檔驗證信</b>
+        <p class="sub" style="margin:4px 0 0">登入頁「第一次合作？建立帳號」會寄 Email 驗證碼，由 w63068925 帳號的 Apps Script 寄出。<span id="mst">讀取中…</span></p>
+        <label for="mu">Apps Script 網頁應用程式網址（…/exec）</label><input id="mu" type="url" placeholder="https://script.google.com/macros/s/…/exec">
+        <label for="mk">共用密鑰（64 碼，貼上後儲存；之後畫面不會再顯示）</label><input id="mk" type="text" name="works-mail-shared-secret" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" data-1p-ignore data-lpignore="true" style="-webkit-text-security:disc">
+        <div id="mm" style="margin-top:12px"></div><button class="btn block">儲存寄信設定</button></form>`;
   } else if (tab === 'holidays') {
     const r = await rpc('admin_holidays', { p_set: null });
     body = `<div class="split" style="grid-template-columns:minmax(0,1fr) minmax(280px,360px)"><div class="card tablebox"><table><thead><tr><th>日期</th><th>名稱</th><th></th></tr></thead>
@@ -1691,6 +1696,15 @@ async function viewSettings(tab) {
     <div class="tabs" role="tablist">${TABS.map(([k, t]) => `<button class="tab" role="tab" aria-selected="${k === tab}" data-t="${k}">${t}</button>`).join('')}</div>${body}`);
   on('.tab', 'click', (ev, b) => viewSettings(b.dataset.t));
   const f = id => $(id);
+  if (f('mf')) {
+    const showMail = s => { $('mst').textContent = s.url && s.key_set ? '　狀態：已設定（近 24 小時寄出 ' + s.sent_today + ' 封）' : '　狀態：還沒設定好，建立帳號會顯示「暫時無法寄送驗證信」'; if (s.url) $('mu').value = s.url; };
+    rpc('admin_mail_settings', { p_patch: null }).then(showMail).catch(() => {});
+    f('mf').onsubmit = async ev => { ev.preventDefault();
+      const r = await rpc('admin_mail_settings', { p_patch: Object.assign({ url: $('mu').value }, $('mk').value.trim() ? { key: $('mk').value.trim() } : {}) });
+      $('mk').value = '';
+      if (!r.ok) { $('mm').innerHTML = '<div class="msg err">' + (r.error === 'bad_url' ? '網址要是 https://script.google.com/macros/s/…/exec。' : r.error === 'bad_key' ? '密鑰格式不對（64 個 0–9、a–f）。' : '儲存失敗。') + '</div>'; return; }
+      $('mm').innerHTML = '<div class="msg ok">寄信設定已儲存。</div>'; showMail(r); };
+  }
   if (f('cf')) f('cf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_update_employer', { p_patch: { legal_name: $('ln').value, tax_id: $('tx').value, contact: $('ct').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + (r.error === 'contact_too_long' ? '聯絡窗口最多 200 字。' : '統一編號必須是 8 個數字。') + '</div>'; return; } await loadOverview(); flash('ok', '公司資料已更新。'); viewSettings('company'); };
   if (f('hf')) {
     f('hf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_holidays', { p_set: { day: $('hd').value, name: $('hn').value.trim() } }); if (r.ok === false) { $('dm').innerHTML = '<div class="msg err">日期或名稱有誤。</div>'; return; } flash('ok', '已新增。'); viewSettings('holidays'); };

@@ -519,5 +519,16 @@ begin
     update public.events set archived_at = null where id = e35;
   end;
 
-  if fails = '' then raise exception 'PASS 全部 35 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 36. 寄信設定：要登入；網址只收 Apps Script /exec；密鑰只寫不讀
+  if public.admin_mail_settings('bad-token', null)->>'error' is distinct from 'session' then fails := fails || ' [36a no session]'; end if;
+  if public.admin_mail_settings(atok, jsonb_build_object('url', 'https://evil.example.com/exec'))->>'error' is distinct from 'bad_url' then fails := fails || ' [36b bad url]'; end if;
+  if public.admin_mail_settings(atok, jsonb_build_object('key', 'short'))->>'error' is distinct from 'bad_key' then fails := fails || ' [36c bad key]'; end if;
+  r := public.admin_mail_settings(atok, jsonb_build_object('url', 'https://script.google.com/macros/s/AKfycbRegressionTest000000000/exec', 'key', repeat('ab', 32)));
+  if (r->>'key_set')::boolean is not true or r ? 'key' or r::text like '%abababab%' then fails := fails || ' [36d key echoed or unset]'; end if;
+  -- 一個欄位錯就整份不寫入
+  perform public.admin_mail_settings(atok, jsonb_build_object('url', 'https://script.google.com/macros/s/AKfycbOtherRegression0000000000/exec', 'key', 'bad'));
+  if public.setting('mail_webapp_url') <> 'https://script.google.com/macros/s/AKfycbRegressionTest000000000/exec' then fails := fails || ' [36e partial update]'; end if;
+  if has_function_privilege('anon', 'public.setting(text)', 'execute') then fails := fails || ' [36f setting exposed]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 36 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

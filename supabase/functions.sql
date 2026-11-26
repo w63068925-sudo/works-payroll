@@ -3130,3 +3130,35 @@ create table if not exists public.signup_attempts (ip text not null, created_at 
 create index if not exists signup_attempts_ip on public.signup_attempts(ip, created_at);
 alter table public.signup_attempts enable row level security;
 revoke all on public.signup_attempts from anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_mail_settings(p_token text, p_patch jsonb DEFAULT NULL::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 新人建檔驗證信的寄信設定：Apps Script 網址與共用密鑰。密鑰只寫不讀（畫面只顯示有沒有設定）；全部欄位驗證通過才寫入
+declare v_actor text := public.admin_actor(p_token); v_url text; v_key text;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_patch is not null then
+    if p_patch ? 'url' then
+      v_url := nullif(btrim(coalesce(p_patch->>'url','')), '');
+      if v_url is not null and v_url !~ '^https://script\.google\.com/macros/s/[A-Za-z0-9_-]{20,120}/exec$' then return jsonb_build_object('ok', false, 'error', 'bad_url'); end if;
+    end if;
+    if p_patch ? 'key' and btrim(coalesce(p_patch->>'key','')) <> '' then
+      v_key := btrim(p_patch->>'key');
+      if v_key !~ '^[0-9a-f]{64}$' then return jsonb_build_object('ok', false, 'error', 'bad_key'); end if;
+    end if;
+    if p_patch ? 'url' then update public.app_settings set value = v_url where key = 'mail_webapp_url'; end if;
+    if v_key is not null then update public.app_settings set value = v_key where key = 'mail_key'; end if;
+    insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'mail_settings_updated', 'app_settings', jsonb_build_object('url', p_patch ? 'url', 'key', v_key is not null));
+  end if;
+  return jsonb_build_object('ok', true, 'url', public.setting('mail_webapp_url'), 'key_set', nullif(public.setting('mail_key'), '') is not null,
+    'sent_today', (select count(*) from public.signup_verifications where created_at > now() - interval '1 day'));
+end $function$
+;
+revoke all on function public.admin_mail_settings(text, jsonb) from public;
+grant execute on function public.admin_mail_settings(text, jsonb) to anon, authenticated;
+-- 設定值（含寄信密鑰）只給資料庫內部函式讀
+revoke all on function public.setting(text) from public, anon, authenticated;
