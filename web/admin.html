@@ -1443,7 +1443,7 @@ async function viewPeople(id) {
   shell('people', `<div class="head"><div><h1>人員</h1><p class="sub">共 ${r.total} 人${q ? '，符合 ' + r.people.length + ' 人' : '，顯示最近建立的 ' + r.people.length + ' 人'}</p></div>
       <form id="pf" class="row" style="align-items:center"><input id="pq" type="search" value="${esc(q)}" placeholder="姓名、身分證字號或電話" aria-label="搜尋人員" style="width:260px"><button class="btn ghost">搜尋</button></form></div>
     ${splitWrap(`<div class="card tablebox plist"><table><thead><tr><th>姓名</th><th class="ph">電話</th><th class="r">證件</th><th class="r">待確認</th></tr></thead>
-      <tbody>${r.people.map(p => `<tr data-k="${esc(p.id)}" class="${p.id === id ? 'on' : ''}"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge ok">自行登錄</span>' : ''}<div class="dim">${esc(p.national_id)}</div></td>
+      <tbody>${r.people.map(p => `<tr data-k="${esc(p.id)}" class="${p.id === id ? 'on' : ''}"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge ok">自行登錄</span>' : ''}${p.source === 'self' && p.docs < 3 ? ' <span class="badge warn" title="已登錄基本資料，但證件還沒傳齊，不能報名">證件未齊</span>' : ''}${p.source === 'self' && !p.apps ? ' <span class="badge" title="已登錄，還沒報名任何班次">未報名</span>' : ''}<div class="dim">${esc(p.national_id)}</div></td>
         <td class="ph">${esc(p.phone || '—')}</td><td class="r">${p.docs}/3</td><td class="r">${p.open_issues ? '<span class="badge warn">' + p.open_issues + '</span>' : '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">找不到符合的人</td></tr>'}</tbody></table></div>`)}`);
   $('pf').onsubmit = ev => { ev.preventDefault(); S.filter.peopleQ = $('pq').value; viewPeople(); };
   on('tbody tr[data-k]', 'click', (ev, tr) => { history.replaceState(null, '', '#/people/' + tr.dataset.k); openPerson(tr.dataset.k); });

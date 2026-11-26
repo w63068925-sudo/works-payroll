@@ -657,7 +657,8 @@ begin
   return jsonb_build_object('ok', true, 'total', (select count(*) from public.people),
     'people', coalesce((select jsonb_agg(x) from (
       select jsonb_build_object('id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone, 'source', p.profile_source, 'created_at', p.created_at,
-        'docs', (select count(*) from public.people_documents d where d.person_id = p.id),
+        'docs', (select count(*) from public.people_documents d where d.person_id = p.id and d.kind in ('id_front','id_back','bankbook')),
+        'apps', (select count(*) from public.applications a where a.person_id = p.id),
         'open_issues', (select count(*) from public.data_issues i where i.person_id = p.id and i.payslip_id is null and not i.resolved and i.severity <> 'info')) x
       from public.people p
       where v_q = '' or p.name ilike '%' || v_q || '%' or p.national_id ilike v_q || '%' or p.phone like '%' || v_q || '%'

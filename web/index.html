@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
 <title>薪資查詢｜沃克思</title>
 <style>
@@ -139,7 +140,8 @@ const app = document.getElementById('app');
 const state = { token: null, person: null, payslips: [], year: 'all', ticket: null, join: null };
 
 try { state.token = sessionStorage.getItem('payroll_token'); state.ticket = sessionStorage.getItem('payroll_ticket'); state.join = sessionStorage.getItem('payroll_join'); } catch (e) {}
-function saveJoin(j) { state.join = j; try { j ? sessionStorage.setItem('payroll_join', j) : sessionStorage.removeItem('payroll_join'); } catch (e) {} }
+function saveJoin(j) { state.join = j; try { j ? sessionStorage.setItem('payroll_join', j) : sessionStorage.removeItem('payroll_join'); } catch (e) {}
+  if (!j && /[?&]join=/.test(location.search)) { try { history.replaceState(null, '', location.pathname); } catch (e) {} } }
 function saveTicket(t) { state.ticket = t; try { t ? sessionStorage.setItem('payroll_ticket', t) : sessionStorage.removeItem('payroll_ticket'); } catch (e) {} }
 function saveToken(t) { state.token = t; try { t ? sessionStorage.setItem('payroll_token', t) : sessionStorage.removeItem('payroll_token'); } catch (e) {} }
 
@@ -182,6 +184,7 @@ const BANKS = [['004', '臺灣銀行'], ['005', '土地銀行'], ['006', '合作
 document.addEventListener('change', ev => { if (ev.target.id === 'bk' && ev.target.value) { const bc = document.getElementById('bc'); if (bc) bc.value = ev.target.value; } });
 document.addEventListener('input', ev => { if (ev.target.id === 'bc') { const bk = document.getElementById('bk'); if (bk) bk.value = BANKS.some(([c]) => c === ev.target.value) ? ev.target.value : ''; } });
 
+const NEWBIE = '<div class="msg warn" style="margin-top:10px">新朋友還沒有帳號，請用活動負責人傳給你的<b>報名連結</b>點開，按「第一次報名，填寫基本資料」。填完就會建立帳號，之後用身分證字號和民國生日 7 碼登入。<br>沒有報名連結的話，請向活動負責人索取。</div>';
 function viewLogin(message) {
   state.flow = (state.flow || 0) + 1; // 離開開通頁後，晚到的開通回應不再寫入登入狀態
   document.title = '登入｜沃克思薪資查詢';
@@ -196,15 +199,16 @@ function viewLogin(message) {
         <input id="pw" type="password" autocomplete="current-password" required>
         <button type="button" class="toggle" id="show" aria-label="顯示密碼">顯示</button>
       </div>
-      <p class="hint">第一次登入的密碼是民國生日 7 碼，例如民國 90 年 1 月 1 日請輸入 0900101。</p>
+      <p class="hint">合作過的夥伴，密碼預設是民國生日 7 碼，例如民國 90 年 1 月 1 日請輸入 0900101。</p>
       <div id="m">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
       <button class="btn" id="go">登入</button>
     </form>
-    ${state.join ? '<button class="btn ghost" id="toreg">第一次報名？先填基本資料</button>' : ''}
+    ${state.join ? '<button class="btn ghost" id="toreg">第一次報名？先填基本資料</button>' : '<button class="btn ghost" id="newbie">第一次合作？還沒有帳號</button><div id="newbiebox"></div>'}
     <button class="link" id="toclaim" style="margin-top:10px">合作過但一直登不進去？補生日開通帳號</button>
     <p class="foot">連續輸入錯誤 10 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口<span id="contact"></span>，核對身分後會幫你把密碼重設回民國生日 7 碼。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
   showContact();
   if (state.join) document.getElementById('toreg').addEventListener('click', () => viewRegister());
+  else document.getElementById('newbie').addEventListener('click', () => { document.getElementById('newbiebox').innerHTML = NEWBIE; });
   document.getElementById('toclaim').addEventListener('click', () => viewClaim());
   const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
   nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
@@ -218,7 +222,8 @@ function viewLogin(message) {
     try {
       const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
       if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList(); }
-      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。<div class="dim" style="margin-top:4px">請確認身分證字號沒有打錯；密碼是民國生日 7 碼，例如 0900101（改過密碼的請用新密碼）。連續錯 10 次會暫停 15 分鐘。</div></div>';
+      else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。<div class="dim" style="margin-top:4px">請確認身分證字號沒有打錯；密碼是民國生日 7 碼，例如 0900101（改過密碼的請用新密碼）。連續錯 10 次會暫停 15 分鐘。</div>'
+        + '<div style="margin-top:6px"><b>還沒報名過的新朋友沒有帳號</b>，' + (state.join ? '請按下方「第一次報名？先填基本資料」。' : '要先用活動負責人給的報名連結填基本資料。') + '</div></div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
     go.disabled = false; go.textContent = '登入'; pw.value = ''; pw.focus();
   });
@@ -644,24 +649,29 @@ async function viewRecruit(message) {
   }
   const my = (mine && mine.shifts) || {}, ans = (mine && mine.answers) || {};
   const days = {}; pub.shifts.forEach(s => (days[s.work_date] = days[s.work_date] || []).push(s));
+  // 每個班次都額滿：先說清楚，不讓新朋友填完資料才發現沒班可報
+  const allFull = pub.shifts.length > 0 && pub.shifts.every(s => s.accepted >= s.headcount), noShift = !pub.shifts.length;
+  const open = ev.recruiting && !allFull && !noShift;
   const head = `<p class="sub">${esc(ev.employer)}</p><h1>${esc(ev.name)}</h1>
     <p class="sub">${esc(fmtPeriod(ev.start_date, ev.end_date))}${ev.location ? '　' + esc(ev.location) : ''}</p>
     ${ev.description ? '<div class="card pad" style="margin-top:14px;white-space:pre-wrap;font-size:14px">' + esc(ev.description) + '</div>' : ''}
     ${message ? '<div class="msg ok">' + esc(message) + '</div>' : ''}`;
   if (!state.token) {
     app.innerHTML = brand + head + `
-      ${ev.recruiting ? '' : '<div class="msg warn">這場活動目前不開放報名。</div>'}
+      ${!ev.recruiting ? '<div class="msg warn">這場活動目前不開放報名。</div>' : allFull ? '<div class="msg warn">這場活動的班次都已額滿，目前不收新報名。有名額釋出時活動負責人會再通知。</div>' : noShift ? '<div class="msg warn">這場活動還沒開放班次，請等活動負責人通知後再報名。</div>' : ''}
       ${pub.shifts.length ? '<h2>班次</h2>' + Object.keys(days).sort().map(dk => '<div class="sday">' + esc(fmtDate(dk, true)) + '</div>' + days[dk].map(s => `<div class="sopt off" style="cursor:default"><div><div class="t">${esc(shiftTime(s))}　${esc(s.role || '')}</div><div class="d">${s.rate || ev.default_hourly_rate ? '時薪 ' + money(s.rate || ev.default_hourly_rate) + ' 元　' : ''}${s.accepted >= s.headcount ? '已額滿' : '需要 ' + s.headcount + ' 人'}</div></div></div>`).join('')).join('') : ''}
-      <button class="btn" id="reg">第一次報名，填寫基本資料</button>
-      <button class="btn ghost" id="login">我已經有帳號，登入報名</button>
+      ${open ? '<button class="btn" id="reg">第一次報名，填寫基本資料</button>' : ''}
+      <button class="btn ghost" id="login">${open ? '我已經有帳號，登入報名' : '已報名的人登入查看結果'}</button>
       <p class="foot">基本資料只要填一次，之後報名其他活動直接登入即可。</p>`;
-    document.getElementById('reg').addEventListener('click', () => viewRegister());
-    document.getElementById('login').addEventListener('click', () => viewLogin('登入後繼續報名。'));
+    if (open) document.getElementById('reg').addEventListener('click', () => viewRegister());
+    document.getElementById('login').addEventListener('click', () => viewLogin(open ? '登入後繼續報名。' : null));
     return;
   }
   const lockedAccepted = Object.values(my).includes('accepted');
   app.innerHTML = brand + head + `
     ${ev.recruiting ? '' : '<div class="msg warn">這場活動目前不開放報名，以下是你的報名結果。</div>'}
+    ${ev.recruiting && allFull && !mine ? '<div class="msg warn">這場活動的班次都已額滿，目前不收新報名。</div>' : ''}
+    ${missingDocs.length && ev.recruiting ? '<div class="msg warn">還缺：' + esc(missingDocs.map(k => ({ id_front: '身分證正面', id_back: '身分證反面', bankbook: '存摺封面' })[k] || k).join('、')) + '。三項證件都上傳後才能報名，<a href="#docs">到下方上傳</a>。</div>' : ''}
     <form id="f">
       ${pub.shifts.length ? '<h2>選擇想上的班次（可複選）</h2>' + Object.keys(days).sort().map(dk => '<div class="sday">' + esc(fmtDate(dk, true)) + '</div>' + days[dk].map(s => {
         const st = my[s.id], full = s.accepted >= s.headcount && st !== 'accepted', off = st === 'accepted' || !ev.recruiting || (full && !st);
@@ -672,7 +682,7 @@ async function viewRecruit(message) {
         ? `<select id="q_${esc(q.id)}" data-q="${esc(q.id)}"><option value="">請選擇</option>${(q.options || []).map(o => `<option ${ans[q.id] === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
         : `<input id="q_${esc(q.id)}" type="text" data-q="${esc(q.id)}" value="${esc(ans[q.id] || '')}">`)).join('') + '</div>' : ''}
       ${form.experience ? `<h2>相關經驗</h2><textarea id="exp" style="width:100%;min-height:96px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:16px" placeholder="曾擔任過的活動、品牌與工作內容">${esc((mine && mine.experience) || '')}</textarea>` : ''}
-      ${missingDocs.length && ev.recruiting ? '<h2>證件影本（必填）</h2><div class="msg warn">報名前要先上傳身分證正反面和存摺封面，資料只有你本人和沃克思的管理人員看得到。</div>' + docsBlock(docs) : ''}
+      ${missingDocs.length && ev.recruiting ? '<h2 id="docs">證件影本（必填）</h2><div class="msg warn">報名前要先上傳身分證正反面和存摺封面，資料只有你本人和沃克思的管理人員看得到。</div>' + docsBlock(docs) : ''}
       ${form.photo ? `<h2>個人照片</h2><div class="card pad" style="padding-top:4px;padding-bottom:4px"><div class="doc"><div><div>清楚的半身生活照</div><div class="st ${hasPhoto ? 'ok' : ''}" id="st-photo">${hasPhoto ? '已上傳' : '尚未上傳'}</div></div><label class="filebtn">${hasPhoto ? '重新上傳' : '選擇照片'}<input type="file" accept="image/*" data-doc="photo"></label></div></div>` : ''}
       <div id="m"></div>
       ${ev.recruiting ? `<button class="btn" id="go">${mine ? '更新報名' : '送出報名'}</button>` : ''}
@@ -813,9 +823,10 @@ async function viewCheckin(action, ack) {
 (async function boot() {
   const qs = new URLSearchParams(location.search), code = qs.get('k'), join = qs.get('join');
   let codeMsg = null;
-  if (join) { saveJoin(join); try { history.replaceState(null, '', location.pathname); } catch (e) {} }
+  // 報名碼留在網址：從 LINE 轉開 Safari、重新整理、轉傳連結都還帶得到（報名碼本來就公開貼在群組）
+  if (join) saveJoin(join);
   if (code) {
-    try { history.replaceState(null, '', location.pathname); } catch (e) {}
+    try { history.replaceState(null, '', location.pathname + (join ? '?join=' + encodeURIComponent(join) : '')); } catch (e) {}
     try {
       const r = await rpc('payroll_checkin_ticket', { p_code: code });
       if (r.ok) saveTicket(r.ticket);
@@ -823,7 +834,7 @@ async function viewCheckin(action, ack) {
     } catch (err) { codeMsg = '網路連線失敗，請重新掃描 QR 碼。'; }
   }
   if (state.ticket && code && state.token) return viewCheckin();
-  if (state.join && join) return viewRecruit();
+  if (state.join && join && !codeMsg) return viewRecruit();
   if (!state.token) return viewLogin(codeMsg || (state.ticket ? '請先登入，登入後就可以簽到。' : null));
   if (state.ticket && code) return viewCheckin();
   viewList();
