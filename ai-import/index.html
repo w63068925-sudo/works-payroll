@@ -60,6 +60,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
 .file{display:inline-flex;align-items:center;gap:6px;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:2px 8px;background:var(--panel);color:var(--muted)}
 .file img{width:22px;height:22px;object-fit:cover;border-radius:4px}
+.file .ftag{font-size:11px;font-weight:600;color:var(--accent)}
 .file button{border:0;background:none;color:var(--muted);cursor:pointer;padding:0 2px}
 .bar{display:flex;align-items:center;gap:6px;margin-top:4px}
 .bar .grow{flex:1;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -144,9 +145,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
       <div class="msg bot">告訴我要匯入什麼，我會整理到右邊的活動明細：
 ・左邊點一份報名表，或貼上試算表連結：整理成工讀生名單、工作日期與每日薪資
 ・直接描述新活動，例如「12/20–12/21 羅技快閃，信義區，PG 10:00–18:00 每天 4 人，時薪 200」：建立活動與班別
-・也可以貼上需求截圖
+・也可以按 ＋ 或把檔案拖進對話框：Excel、CSV、PDF、Word（.docx）、文字檔、截圖都可以
 
-表單裡的身分證、帳號、地址等個資不會傳給 AI，只在這個頁面裡整理；你在對話框打的文字和附的截圖會交給 Claude。</div>
+試算表、Excel、CSV 和 Word 裡的表格只在這個頁面裡整理，身分證、帳號、地址等個資不會傳給 AI；你打的文字、截圖、PDF 頁面和 Word 的一般文字會交給 Claude 判讀。</div>
       <div class="sugg" id="sugg">
         <button type="button" data-latest="1"><b>匯入最新的報名表</b><span>左邊清單最上面那一份</span></button>
         <button type="button" data-t="新增活動：12/20–12/21 羅技快閃，台北信義區，PG 每天 10:00–18:00 需要 4 人，時薪 200，1/15 發薪"><b>建立新活動與班別</b><span>用一句話描述活動需求</span></button>
@@ -155,14 +156,14 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <div class="dock">
       <div class="composer" id="composer">
         <div class="files" id="staged" hidden></div>
-        <textarea id="box" rows="2" placeholder="輸入需求或貼上試算表連結…（Enter 送出，Shift+Enter 換行）" aria-label="訊息"></textarea>
+        <textarea id="box" rows="2" placeholder="輸入需求、貼上試算表連結，或拖進檔案／截圖…（Enter 送出，Shift+Enter 換行）" aria-label="訊息"></textarea>
         <div class="bar">
-          <button class="icon" id="attach" type="button" title="加入截圖" aria-label="加入截圖"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+          <button class="icon" id="attach" type="button" title="加入檔案或截圖（Excel、CSV、PDF、Word、文字檔、圖片）" aria-label="加入檔案或截圖"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
           <span class="grow" id="bar-msg"></span>
           <button class="icon" id="stop" type="button" title="停止" aria-label="停止" hidden><svg viewBox="0 0 16 16" fill="currentColor"><rect x="4.5" y="4.5" width="7" height="7" rx="1.2"/></svg></button>
           <button class="icon go" id="send" type="button" title="送出" aria-label="送出"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button>
         </div>
-        <input id="file" type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif">
+        <input id="file" type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.xlsx,.xls,.xlsm,.ods,.csv,.tsv,.docx,.txt,.md,.json">
       </div>
     </div>
   </section>
@@ -208,7 +209,8 @@ const $ = id => document.getElementById(id);
 const FOLDER = '18YMg_0INusMi4Jyo7n0nA3tbyHjTmfk5';
 const SHEETS = 'Google Sheets', DRIVE = 'Google Drive';
 const ST = { event: null, shifts: [], people: [], source: null, view: 'all', table: null };
-let mcp = null, sample = null, history = [], busy = null, staged = [];
+let mcp = null, sample = null, history = [], busy = null, staged = [], imgOK = true, fileSeq = 0;
+const localTables = new Map(); // 使用者上傳的表格檔：只在本頁解析，AI 只看標題與遮蔽後的樣本
 const allowed = new Set();   // AI 只能讀使用者自己貼上或點選的試算表
 
 /* ---------- 小工具 ---------- */
@@ -396,25 +398,34 @@ $('copy').onclick = async () => {
 
 /* ---------- AI 工具 ---------- */
 const TOOLS = [
-  { name: 'read_sheet', description: '讀一份 Google 試算表的分頁、第 1 列標題與前 4 列樣本（個資已遮蔽）。回傳 file_id、title、sheets、headers（欄位字母與標題）、samples、row_count。匯入報名表前一定先呼叫。',
-    inputSchema: { type: 'object', properties: { url: { type: 'string', description: '試算表連結或 ID' }, sheet: { type: 'string', description: '分頁名稱，不填用第一個' }, header_row: { type: 'integer', description: '標題列，預設 1' } }, required: ['url'] },
+  { name: 'read_sheet', description: '讀一份 Google 試算表，或使用者上傳的表格檔（Excel／CSV／Word 表格，用 file 參數給檔案代號，例如 f1）的分頁、標題列與前 4 列樣本（個資已遮蔽）。回傳 file_id、title、sheets、headers（欄位字母與標題）、samples、row_count。匯入報名表前一定先呼叫。',
+    inputSchema: { type: 'object', properties: { url: { type: 'string', description: 'Google 試算表連結或 ID' }, file: { type: 'string', description: '上傳檔案的代號（f1、f2…），和 url 二選一' }, sheet: { type: 'string', description: '分頁名稱，不填用第一個' }, header_row: { type: 'integer', description: '標題列，預設 1' } } },
     async execute(i) {
-      const id = sheetId(i.url); if (!id) throw new Error('看不懂這個試算表連結');
-      if (!allowed.has(id)) throw new Error('只能讀使用者在對話裡貼上或從左邊點選的試算表');
-      setStatus('讀取試算表…');
-      const meta = await sheetMeta(id); const sh = String(i.sheet || (meta.sheets[0] && meta.sheets[0].title) || '');
       const hr = Math.min(10, Math.max(1, Number(i.header_row) || 1));
-      const vals = await readSheet(id, `'${sh.replace(/'/g, "''")}'!A1:CZ3000`);
+      let id, meta, sh, vals, local = false;
+      if (i.file) {
+        const lt = localTables.get(String(i.file)); if (!lt) throw new Error('找不到這個上傳檔案代號');
+        local = true; id = 'local:' + i.file; meta = { title: lt.title, sheets: lt.sheets.map(s => ({ title: s.title })) };
+        const s = lt.sheets.find(x => x.title === String(i.sheet || '')) || lt.sheets[0]; if (!s) throw new Error('這個檔案沒有表格');
+        sh = s.title; vals = s.vals.slice(0, 3000);
+      } else {
+        id = sheetId(i.url); if (!id) throw new Error('看不懂這個試算表連結');
+        if (!allowed.has(id)) throw new Error('只能讀使用者在對話裡貼上或從左邊點選的試算表');
+        setStatus('讀取試算表…');
+        meta = await sheetMeta(id); sh = String(i.sheet || (meta.sheets[0] && meta.sheets[0].title) || '');
+        vals = await readSheet(id, `'${sh.replace(/'/g, "''")}'!A1:CZ3000`);
+      }
       if (vals.length >= 3000) throw new Error('這個分頁超過 3000 列，請先拆成較小的表');
       const head = vals[hr - 1] || [];
       // 標題列只能是標題：看起來像資料（身分證、長串數字）就拒絕，避免把個資當標題送出
-      if (head.some(c => /[A-Za-z][1289]\d{8}/.test(String(c)) || /\d{7,}/.test(String(c).replace(/[\s-]/g, '')) && !/EX|例|範例/i.test(String(c)))) throw new Error('第 ' + hr + ' 列看起來是資料不是標題，請換一列');
+      if (head.some(c => /[A-Za-z][1289]\d{8}/.test(String(c)) || /[^\s@]+@[^\s@]+\.[a-z]{2,}/i.test(String(c)) || /\d{7,}/.test(String(c).replace(/[\s-]/g, '')) && !/EX|例|範例/i.test(String(c)))) throw new Error('第 ' + hr + ' 列看起來是資料不是標題，請換一列');
       // 換了另一份表：清掉上一份的活動、班別與名單，避免混用
       if (ST.source && ST.source.file_id !== id || ST.table && ST.table.id !== id) { ST.event = null; ST.shifts = []; ST.people = []; ST.source = null; ST.view = 'all'; render(); }
-      ST.table = { id, title: meta.title, sheet: sh, vals };
+      ST.table = { id, title: meta.title, sheet: sh, vals, local };
       const body = vals.slice(hr).filter(r => r.some(c => String(c).trim()));
       return { file_id: id, title: meta.title, sheets: meta.sheets.map(s => s.title), sheet: sh,
-        headers: head.map((h, c) => ({ col: colName(c), header: String(h).slice(0, 80) })).filter(h => h.header),
+        // 標題只給前 40 字，數字串一律遮掉，避免標題列夾帶個資
+        headers: head.map((h, c) => ({ col: colName(c), header: String(h).replace(/\d{5,}/g, '＊').slice(0, 40) })).filter(h => h.header),
         samples: body.slice(0, 4).map(r => Object.fromEntries(head.map((h, c) => [colName(c), mask(r[c])]).filter(([, v]) => v))), row_count: body.length };
     } },
   { name: 'apply_mapping', description: '把 read_sheet 讀到的表依欄位對應整理成人員名單，結果顯示在右邊。columns 的值是欄位字母。day_columns 是「7/18薪」這類每日薪資欄（要給完整日期）。year 是工作日期的西元年。回傳人數、日期範圍、金額合計與有問題的列號（不含個資）。',
@@ -455,10 +466,11 @@ const TOOLS = [
         byId.set(key, p);
       });
       ST.people = [...byId.values()].sort((a, b) => a.row - b.row);
-      ST.source = { file_id: ST.table.id, title: ST.table.title };
+      // 上傳的檔案沒有雲端 ID：不做「同一份表重複匯入」比對，靠後台的同名同日提醒
+      ST.source = { file_id: ST.table.local ? null : ST.table.id, title: ST.table.title };
       const all = ST.people.flatMap(p => p.work_dates).sort();
       ST.event = ST.event || {};
-      if (!ST.event.name) ST.event.name = ST.table.title.replace(/\s*\(回覆\)|\s*的副本/g, '').trim();
+      if (!ST.event.name) ST.event.name = ST.table.title.replace(/\s*\(回覆\)|\s*的副本|\.(xlsx|xlsm|xls|ods|csv|tsv|docx)$/gi, '').trim();
       if (all.length) { if (!ST.event.start_date) ST.event.start_date = all[0]; if (!ST.event.end_date) ST.event.end_date = all[all.length - 1]; }
       ST.view = 'all'; invalidate(); render(); renderSheets();
       const probs = ST.people.map(p => ({ row: p.row, ...peopleChecks(p) })).filter(x => x.errs.length || x.warns.length).slice(0, 40).map(x => ({ row: x.row, issues: [...x.errs, ...x.warns] }));
@@ -499,7 +511,8 @@ const RULES = `你是「沃克思」薪資系統的活動匯入助手，用繁�
    - 「7/18薪」「進場薪」這類每日薪資欄放 day_columns，給完整日期；「進場薪」若看不出日期就問使用者是哪一天。「清冊金額」不是撥款。
    - 年份：依表名、填表時間戳記判斷；不確定就問。
    - 「8/25撥款」這種欄位名稱代表發薪日 8/25：用 set_event 設 pay_date。
-2. 使用者描述新活動或貼截圖：用 set_event 設活動，用 set_shifts 設班別。缺日期、時間、人數時先問，一次只問一件事。
+   - 使用者上傳 Excel／CSV／Word 表格時，訊息會寫「表格檔 f1「檔名」」：用 read_sheet 的 file 參數讀（例如 file: "f1"），之後一樣呼叫 apply_mapping。
+2. 使用者描述新活動、貼截圖、PDF 或文件內容：用 set_event 設活動，用 set_shifts 設班別。缺日期、時間、人數時先問，一次只問一件事。截圖或 PDF 裡如果是整份人員名單，請使用者改上傳 Excel／CSV 或給試算表連結，不要從圖片抄個資。
 3. 完成後用兩三句話說明整理結果與要留意的列號，提醒按右下「匯入到後台」，在後台確認後才會寫入。
 規則：個資（身分證、帳號、地址、電話）不會給你看，不要要求使用者提供，也不要猜。不要編造資料。不能直接寫入系統，寫入一律在後台確認。`;
 
@@ -510,13 +523,22 @@ function setBusy(on) { $('send').hidden = on; $('stop').hidden = !on; $('c-ai').
 async function send(text) {
   text = String(text || '').trim();
   if ((!text && !staged.length) || busy) return;
+  if (staged.some(s => s.kind === 'image') && !imgOK) { bubble('err', '這裡不能送圖片給 Claude，請移除圖片。'); return; }
   if (!sample) { bubble('err', '這個畫面無法使用 Claude。請在 claude.ai 開啟本頁並允許使用 Claude。'); return; }
   $('sugg') && $('sugg').remove();
-  const imgs = staged.map(s => s.file); staged = []; renderStaged();
-  bubble('user', text + (imgs.length ? `\n（附 ${imgs.length} 張圖）` : ''));
-  for (const m of text.matchAll(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,80})/g)) allowed.add(m[1]);
+  const att = staged; staged = []; renderStaged();
+  const imgs = att.filter(s => s.kind === 'image').map(s => s.file), tabs = att.filter(s => s.kind === 'table'), txts = att.filter(s => s.kind === 'text');
+  const tags = [imgs.length && `${imgs.length} 張圖`, ...tabs.map(s => '表格檔 ' + s.name), ...txts.map(s => '文件 ' + s.name)].filter(Boolean);
+  bubble('user', (text || '請看附件') + (tags.length ? `\n（附 ${tags.join('、')}）` : ''));
+  // 表格檔只告訴 AI 代號與分頁，內容由 read_sheet 遮蔽後提供；文件文字直接附上
+  const extra = tabs.map(s => `\n\n（使用者上傳了表格檔 ${s.fid}「${s.name}」，分頁：${s.info}。請用 read_sheet 的 file: "${s.fid}" 讀取）`).join('')
+    + txts.map(s => `\n\n【附件「${s.name}」內容${s.cut ? '（太長，只附前 ' + MAX_TEXT + ' 字）' : ''}】\n${s.text}`).join('');
+  // 只有使用者自己打的文字可以授權讀試算表，附件內文裡的連結不算
+  const typed = text;
+  text = (text || '請看附件') + extra;
+  for (const m of typed.matchAll(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,80})/g)) allowed.add(m[1]);
   const state = { event: ST.event, shifts: ST.shifts.length, people: ST.people.length };
-  history.push({ role: 'user', content: text || '請看附圖' });
+  history.push({ role: 'user', content: text });
   const msgs = history.map((m, i) => i === 0 ? { role: 'user', content: RULES + '\n\n使用者：' + m.content } : m);
   msgs[msgs.length - 1] = { role: 'user', content: msgs[msgs.length - 1].content + `\n\n（目前右邊：${JSON.stringify(state)}；今天 ${new Date().toISOString().slice(0, 10)}）` };
   const b = bubble('bot thinking', '思考中…'); busy = new AbortController(); setBusy(true);
@@ -529,7 +551,7 @@ async function send(text) {
   } catch (e) {
     b.remove(); history.pop();
     const c = e && e.code;
-    bubble('err', c === 'rate_limited' ? '用量暫時到上限，請稍後再試。' : c === 'not_granted' ? '需要允許這個頁面使用 Claude。' : c === 'aborted' || (e && e.name === 'AbortError') ? '已停止。' : '處理失敗：' + ((e && e.message) || '請再試一次'));
+    bubble('err', c === 'rate_limited' ? '用量暫時到上限，請稍後再試。' : c === 'not_granted' ? '需要允許這個頁面使用 Claude。' : c === 'aborted' || (e && e.name === 'AbortError') ? '已停止。' : '處理失敗，請再試一次' + (c ? '（' + String(c).replace(/[^\w-]/g, '').slice(0, 30) + '）' : '') + '。');
   } finally { busy = null; setBusy(false); }
 }
 $('send').onclick = () => { const t = $('box').value; $('box').value = ''; send(t); };
@@ -543,15 +565,99 @@ $('chat').addEventListener('click', e => {
 });
 $('reset').onclick = () => { if (busy) return; history = []; Object.assign(ST, { event: null, shifts: [], people: [], source: null, view: 'all', table: null }); $('chat').querySelectorAll('.msg:not(:first-child)').forEach(n => n.remove()); invalidate(); render(); renderSheets(); };
 
-/* 截圖 */
+/* 附件：截圖、PDF、Excel／CSV、Word、文字檔 */
+const LIBS = {
+  xlsx: ['https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', 'XLSX'],
+  pdf: ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', 'pdfjsLib'],
+  docx: ['https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js', 'mammoth']
+};
+const libP = {};
+function lib(k) {
+  const [src, g] = LIBS[k];
+  return libP[k] = libP[k] || new Promise((ok, no) => { if (window[g]) return ok(window[g]); const s = document.createElement('script'); s.src = src; s.onload = () => window[g] ? ok(window[g]) : no(new Error('元件載入失敗')); s.onerror = () => { libP[k] = null; no(new Error('元件載入失敗，請檢查網路')); }; document.head.appendChild(s); });
+}
+const extOf = f => (String(f.name || '').match(/\.([a-z0-9]+)$/i) || [, ''])[1].toLowerCase();
+const imgCount = () => staged.filter(s => s.kind === 'image').length;
+const MAX_IMG = 5, MAX_TEXT = 20000;
+const cellText = v => v == null ? '' : String(v).trim();
+function addTable(title, sheets) {
+  const fid = 'f' + (++fileSeq);
+  localTables.set(fid, { title, sheets: sheets.map(s => ({ title: s.title, vals: s.vals.slice(0, 3001).map(r => r.slice(0, 104).map(cellText)) })) });
+  return fid;
+}
+async function readOne(f) {
+  const ext = extOf(f);
+  if (f.size > 15 * 1024 * 1024) throw new Error('檔案超過 15MB');
+  if (/^image\/(png|jpeg|webp|gif)$/.test(f.type)) {
+    if (!imgOK) throw new Error('這裡不能送圖片給 Claude');
+    if (imgCount() >= MAX_IMG) throw new Error('圖片最多 ' + MAX_IMG + ' 張');
+    staged.push({ kind: 'image', file: f, name: f.name || '截圖', url: URL.createObjectURL(f) }); return;
+  }
+  if (/^(heic|heif)$/.test(ext) || /hei[cf]/.test(f.type)) throw new Error('iPhone 的 HEIC 照片請改用截圖或在相簿分享成 JPEG');
+  if (/^(xlsx|xlsm|xls|ods|csv|tsv)$/.test(ext)) {
+    const X = await lib('xlsx'); const buf = await f.arrayBuffer();
+    // 只解析每個分頁前 3001 列，避免超大檔把頁面卡住
+    const wb = /^(csv|tsv)$/.test(ext) ? X.read(new TextDecoder().decode(buf), { type: 'string', FS: ext === 'tsv' ? '\t' : undefined, sheetRows: 3001 }) : X.read(buf, { type: 'array', cellDates: false, sheetRows: 3001 });
+    if (wb.SheetNames.length > 30) throw new Error('分頁超過 30 個，請只留需要的分頁');
+    const sheets = wb.SheetNames.map(n => ({ title: n, vals: X.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: '', blankrows: false }) })).filter(s => s.vals.length);
+    if (!sheets.length) throw new Error('這個檔案沒有資料');
+    const fid = addTable(f.name, sheets);
+    staged.push({ kind: 'table', name: f.name, fid, info: sheets.map(s => s.title + '（' + s.vals.length + ' 列）').join('、') }); return;
+  }
+  if (ext === 'pdf' || f.type === 'application/pdf') {
+    if (!imgOK) throw new Error('這裡不能送圖片給 Claude，PDF 無法判讀');
+    const room = MAX_IMG - imgCount(); if (room <= 0) throw new Error('圖片最多 ' + MAX_IMG + ' 張');
+    const P = await lib('pdf');
+    P.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const doc = await P.getDocument({ data: new Uint8Array(await f.arrayBuffer()) }).promise;
+    const n = Math.min(doc.numPages, room);
+    for (let k = 1; k <= n; k++) {
+      const page = await doc.getPage(k), vp = page.getViewport({ scale: Math.min(2, 1600 / page.getViewport({ scale: 1 }).width) });
+      const cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height;
+      await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+      if (!blob) throw new Error('第 ' + k + ' 頁轉成圖片失敗，請改用截圖');
+      const file = new File([blob], f.name.replace(/\.pdf$/i, '') + ` 第${k}頁.jpg`, { type: 'image/jpeg' });
+      staged.push({ kind: 'image', file, name: file.name, url: URL.createObjectURL(file) });
+    }
+    if (doc.numPages > n) bubble('note', `「${f.name}」共 ${doc.numPages} 頁，只附上前 ${n} 頁。`);
+    return;
+  }
+  if (ext === 'docx') {
+    if (f.size > 10 * 1024 * 1024) throw new Error('Word 檔超過 10MB，請把名單另存成 Excel 或 CSV');
+    const M = await lib('docx'); const r = await M.convertToHtml({ arrayBuffer: await f.arrayBuffer() });
+    const dom = new DOMParser().parseFromString(r.value, 'text/html');
+    // Word 裡的表格（多半是名單）當表格檔在本頁處理；其餘文字交給 Claude
+    const tables = [...dom.querySelectorAll('table')].map((tb, k) => ({ title: '表格' + (k + 1), vals: [...tb.rows].map(tr => [...tr.cells].map(td => td.textContent)) })).filter(s => s.vals.length);
+    dom.querySelectorAll('table').forEach(tb => tb.remove());
+    const text = dom.body.textContent.replace(/\n{3,}/g, '\n\n').trim();
+    if (tables.length) { const fid = addTable(f.name, tables); staged.push({ kind: 'table', name: f.name, fid, info: tables.map(s => s.title + '（' + s.vals.length + ' 列）').join('、') }); }
+    if (text) staged.push({ kind: 'text', name: f.name, text: text.slice(0, MAX_TEXT), cut: text.length > MAX_TEXT });
+    if (!tables.length && !text) throw new Error('這份 Word 沒有內容');
+    return;
+  }
+  if (/^(txt|md|json)$/.test(ext) || /^text\/plain$/.test(f.type)) {
+    if (f.size > 2 * 1024 * 1024) throw new Error('文字檔超過 2MB');
+    const text = (await f.text()).trim(); if (!text) throw new Error('檔案是空的');
+    if ((text.match(/\uFFFD/g) || []).length > 20) throw new Error('看不懂這個檔案的編碼，請另存成 UTF-8 再上傳');
+    staged.push({ kind: 'text', name: f.name, text: text.slice(0, MAX_TEXT), cut: text.length > MAX_TEXT }); return;
+  }
+  if (ext === 'doc') throw new Error('舊版 Word（.doc）請另存成 .docx 或 PDF');
+  throw new Error('不支援這種檔案，請改用 Excel、CSV、PDF、Word（.docx）、文字檔或圖片');
+}
+async function stage(files) {
+  const list = [...files]; if (!list.length) return;
+  setStatus('處理檔案…');
+  for (const f of list) { try { await readOne(f); } catch (e) { bubble('err', `「${f.name || '檔案'}」：${e.message}`); } }
+  setStatus(''); renderStaged();
+}
 function renderStaged() {
   $('staged').hidden = !staged.length;
-  $('staged').innerHTML = staged.map((s, i) => `<span class="file"><img src="${s.url}" alt=""><span>${esc(s.file.name || '截圖')}</span><button type="button" data-i="${i}" aria-label="移除">×</button></span>`).join('');
-  $('staged').querySelectorAll('button').forEach(b => b.onclick = () => { URL.revokeObjectURL(staged[+b.dataset.i].url); staged.splice(+b.dataset.i, 1); renderStaged(); });
+  $('staged').innerHTML = staged.map((s, i) => `<span class="file">${s.kind === 'image' ? `<img src="${s.url}" alt="">` : `<b class="ftag">${s.kind === 'table' ? '表格' : '文字'}</b>`}<span>${esc(s.name)}${s.kind === 'table' ? '・' + esc(s.info) : ''}</span><button type="button" data-i="${i}" aria-label="移除">×</button></span>`).join('');
+  $('staged').querySelectorAll('button').forEach(b => b.onclick = () => { const s = staged[+b.dataset.i]; if (s.url) URL.revokeObjectURL(s.url); staged.splice(+b.dataset.i, 1); renderStaged(); });
 }
-function stage(files) { for (const f of files) if (/^image\//.test(f.type) && staged.length < 5) staged.push({ file: f, url: URL.createObjectURL(f) }); renderStaged(); }
 $('attach').onclick = () => $('file').click();
-$('file').onchange = () => { stage($('file').files); $('file').value = ''; };
+$('file').onchange = () => { const f = [...$('file').files]; $('file').value = ''; stage(f); };
 $('box').addEventListener('paste', e => { const f = [...(e.clipboardData && e.clipboardData.files || [])]; if (f.length) { e.preventDefault(); stage(f); } });
 const comp = $('composer');
 comp.addEventListener('dragover', e => { e.preventDefault(); comp.classList.add('drop'); });
@@ -569,7 +675,7 @@ render();
   const [m, s] = await Promise.all([window.claude.use('mcp'), window.claude.use('sample')]);
   mcp = m; sample = s;
   $('c-ai').className = 'chip ' + (sample ? 'ok' : 'bad'); $('c-ai').textContent = sample ? '助理：待命' : '助理：無法使用';
-  if (sample && sample.limits) { try { const l = await sample.limits(); if (!l.images) $('attach').hidden = true; } catch (e) {} }
+  if (sample && sample.limits) { try { const l = await sample.limits(); if (!l.images) imgOK = false; } catch (e) {} }
   if (mcp) loadSheets(); else { $('c-drive').className = 'chip bad'; $('c-drive').textContent = '雲端：無法使用'; $('sheet-msg').textContent = '這個畫面沒有連接 Google 雲端，可以直接在對話框貼試算表連結以外的活動需求。'; }
 })();
 })();
