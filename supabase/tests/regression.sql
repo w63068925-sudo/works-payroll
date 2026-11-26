@@ -109,14 +109,17 @@ begin
   if (select count(*) from public.contract_history where application_id = a1 and superseded_at is not null) <> 1 then fails := fails || ' [9g history not kept]'; end if;
 
   -- 10. 計薪：今天沒有班次時薪 → 活動預設 200；明天班次 250；人員設定 220 會蓋過活動預設但不蓋過班次
+  --     休息 30 分不計入工時但照常給薪：另列 paid_break（200×0.5＋250×0.5＝225），不推高加班
   insert into public.attendance(person_id, event_id, work_date, clock_in, clock_out, break_minutes, source) values
     (p1, ev, v_today, (v_today + time '10:00') at time zone 'Asia/Taipei', (v_today + time '18:30') at time zone 'Asia/Taipei', 30, 'manual'),
     (p1, ev, v_today + 1, (v_today + 1 + time '10:00') at time zone 'Asia/Taipei', (v_today + 1 + time '18:30') at time zone 'Asia/Taipei', 30, 'manual');
   c := public.payroll_compute(ev, p1);
-  if (c->>'gross')::numeric <> 3600 then fails := fails || ' [10a per-day rates gross=' || (c->>'gross') || ' expected 3600]'; end if;
+  if (c->>'gross')::numeric <> 3825 then fails := fails || ' [10a per-day rates gross=' || (c->>'gross') || ' expected 3825]'; end if;
+  if (select sum((it->>'amount')::numeric) from jsonb_array_elements(c->'items') it where it->>'code' = 'paid_break') is distinct from 225
+     or exists (select 1 from jsonb_array_elements(c->'items') it where it->>'code' like 'ot_%') then fails := fails || ' [10c paid break ' || (c->'items')::text || ']'; end if;
   update public.event_staff set rate = 220 where event_id = ev and person_id = p1;
   c := public.payroll_compute(ev, p1);
-  if (c->>'gross')::numeric <> 3760 then fails := fails || ' [10b staff override gross=' || (c->>'gross') || ' expected 3760]'; end if;
+  if (c->>'gross')::numeric <> 3995 then fails := fails || ' [10b staff override gross=' || (c->>'gross') || ' expected 3995]'; end if;
 
   -- 11. 發布：薪資單本身、或本人在這場活動的「須處理」問題都要擋
   insert into public.payslips(person_id, event_id, gross, net, deductions, status, pay_date) values (p1, ev, 100, 100, 0, 'draft', v_today + 20) returning id into v_slip;

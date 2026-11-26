@@ -1729,7 +1729,7 @@ begin
   v_base_rh := v_rh;
 
   -- 同一天多筆出勤（中途離開再簽到）合併成一天計算；兩段之間的空檔算休息
-  for a in select work_date, sum(public.att_minutes(t))::int as mins,
+  for a in select work_date, sum(public.att_minutes(t))::int as mins, sum(t.break_minutes)::int as paid_break,
       (sum(t.break_minutes) + round(extract(epoch from max(t.clock_out) - min(t.clock_in)) / 60 - sum(extract(epoch from t.clock_out - t.clock_in) / 60)))::int as break_minutes
     from public.attendance t where event_id = p_event and person_id = p_person and clock_in is not null and clock_out is not null group by work_date order by work_date loop
     m := a.mins;
@@ -1795,6 +1795,11 @@ begin
       amt := round(m / 60.0 * v_rh * 2); gross := gross + amt;
       items := items || jsonb_build_object('code','regular_leave','label','例假出勤（加倍）','work_date', a.work_date, 'hours', round(m/60.0,2), 'rate', round(v_rh*2,2), 'amount', amt, 'sort', 10);
       warns := warns || jsonb_build_object('severity','error','code','regular_leave_work','detail', format('%s 是連續出勤第 7 天（例假），除天災事變外不得出勤（勞基法第36、40條），已加倍計算並應另給補休', a.work_date));
+    end if;
+    -- 休息時間依合約不計入工時（不算進加班門檻），但公司照常給薪：按當日時薪 ×1 另列一項（日薪制已含在日薪內）
+    if v_type = 'hourly' and coalesce(a.paid_break, 0) > 0 then
+      amt := round(a.paid_break / 60.0 * v_rh); gross := gross + amt;
+      items := items || jsonb_build_object('code','paid_break','label','休息時間（照常給薪）','work_date', a.work_date, 'hours', round(a.paid_break/60.0,2), 'rate', v_rh, 'amount', amt, 'sort', 19);
     end if;
   end loop;
 

@@ -344,7 +344,7 @@ function viewEvents() {
       <div class="row"><div class="grow" style="min-width:200px"><label for="en">活動名稱</label><input id="en" type="text" placeholder="12 月校園巡迴" required></div>
       <div><label for="es">開始日</label><input id="es" type="date" required></div><div><label for="ee">結束日（單日可留空）</label><input id="ee" type="date"></div></div>
       <div class="row" style="margin-top:12px"><div><label for="eh">預設時薪</label><input id="eh" type="text" inputmode="decimal" placeholder="200" style="width:120px"></div>
-      <div><label for="eb">滿 4 小時扣休息（分）</label><input id="eb" type="text" inputmode="numeric" value="30" style="width:150px"></div>
+      <div><label for="eb">滿 4 小時休息（分，照常給薪）</label><input id="eb" type="text" inputmode="numeric" value="30" style="width:150px"></div>
       ${payModeHtml('np', null)}
       <span class="grow"></span><button type="button" class="btn ghost" id="nc">取消</button><button class="btn">建立活動</button></div><div id="nm" style="margin-top:12px"></div></form>`;
     $('en').focus();
@@ -622,7 +622,7 @@ const stepAtt = {
     const open = c.att.filter(r => r.clock_in && !r.clock_out).length;
     return `<div class="card pad" style="margin-bottom:14px"><div class="row">
         <div><label for="hr">預設時薪</label><input id="hr" type="text" inputmode="decimal" value="${esc(cfg.default_hourly_rate == null ? '' : Number(cfg.default_hourly_rate))}" placeholder="200" style="width:110px"></div>
-        <div><label for="br">滿 4 小時扣休息（分）</label><input id="br" type="text" inputmode="numeric" value="${esc(cfg.default_break_minutes)}" style="width:150px"></div>
+        <div><label for="br">滿 4 小時休息（分，照常給薪）</label><input id="br" type="text" inputmode="numeric" value="${esc(cfg.default_break_minutes)}" style="width:150px"></div>
         <div><label for="ins">勞保月投保薪資</label><input id="ins" type="text" inputmode="numeric" value="${esc(Number(cfg.insured_salary))}" style="width:130px"></div>
         <button class="btn ghost" id="cfgsave">儲存設定</button><span class="grow"></span>
         <button class="btn ghost" id="addatt">補登出勤</button><button class="btn" id="gen">依出勤產生薪資單</button></div></div>
