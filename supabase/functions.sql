@@ -302,7 +302,7 @@ begin
         'basis', s.basis, 'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
         'gross', s.gross, 'allowances', s.allowances, 'deductions', s.deductions, 'net', s.net, 'status', s.status,
         'pay_bank_code', s.pay_bank_code, 'pay_bank_branch', s.pay_bank_branch, 'pay_account_name', s.pay_account_name, 'pay_account', s.pay_account,
-        'missing', public.person_incomplete_text(p.id), 'has_line', p.line_user_id is not null, 'has_password', p.password_hash is not null,
+        'missing', public.person_incomplete_text(p.id), 'phone', p.phone, 'has_line', p.line_user_id is not null, 'has_password', p.password_hash is not null,
         'issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
             from public.data_issues i where i.payslip_id = s.id or (i.payslip_id is null and i.person_id = s.person_id and (i.event_id is null or i.event_id = s.event_id))), '[]'::jsonb)
       ) order by s.source_row nulls last, p.name)
@@ -492,7 +492,7 @@ AS $function$
 declare v_actor text := public.admin_actor(p_token);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  if p_kind is null or p_kind not in ('insurance_roster', 'accepted_list', 'event_step') then return jsonb_build_object('ok', false, 'error', 'bad_kind'); end if;
+  if p_kind is null or p_kind not in ('insurance_roster', 'accepted_list', 'event_step', 'missing_docs') then return jsonb_build_object('ok', false, 'error', 'bad_kind'); end if;
   insert into public.audit_log(actor, action, table_name, detail)
   values (v_actor, 'export_' || p_kind, 'people', jsonb_build_object('rows', greatest(coalesce(p_rows, 0), 0), 'filter', left(coalesce(p_detail, '{}'::jsonb)::text, 2000)));
   return jsonb_build_object('ok', true);
@@ -578,7 +578,7 @@ declare v_actor text := public.admin_actor(p_token);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true, 'username', v_actor,
-    'employer', (select jsonb_build_object('id', id, 'name', name, 'legal_name', legal_name, 'tax_id', tax_id) from public.employers order by created_at limit 1),
+    'employer', (select jsonb_build_object('id', id, 'name', name, 'legal_name', legal_name, 'tax_id', tax_id, 'contact', public.setting('contact_info')) from public.employers order by created_at limit 1),
     'events', coalesce((select jsonb_agg(x order by (x->>'start_date') desc nulls last) from (
       select jsonb_build_object('id', e.id, 'name', e.name, 'start_date', e.start_date, 'end_date', e.end_date,
         'pay_date', e.pay_date, 'pay_within_days', e.pay_within_days, 'closed_at', e.closed_at, 'archived_at', e.archived_at,
@@ -1065,11 +1065,15 @@ begin
   if p_patch ? 'tax_id' and nullif(btrim(p_patch->>'tax_id'),'') is not null and btrim(p_patch->>'tax_id') !~ '^\d{8}$' then
     return jsonb_build_object('ok', false, 'error', 'bad_tax_id');
   end if;
+  if length(coalesce(p_patch->>'contact', '')) > 200 then return jsonb_build_object('ok', false, 'error', 'contact_too_long'); end if;
   select id into v_id from public.employers order by created_at limit 1;
   update public.employers set
     legal_name = case when p_patch ? 'legal_name' then nullif(btrim(p_patch->>'legal_name'),'') else legal_name end,
     tax_id = case when p_patch ? 'tax_id' then nullif(btrim(p_patch->>'tax_id'),'') else tax_id end
   where id = v_id;
+  if p_patch ? 'contact' then
+    update public.app_settings set value = nullif(btrim(p_patch->>'contact'), '') where key = 'contact_info';
+  end if;
   insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'employer_updated', 'employers', v_id, p_patch);
   return jsonb_build_object('ok', true);
 end $function$
@@ -2469,6 +2473,14 @@ AS $function$
 $function$
 ;
 
+CREATE OR REPLACE FUNCTION public.payroll_contact()
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$ select public.setting('contact_info') $function$
+;
+
 CREATE OR REPLACE FUNCTION public.setting(p_key text)
  RETURNS text
  LANGUAGE sql
@@ -2907,3 +2919,8 @@ end $function$
 revoke all on function public.admin_remind_incomplete(text, uuid) from public;
 grant execute on function public.admin_remind_incomplete(text, uuid) to anon, authenticated;
 
+
+-- 巡檢第二輪：缺資料名單匯出、登入頁聯絡窗口
+insert into public.app_settings(key, value) values ('contact_info', null) on conflict (key) do nothing;
+revoke all on function public.payroll_contact() from public;
+grant execute on function public.payroll_contact() to anon, authenticated;

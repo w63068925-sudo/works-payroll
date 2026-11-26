@@ -505,7 +505,7 @@ const recruitApps = {
         <div class="card tablebox"><table><thead><tr>${shift ? '<th><input type="checkbox" id="all" aria-label="全選"></th>' : ''}<th>姓名</th><th>${shift ? '這個班次' : '報名班次'}</th><th class="r">合作過</th><th>契約</th></tr></thead>
         <tbody>${rows.map(a => `<tr data-k="${esc(a.app_id)}" class="${S.detail && S.detail.key === a.app_id ? 'on' : ''}">${shift ? `<td><input type="checkbox" class="ck" data-id="${esc(a.app_id)}" ${S.sel.has(a.app_id) ? 'checked' : ''} aria-label="選取 ${esc(a.name)}"></td>` : ''}
           <td>${esc(a.name)}${a.source === 'self' && !a.past_events ? ' <span class="badge ok">新人</span>' : ''}${a.has_photo ? ' <span class="dim">有照片</span>' : ''}<div class="dim">${esc(a.phone || '')}</div></td>
-          <td style="white-space:normal">${shift ? '<span class="badge ' + AST[a.shifts[shift.id]][1] + '">' + AST[a.shifts[shift.id]][0] + '</span>' : rc.shifts.filter(x => a.shifts[x.id]).map(x => '<span class="badge ' + AST[a.shifts[x.id]][1] + '" title="' + esc(AST[a.shifts[x.id]][0]) + '">' + esc(md(x.work_date)) + ' ' + esc(AST[a.shifts[x.id]][0]) + '</span>').join(' ')}</td>
+          <td style="white-space:normal">${shift ? '<span class="badge ' + AST[a.shifts[shift.id]][1] + '">' + AST[a.shifts[shift.id]][0] + '</span>' : rc.shifts.filter(x => a.shifts[x.id]).map(x => '<span class="badge ' + AST[a.shifts[x.id]][1] + '" title="' + esc(shiftLabel(x) + ' ' + AST[a.shifts[x.id]][0]) + '">' + esc(md(x.work_date) + (rc.shifts.some(y => y !== x && y.work_date === x.work_date) ? ' ' + x.start + (x.role ? ' ' + x.role : '') : '')) + ' ' + esc(AST[a.shifts[x.id]][0]) + '</span>').join(' ')}</td>
           <td class="r">${a.past_events ? a.past_events + ' 場' : '—'}</td>
           <td>${a.contract_accepted_at ? '<span class="badge ok">已確認</span>' : Object.values(a.shifts).includes('accepted') ? '<span class="badge warn">待確認</span>' : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">還沒有人報名。把報名連結傳到 LINE 群組。</td></tr>'}</tbody></table></div>
         ${shift && sel.length ? `<div class="bulk"><span class="grow">已選 ${sel.length} 人</span><button class="btn" data-dec="accepted">錄取</button><button class="btn ghost" data-dec="waitlist">備取</button><button class="btn ghost" data-dec="rejected">不錄取</button></div>` : ''}`)}`;
@@ -669,9 +669,13 @@ const stepPublish = {
     // 資料不齊的人：薪資單發布了，工讀生登入也看不到
     const hid = [...new Map(live.filter(s => s.missing).map(s => [s.person_id, s])).values()];
     const hidLine = hid.filter(s => s.has_line).length, hidBank = hid.filter(s => /匯款帳戶/.test(s.missing)).length, hidDocs = hid.filter(s => /身分證|存摺/.test(s.missing)).length;
+    // LINE 金鑰沒設好時，提醒排進佇列也不會送出，不讓管理員以為已通知
+    const ls = S.lineSt, lineOff = !!(ls && (!ls.ok || !ls.configured || !ls.valid));
     const hidBox = hid.length ? `<div class="msg warn">${hid.length} 人資料不齊，薪資單發布後他們登入也看不到（缺證件 ${hidDocs} 人、缺匯款帳戶 ${hidBank} 人）。
-      ${hidLine ? `<button class="btn ghost sm" id="remind" style="margin-left:6px">用 LINE 提醒補資料（${hidLine} 人）</button>` : ''}
-      ${hid.length - hidLine ? `<div class="dim" style="margin-top:4px">其中 ${hid.length - hidLine} 人沒有綁 LINE，需要另外聯絡。</div>` : ''}</div>` : '';
+      <button class="btn ghost sm" id="missx" style="margin-left:6px">下載缺資料名單（含電話）</button>
+      ${lineOff ? `<div style="margin-top:4px"><b>${ls.ok ? 'LINE 通知還沒設定好' : '無法確認 LINE 通知狀態'}，系統發不出任何 LINE 通知</b>，請用名單上的電話自行聯絡。設定在「設定 › LINE 通知」。</div>`
+        : `${hidLine && ls ? `<button class="btn ghost sm" id="remind" style="margin-left:6px">用 LINE 提醒補資料（${hidLine} 人）</button>` : ''}
+      ${hid.length - hidLine ? `<div class="dim" style="margin-top:4px">其中 ${hid.length - hidLine} 人沒有綁 LINE，需要另外聯絡。</div>` : ''}`}</div>` : '';
     return splitWrap(`${hidBox}<div class="chips">${[['all', '全部', live.length], ['draft', '草稿', live.filter(s => s.status === 'draft').length], ['published', '已發布', live.filter(s => s.status === 'published').length]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
       <div class="card tablebox"><table>
       <thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${rows.length && rows.every(s => S.sel.has(s.id)) ? 'checked' : ''}></th><th>姓名</th><th class="r">應發</th><th class="r">扣款</th><th class="r">實發</th><th>狀態</th></tr></thead>
@@ -690,6 +694,18 @@ const stepPublish = {
     const all = $('all'); if (all) all.onchange = () => { const f = S.filter.pub || 'all'; S.cache.slips.filter(s => s.status !== 'void' && (f === 'all' || s.status === f)).forEach(s => all.checked ? S.sel.add(s.id) : S.sel.delete(s.id)); S.confirm = null; viewEvent(e.id, 'publish'); };
     const b = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
     b('pub', () => { S.confirm = 'published'; viewEvent(e.id, 'publish'); });
+    if (S.lineSt === undefined && S.cache.slips.some(s => s.status !== 'void' && s.missing)) {
+      S.lineSt = null; lineCall('status').catch(() => ({ ok: false })).then(st => { S.lineSt = st; if (location.hash === '#/events/' + e.id + '/publish') viewEvent(e.id, 'publish'); });
+    }
+    b('missx', async () => {
+      const hid = [...new Map(S.cache.slips.filter(s => s.status !== 'void' && s.missing).map(s => [s.person_id, s])).values()];
+      const log = await rpc('admin_log_export', { p_kind: 'missing_docs', p_rows: hid.length, p_detail: { event_id: e.id } });
+      if (!log.ok) { flash('err', '無法寫入匯出紀錄，這次沒有產生檔案。'); return; }
+      const blob = buildXlsx([{ name: '缺資料名單', cols: [{ title: '姓名', width: 10 }, { title: '電話', width: 13 }, { title: '還缺', width: 30 }, { title: '已綁 LINE', width: 10 }, { title: '能登入', width: 8 }],
+        rows: hid.map(s => [s.name || '', s.phone || '', s.missing, s.has_line ? '是' : '否', s.has_password ? '是' : '否（還沒設密碼）']) }]);
+      downloadBlob(blob, `缺資料名單_${e.name.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40)}_${today()}.xlsx`);
+      flash('ok', `已下載 ${hid.length} 人的缺資料名單。`);
+    });
     b('remind', async () => {
       const el = $('remind'); el.disabled = true; el.textContent = '傳送中…';
       const r = await rpc('admin_remind_incomplete', { p_event: e.id });
@@ -770,6 +786,7 @@ async function openDetail(kind, key, e, keepScroll) {
   S.detail = { kind, key };
   document.querySelectorAll('tbody tr[data-k]').forEach(tr => tr.classList.toggle('on', tr.dataset.k === key));
   const box = $('detail'); if (!box) return;
+  if (!keepScroll && matchMedia('(max-width:1080px)').matches) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const close = '<button class="link x" id="dx">關閉</button>';
   const bindClose = () => { $('dx').onclick = () => { S.detail = null; box.innerHTML = '<p class="empty" style="padding:30px 0">點左側一筆查看明細</p>'; document.querySelectorAll('tbody tr.on').forEach(tr => tr.classList.remove('on')); }; };
   if (kind === 'app') {
@@ -1311,7 +1328,7 @@ function rosterGroups(rows) {
   return out;
 }
 async function viewRoster() {
-  const F = S.filter.roster = S.filter.roster || { q: '', event_id: '', from: '', to: '', statuses: ['accepted', 'attended'], view: 'all' };
+  const F = S.filter.roster = S.filter.roster || { q: '', event_id: '', from: addDays(today(), -31), to: '', statuses: ['accepted', 'attended'], view: 'all' };
   S.rsel = S.rsel || new Set();
   const r = await rpc('admin_roster', { p_filter: { q: F.q, event_id: F.event_id, from: F.from, to: F.to, statuses: F.statuses } });
   if (r.ok === false) { shell('roster', '<div class="msg err">篩選條件有誤，請檢查日期。</div>'); return; }
@@ -1324,8 +1341,8 @@ async function viewRoster() {
   const evOpts = S.ov.events.slice().sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || '')));
   const stLabel = Object.fromEntries(R_STATUS);
   shell('roster', `
-    <div class="head"><div><h1>加保名冊</h1><p class="sub">同一人報名多個日期時，連續的日期合併成一段加保期間，不連續的分開列。匯出只限管理員，每次匯出都會留下紀錄。</p></div>
-      <div class="row"><button class="btn ghost" id="xsel" ${S.rsel.size ? '' : 'disabled'}>匯出勾選（${S.rsel.size}）</button><button class="btn" id="xall" ${list.length ? '' : 'disabled'}>${F.event_id && !F.from && !F.to && F.view === 'all' ? '匯出整場名單' : '匯出全部'}（${list.length}）</button></div></div>
+    <div class="head"><div><h1>加保名冊</h1><p class="sub">同一人報名多個日期時，連續的日期合併成一段加保期間，不連續的分開列。預設只看最近一個月起的工作日，要看更早的請改「工作日期起」。匯出只限管理員，每次匯出都會留下紀錄。</p></div>
+      <div class="row"><button class="btn ghost" id="xsel" ${S.rsel.size && !r.truncated ? '' : 'disabled'}>匯出勾選（${S.rsel.size}）</button><button class="btn" id="xall" ${list.length && !r.truncated ? '' : 'disabled'}>${r.truncated ? '資料不完整，無法匯出' : (F.event_id && !F.from && !F.to && F.view === 'all' ? '匯出整場名單' : '匯出全部') + '（' + list.length + '）'}</button></div></div>
     <div class="card pad" style="margin-bottom:14px">
       <div class="row">
         <div style="flex:2;min-width:200px"><label for="rq">活動名稱</label><input id="rq" type="search" placeholder="輸入部分名稱" value="${esc(F.q)}"></div>
@@ -1342,7 +1359,7 @@ async function viewRoster() {
       <button class="card stat ${F.view === 'need' ? 'sel' : ''}" data-v="need" aria-pressed="${F.view === 'need'}"><div class="k">需加保</div><div class="v">${need.length}</div><div class="dim">承攬不需加保</div></button>
       <button class="card stat ${F.view === 'bad' ? 'sel' : ''}" data-v="bad" aria-pressed="${F.view === 'bad'}"><div class="k">資料缺漏</div><div class="v" style="${bad.length ? 'color:var(--warn)' : ''}">${bad.length}</div><div class="dim">姓名、身分證、生日</div></button>
     </div>
-    ${r.truncated ? '<div class="msg warn">符合條件的資料超過 5,000 筆，只顯示前 5,000 筆，請縮小篩選範圍。</div>' : ''}
+    ${r.truncated ? `<div class="msg err">符合條件的工作日共 ${Number(r.total).toLocaleString()} 筆，超過一次能處理的 5,000 筆，下面只列出一部分，<b>名冊不完整，已停用匯出</b>。請指定活動或縮小工作日期範圍。</div>` : ''}
     <div class="card tablebox">${list.length ? `<table><thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${list.every(g => S.rsel.has(g.key)) ? 'checked' : ''}></th><th>姓名</th><th>身分證字號</th><th>出生日期</th><th>活動</th><th>加保期間</th><th class="r">天數</th><th>狀態</th><th>檢查</th></tr></thead><tbody>
       ${list.map(g => `<tr><td><input type="checkbox" class="ck" data-k="${esc(g.key)}" ${S.rsel.has(g.key) ? 'checked' : ''} aria-label="選取 ${esc(g.name)}"></td>
         <td>${esc(g.name || '—')}</td><td style="font-family:var(--num)">${esc(g.national_id || '—')}</td><td style="font-family:var(--num)">${g.birth_date ? esc(rocDate(g.birth_date)) : '—'}</td>
@@ -1360,10 +1377,10 @@ async function viewRoster() {
   $('rclear').onclick = () => { S.filter.roster = null; S.rsel.clear(); reload(); };
   on('.rst', 'click', (ev, b) => { const k = b.dataset.s; F.statuses = F.statuses.includes(k) ? F.statuses.filter(x => x !== k) : F.statuses.concat(k); if (!F.statuses.length) F.statuses = ['accepted']; reload(); });
   on('button.stat', 'click', (ev, b) => { F.view = b.dataset.v; reload(); });
-  on('.ck', 'change', (ev, c) => { c.checked ? S.rsel.add(c.dataset.k) : S.rsel.delete(c.dataset.k); $('xsel').textContent = '匯出勾選（' + S.rsel.size + '）'; $('xsel').disabled = !S.rsel.size; });
+  on('.ck', 'change', (ev, c) => { c.checked ? S.rsel.add(c.dataset.k) : S.rsel.delete(c.dataset.k); $('xsel').textContent = '匯出勾選（' + S.rsel.size + '）'; $('xsel').disabled = !S.rsel.size || !!r.truncated; });
   if ($('all')) $('all').onchange = () => { list.forEach(g => $('all').checked ? S.rsel.add(g.key) : S.rsel.delete(g.key)); reload(); };
   const doExport = async picked => {
-    if (!picked.length) return;
+    if (!picked.length || r.truncated) return;
     const btns = [$('xsel'), $('xall')]; btns.forEach(b => { b.disabled = true; });
     try {
       const log = await rpc('admin_log_export', { p_kind: 'insurance_roster', p_rows: picked.length, p_detail: { q: F.q, event_id: F.event_id, from: F.from, to: F.to, statuses: F.statuses, view: F.view, selected: picked.length !== list.length } });
@@ -1406,6 +1423,7 @@ async function viewPeople(id) {
 async function openPerson(id) {
   document.querySelectorAll('tbody tr[data-k]').forEach(tr => tr.classList.toggle('on', tr.dataset.k === id));
   const box = $('detail'); box.innerHTML = '<p class="sub">載入中…</p>';
+  if (matchMedia('(max-width:1080px)').matches) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
   const r = await rpc('admin_person', { p_id: id }); if (!r.ok) { box.innerHTML = '<p class="empty">找不到這個人</p>'; return; }
   const p = r.person, DOCS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];
   box.innerHTML = `<h1 style="font-size:19px">${esc(p.name)}</h1><p class="sub" style="margin:4px 0 12px">${{ self: '自行登錄', legacy: '舊表匯入', test: '測試資料' }[p.source] || esc(p.source)}　建檔 ${esc(d(p.created_at))}</p>
@@ -1471,17 +1489,26 @@ async function viewDoc(personId, kind) {
 
 /* ---------- 薪資發放 ---------- */
 function viewPayouts() {
-  const t = today();
-  const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => (payDateOf(a) || '9999') < (payDateOf(b) || '9999') ? -1 : 1);
-  const todo = evs.filter(e => !payDateOf(e) || e.published < e.total - e.void);
-  shell('payouts', `<div class="head"><div><h1>薪資發放</h1><p class="sub">依發薪日排序。未設發薪日或尚未全部發布的活動排在待辦。</p></div></div>
-    <div class="stats"><div class="card stat"><div class="k">待辦活動</div><div class="v" style="${todo.length ? 'color:var(--warn)' : ''}">${todo.length}</div></div>
-      <div class="card stat"><div class="k">未發布薪資單</div><div class="v">${evs.reduce((a, e) => a + (e.total - e.void - e.published), 0)}</div></div>
-      <div class="card stat"><div class="k">30 天內應發總額</div><div class="v">${money(evs.filter(e => payDateOf(e) && payDateOf(e) >= t && payDateOf(e) <= addDays(t, 30)).reduce((a, e) => a + Number(e.net_sum || 0), 0))}</div></div></div>
+  const t = today(), soonEnd = addDays(t, 30);
+  const pending = e => e.total - e.void - e.published;
+  const late = e => payDateOf(e) && payDateOf(e) < t && pending(e) > 0;
+  const isTodo = e => !payDateOf(e) || pending(e) > 0;
+  const isSoon = e => payDateOf(e) && payDateOf(e) >= t && payDateOf(e) <= soonEnd;
+  const rank = e => late(e) ? 0 : isTodo(e) && payDateOf(e) ? 1 : isTodo(e) ? 2 : 3;
+  const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => rank(a) - rank(b) || ((payDateOf(a) || '9999') < (payDateOf(b) || '9999') ? -1 : 1));
+  const todo = evs.filter(isTodo), soon = evs.filter(isSoon);
+  const v = S.filter.payouts = S.filter.payouts || (todo.length ? 'todo' : 'soon');
+  const list = v === 'todo' ? todo : v === 'soon' ? soon : evs;
+  const card = (k, label, val, dim, warn) => `<button class="card stat ${v === k ? 'sel' : ''}" data-v="${k}" aria-pressed="${v === k}"><div class="k">${label}</div><div class="v" style="${warn ? 'color:var(--warn)' : ''}">${val}</div><div class="dim">${dim}</div></button>`;
+  shell('payouts', `<div class="head"><div><h1>薪資發放</h1><p class="sub">已過發薪日還沒發布的排最前面，其次是有未發布薪資單或沒設發薪日的活動，再依發薪日由近到遠。點上方卡片切換清單。</p></div></div>
+    <div class="stats">${card('todo', '待辦活動', todo.length, todo.filter(late).length ? todo.filter(late).length + ' 場已過發薪日' : '未發布或未設發薪日', todo.length)}
+      ${card('soon', '30 天內要發', money(soon.reduce((a, e) => a + Number(e.net_sum || 0), 0)), soon.length + ' 場活動')}
+      ${card('all', '全部活動', evs.length, '未發布薪資單 ' + evs.reduce((a, e) => a + pending(e), 0) + ' 張')}</div>
     <div class="card tablebox"><table><thead><tr><th>發薪日</th><th>活動</th><th class="r">已發布</th><th class="r">實發合計</th><th>狀態</th></tr></thead>
-      <tbody>${evs.map(e => { const pending = e.total - e.void - e.published; const late = payDateOf(e) && payDateOf(e) < t && pending > 0;
+      <tbody>${list.map(e => { const n = pending(e);
         return `<tr data-k="${esc(e.id)}"><td>${payDateOf(e) ? esc(d(payDateOf(e))) : '<span class="badge warn">未設</span>'}</td><td><b>${esc(e.name)}</b></td><td class="r">${e.published} / ${e.total - e.void}</td><td class="r">${money(e.net_sum)}</td>
-        <td>${late ? '<span class="badge error">已過發薪日仍有未發布</span>' : pending ? '<span class="badge warn">尚有 ' + pending + ' 張未發布</span>' : !payDateOf(e) ? '<span class="badge warn">待設發薪日</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || '<tr><td colspan="5" class="empty">還沒有薪資單</td></tr>'}</tbody></table></div>`);
+        <td>${late(e) ? '<span class="badge error">已過發薪日仍有未發布</span>' : n ? '<span class="badge warn">尚有 ' + n + ' 張未發布</span>' : !payDateOf(e) ? '<span class="badge warn">待設發薪日</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || `<tr><td colspan="5" class="empty">${v === 'todo' ? '沒有待辦，都發完了。' : v === 'soon' ? '30 天內沒有要發薪的活動。' : '還沒有薪資單'}</td></tr>`}</tbody></table></div>`);
+  on('button.stat', 'click', (ev, b) => { S.filter.payouts = b.dataset.v; viewPayouts(); });
   on('tbody tr[data-k]', 'click', (ev, tr) => go('#/events/' + tr.dataset.k + '/payout'));
 }
 
@@ -1496,6 +1523,8 @@ async function viewSettings(tab) {
     body = `<form id="cf" class="card pad" style="max-width:520px"><p class="sub" style="margin:0">顯示在每張薪資單的「雇主」欄。</p>
       <label for="ln">公司全名</label><input id="ln" type="text" value="${esc(em.legal_name || '')}" placeholder="○○有限公司">
       <label for="tx">統一編號（8 碼）</label><input id="tx" type="text" inputmode="numeric" maxlength="8" value="${esc(em.tax_id || '')}">
+      <label for="ct">工讀生聯絡窗口</label><input id="ct" type="text" maxlength="200" value="${esc(em.contact || '')}" placeholder="例如 LINE ID：@works，或 02-1234-5678（週一至週五 10–18 點）">
+      <p class="sub" style="margin:4px 0 0">會顯示在工讀生的登入頁，忘記密碼或資料有誤時找得到人。</p>
       <div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form>`;
   } else if (tab === 'holidays') {
     const r = await rpc('admin_holidays', { p_set: null });
@@ -1513,6 +1542,7 @@ async function viewSettings(tab) {
       <label for="wm">每月最低工資</label><input id="wm" type="text" inputmode="numeric" required><div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form></div>`;
   } else if (tab === 'line') {
     const [ov, st] = await Promise.all([rpc('admin_line_overview'), lineCall('status').catch(() => ({ ok: false }))]);
+    S.lineSt = undefined;
     const KIND = { accepted: '錄取', reminder: '前一天提醒', checkout: '未簽退', payslip: '薪資單', test: '測試', docs: '補資料提醒' };
     const NST = { sent: ['已送出', 'ok'], pending: ['等待中', ''], skipped: ['未送', 'warn'], failed: ['失敗', 'error'] };
     const WHY = { not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退', expired: '過期未送', already_complete: '已補齊' };
@@ -1570,7 +1600,7 @@ async function viewSettings(tab) {
     <div class="tabs" role="tablist">${TABS.map(([k, t]) => `<button class="tab" role="tab" aria-selected="${k === tab}" data-t="${k}">${t}</button>`).join('')}</div>${body}`);
   on('.tab', 'click', (ev, b) => viewSettings(b.dataset.t));
   const f = id => $(id);
-  if (f('cf')) f('cf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_update_employer', { p_patch: { legal_name: $('ln').value, tax_id: $('tx').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">統一編號必須是 8 個數字。</div>'; return; } await loadOverview(); flash('ok', '公司資料已更新。'); viewSettings('company'); };
+  if (f('cf')) f('cf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_update_employer', { p_patch: { legal_name: $('ln').value, tax_id: $('tx').value, contact: $('ct').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + (r.error === 'contact_too_long' ? '聯絡窗口最多 200 字。' : '統一編號必須是 8 個數字。') + '</div>'; return; } await loadOverview(); flash('ok', '公司資料已更新。'); viewSettings('company'); };
   if (f('hf')) {
     f('hf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_holidays', { p_set: { day: $('hd').value, name: $('hn').value.trim() } }); if (r.ok === false) { $('dm').innerHTML = '<div class="msg err">日期或名稱有誤。</div>'; return; } flash('ok', '已新增。'); viewSettings('holidays'); };
     on('[data-del]', 'click', async (ev, b) => { await rpc('admin_holidays', { p_set: { day: b.dataset.del, name: '' } }); flash('ok', '已刪除 ' + d(b.dataset.del) + '。'); viewSettings('holidays'); });

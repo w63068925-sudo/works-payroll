@@ -365,5 +365,27 @@ begin
     if jsonb_array_length(public.admin_person(atok, px)#>'{person,history}') <> 2 then fails := fails || ' [27f history]'; end if;
   end;
 
-  if fails = '' then raise exception 'PASS 全部 27 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 28. 巡檢第二輪：缺資料名單帶電話、匯出種類 missing_docs、登入頁聯絡窗口
+  declare e29 uuid;
+  begin
+    select event_id into e29 from public.payslips where person_id = (select id from public.people where national_id = 'Z999990077') limit 1;
+    update public.people set phone = '0911000077' where national_id = 'Z999990077';
+    if not exists (select 1 from jsonb_array_elements(public.admin_event(atok, e29)->'payslips') x where x->>'phone' = '0911000077') then fails := fails || ' [28a phone]'; end if;
+    r := public.admin_roster(atok, jsonb_build_object('event_id', e29, 'statuses', jsonb_build_array('attended')));
+    if (r->>'truncated')::boolean is not false or (r->>'total')::int <> jsonb_array_length(r->'rows') then fails := fails || ' [28j roster total ' || r::text || ']'; end if;
+    if (public.admin_log_export(atok, 'missing_docs', 1, '{}'::jsonb)->>'ok')::boolean is not true then fails := fails || ' [28b missing_docs kind]'; end if;
+    if public.admin_log_export(atok, 'whatever', 1, '{}'::jsonb)->>'error' is distinct from 'bad_kind' then fails := fails || ' [28c bad kind]'; end if;
+    -- 分兩句：同一個運算式看不到函式內剛寫入的設定
+    r := public.admin_update_employer(atok, jsonb_build_object('contact', '  LINE @回歸  '));
+    if (r->>'ok')::boolean is not true or public.payroll_contact() is distinct from 'LINE @回歸' then fails := fails || ' [28d contact set]'; end if;
+    if public.admin_overview(atok)#>>'{employer,contact}' is distinct from 'LINE @回歸' then fails := fails || ' [28e overview contact]'; end if;
+    r := public.admin_update_employer(atok, jsonb_build_object('contact', repeat('x', 201), 'legal_name', '不該存進去'));
+    if r->>'error' is distinct from 'contact_too_long' or public.payroll_contact() is distinct from 'LINE @回歸' or exists (select 1 from public.employers where legal_name = '不該存進去') then fails := fails || ' [28f contact too long]'; end if;
+    if public.admin_update_employer('bad-token', jsonb_build_object('contact', 'x'))->>'error' is distinct from 'session' then fails := fails || ' [28g no session]'; end if;
+    perform public.admin_update_employer(atok, jsonb_build_object('contact', ''));
+    if public.payroll_contact() is not null then fails := fails || ' [28h contact cleared]'; end if;
+    if not has_function_privilege('anon', 'public.payroll_contact()', 'execute') then fails := fails || ' [28i anon contact]'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 28 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

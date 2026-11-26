@@ -167,6 +167,20 @@ function idProblem(v) {
   return s % 10 ? '身分證字號好像有一碼打錯了，請再核對一次。' : '';
 }
 const brand = '<div class="brand no-print"><b>WORKS</b><span>沃克思 薪資查詢</span></div>';
+// 聯絡窗口由管理員在後台「公司資料」設定；沒設就只顯示「請聯絡活動窗口」
+let contactInfo;
+async function showContact() {
+  if (contactInfo === undefined) { try { contactInfo = await rpc('payroll_contact', {}); } catch (err) { contactInfo = null; } }
+  const el = document.getElementById('contact');
+  if (el && typeof contactInfo === 'string' && contactInfo) el.textContent = '（' + contactInfo + '）';
+}
+const BANKS = [['004', '臺灣銀行'], ['005', '土地銀行'], ['006', '合作金庫'], ['007', '第一銀行'], ['008', '華南銀行'], ['009', '彰化銀行'], ['011', '上海商銀'], ['012', '台北富邦'], ['013', '國泰世華'],
+  ['016', '高雄銀行'], ['017', '兆豐銀行'], ['048', '王道銀行'], ['050', '臺灣企銀'], ['052', '渣打銀行'], ['053', '台中銀行'], ['054', '京城銀行'], ['081', '匯豐銀行'], ['102', '華泰銀行'],
+  ['103', '新光銀行'], ['108', '陽信銀行'], ['118', '板信銀行'], ['147', '三信銀行'], ['700', '中華郵政'], ['803', '聯邦銀行'], ['805', '遠東銀行'], ['806', '元大銀行'], ['807', '永豐銀行'],
+  ['808', '玉山銀行'], ['809', '凱基銀行'], ['810', '星展銀行'], ['812', '台新銀行'], ['816', '安泰銀行'], ['822', '中國信託'], ['823', '將來銀行'], ['824', '連線銀行'], ['826', '樂天銀行']];
+// 選銀行名稱自動帶代碼；自己輸入代碼時選單跟著對上
+document.addEventListener('change', ev => { if (ev.target.id === 'bk' && ev.target.value) { const bc = document.getElementById('bc'); if (bc) bc.value = ev.target.value; } });
+document.addEventListener('input', ev => { if (ev.target.id === 'bc') { const bk = document.getElementById('bk'); if (bk) bk.value = BANKS.some(([c]) => c === ev.target.value) ? ev.target.value : ''; } });
 
 function viewLogin(message) {
   state.flow = (state.flow || 0) + 1; // 離開開通頁後，晚到的開通回應不再寫入登入狀態
@@ -188,7 +202,8 @@ function viewLogin(message) {
     </form>
     ${state.join ? '<button class="btn ghost" id="toreg">第一次報名？先填基本資料</button>' : ''}
     <button class="link" id="toclaim" style="margin-top:10px">合作過但一直登不進去？補生日開通帳號</button>
-    <p class="foot">連續輸入錯誤 10 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
+    <p class="foot">連續輸入錯誤 10 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口<span id="contact"></span>，核對身分後會幫你把密碼重設回民國生日 7 碼。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
+  showContact();
   if (state.join) document.getElementById('toreg').addEventListener('click', () => viewRegister());
   document.getElementById('toclaim').addEventListener('click', () => viewClaim());
   const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
@@ -455,7 +470,8 @@ const profileFields = (p, withName) => `
   <label for="em">Email（選填）</label><input id="em" type="email" value="${esc(p.email || '')}">
   <label for="ad">戶籍地址（需與身分證相同，含鄰里）</label><input id="ad" type="text" value="${esc(p.address || '')}" required>
   <h2>薪資匯款帳戶（須為本人帳戶）</h2>
-  <label for="bc" style="margin-top:0">銀行代碼（3 碼）</label><input id="bc" type="text" inputmode="numeric" maxlength="3" value="${esc(p.bank_code || '')}" placeholder="例如 822" required>
+  <label for="bk" style="margin-top:0">銀行</label><select id="bk"><option value="">選擇銀行（找不到就直接填下面的代碼）</option>${BANKS.map(([c, n]) => `<option value="${c}" ${c === p.bank_code ? 'selected' : ''}>${c} ${n}</option>`).join('')}</select>
+  <label for="bc">銀行代碼（3 碼）</label><input id="bc" type="text" inputmode="numeric" maxlength="3" value="${esc(p.bank_code || '')}" placeholder="選了銀行會自動帶入，例如 822" required>
   <label for="bb">分行名稱</label><input id="bb" type="text" value="${esc(p.bank_branch || '')}" placeholder="例如 中和分行">
   ${withName ? '' : '<label for="bn">戶名</label><input id="bn" type="text" value="' + esc(p.bank_account_name || p.name || '') + '" required>'}
   <label for="ba">銀行帳號</label><input id="ba" type="text" inputmode="numeric" maxlength="20" value="${esc(p.bank_account || '')}" required>`;
@@ -471,7 +487,10 @@ async function viewRegister() {
     <p class="sub">${esc(info.event)}</p>
     <h1>填寫基本資料</h1>
     <p class="sub">只需要填一次，之後每場活動都不用重填。</p>
-    <form id="f" class="card pad" style="margin-top:20px" autocomplete="on">
+    <div class="card pad" style="margin-top:16px"><b>開始前先準備好</b>
+      <ol style="margin:8px 0 0;padding-left:20px;line-height:1.8"><li>身分證（填字號、戶籍地址）</li><li>本人的銀行存摺或帳戶資料（銀行、分行、帳號）</li><li>手機相機：下一步要拍 3 張照片上傳——身分證正面、身分證反面、存摺封面</li></ol>
+      <p class="sub" style="margin:8px 0 0">證件照片是辦勞健保與發薪核對用，沒上傳完整就看不到薪資單。</p></div>
+    <form id="f" class="card pad" style="margin-top:16px" autocomplete="on">
       <label for="nm" style="margin-top:0">姓名（與身分證相同）</label><input id="nm" type="text" autocomplete="name" required>
       <label for="nid">身分證字號</label><input id="nid" type="text" maxlength="14" autocapitalize="characters" spellcheck="false" required>
       <label for="bd">生日</label><input id="bd" type="date" required>
