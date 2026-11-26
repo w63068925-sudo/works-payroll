@@ -419,5 +419,48 @@ begin
   -- 31. 人員清單：證件數只算三種證件（不含照片）、帶報名數（標「證件未齊」「未報名」）
   if exists (select 1 from jsonb_array_elements(public.admin_people(atok)->'people') x where not (x ? 'apps') or (x->>'docs')::int > 3) then fails := fails || ' [31a people docs/apps]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 31 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 32. 班次要落在活動日期內：超出就擋下並回活動日期
+  declare e32 uuid; d32 date;
+  begin
+    select id, start_date into e32, d32 from public.events where name = '回歸27甲';
+    r := public.admin_save_shifts(atok, e32, null, jsonb_build_object('work_date', d32 + 5, 'start', '10:00', 'end', '18:00', 'headcount', 1));
+    if r->>'error' is distinct from 'outside_event' or (r->>'start_date')::date <> d32 then fails := fails || ' [32a outside shift ' || coalesce(r::text, '') || ']'; end if;
+    r := public.admin_save_shifts(atok, e32, null, jsonb_build_object('work_date', d32, 'until_date', d32 + 1, 'start', '10:00', 'end', '18:00', 'headcount', 1));
+    if r->>'error' is distinct from 'outside_event' then fails := fails || ' [32b range past end]'; end if;
+    if (public.admin_save_shifts(atok, e32, null, jsonb_build_object('work_date', d32, 'start', '10:00', 'end', '18:00', 'headcount', 1))->>'ok')::boolean is not true then fails := fails || ' [32c inside shift]'; end if;
+  end;
+
+  -- 33. 打卡 QR 分享頁：要登入才能產生；連結只存雜湊；可取碼；重新產生舊的失效；停用後失效；封存不給；匿名不能直接讀表
+  declare e33 uuid; s1 text; s2 text;
+  begin
+    select id into e33 from public.events where name = '回歸27甲';
+    update public.events set end_date = current_date + 1 where id = e33;
+    if public.admin_checkin_share('bad-token', e33, 'create')->>'error' is distinct from 'session' then fails := fails || ' [33a no session]'; end if;
+    s1 := public.admin_checkin_share(atok, e33, 'create')->>'share';
+    if s1 is null or exists (select 1 from public.checkin_shares where token_hash = s1) then fails := fails || ' [33b token stored raw]'; end if;
+    r := public.payroll_share_checkin_code(s1);
+    if (r->>'ok')::boolean is not true or (public.payroll_checkin_ticket(r->>'code')->>'ok')::boolean is not true then fails := fails || ' [33c code ' || coalesce(r::text, '') || ']'; end if;
+    s2 := public.admin_checkin_share(atok, e33, 'create')->>'share';
+    if public.payroll_share_checkin_code(s1)->>'error' is distinct from 'invalid' or (public.payroll_share_checkin_code(s2)->>'ok')::boolean is not true then fails := fails || ' [33d recreate]'; end if;
+    if (public.admin_checkin_share(atok, e33, 'status')->>'active')::boolean is not true then fails := fails || ' [33e status]'; end if;
+    perform public.admin_checkin_share(atok, e33, 'revoke');
+    if public.payroll_share_checkin_code(s2)->>'error' is distinct from 'invalid' then fails := fails || ' [33f revoke]'; end if;
+    s1 := public.admin_checkin_share(atok, e33, 'create')->>'share';
+    -- 活動日期提前：舊連結跟著失效
+    update public.events set start_date = current_date - 5, end_date = current_date - 5 where id = e33;
+    if public.payroll_share_checkin_code(s1)->>'error' is distinct from 'expired' or (public.admin_checkin_share(atok, e33, 'status')->>'active')::boolean then fails := fails || ' [33k shortened dates]'; end if;
+    update public.events set start_date = current_date, end_date = current_date + 1 where id = e33;
+    -- 封存：連結停用，取消封存也不會復活
+    perform public.admin_archive_event(atok, e33, true);
+    if public.payroll_share_checkin_code(s1)->>'error' is distinct from 'invalid' or public.admin_checkin_share(atok, e33, 'create')->>'error' is distinct from 'archived' then fails := fails || ' [33g archived]'; end if;
+    perform public.admin_archive_event(atok, e33, false);
+    if public.payroll_share_checkin_code(s1)->>'error' is distinct from 'invalid' then fails := fails || ' [33l revived after unarchive]'; end if;
+    update public.events set end_date = current_date - 5, start_date = current_date - 5 where id = e33;
+    if public.admin_checkin_share(atok, e33, 'create')->>'error' is distinct from 'ended' then fails := fails || ' [33h ended]'; end if;
+    if public.payroll_share_checkin_code('zz')->>'error' is distinct from 'invalid' then fails := fails || ' [33i bad format]'; end if;
+    if has_table_privilege('anon', 'public.checkin_shares', 'select') then fails := fails || ' [33j anon table]'; end if;
+    if has_function_privilege('anon', 'public.checkin_make_code(uuid,bigint)', 'execute') or has_function_privilege('authenticated', 'public.checkin_make_code(uuid,bigint)', 'execute') then fails := fails || ' [33m make_code exposed]'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 33 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

@@ -133,7 +133,7 @@ tbody tr.on{background:var(--accent-soft)}
 @media (max-width:880px){.live{grid-template-columns:1fr}}
 .qrbox{background:#fff;padding:14px;border-radius:12px;border:1px solid var(--line)}
 .qrbox svg{display:block;width:100%;height:auto}
-.qrscreen{position:fixed;inset:0;background:var(--paper);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
+.qrscreen{position:fixed;inset:0;background:var(--paper);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:safe center;padding:20px;text-align:center;overflow-y:auto}
 .qrscreen .qrbox svg{width:min(72vw,62vh,440px)}
 .docgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:8px}
 .doccell .dim{margin-bottom:4px}
@@ -304,6 +304,12 @@ function readPayMode(p) {
 }
 // 實際發薪日：指定日期，或活動結束日加天數
 const payDateOf = e => e.pay_date || (e.pay_within_days != null && (e.end_date || e.start_date) ? addDays(e.end_date || e.start_date, Number(e.pay_within_days)) : null);
+// 活動設定存不進去時說出真正原因（例如班次落在活動日期外），不要一律說「請確認數字」
+function evErr(r, e, fallback) {
+  const range = d(e.start_date) + (e.end_date && e.end_date !== e.start_date ? '–' + d(e.end_date) : '');
+  return ({ outside_dates: '這場活動有 ' + (r.count || '') + ' 筆班次或出勤不在活動日期（' + range + '）內，系統先擋下了。請按上方「編輯活動」把日期改成包含所有班次，或刪掉多出來的班次，再存一次。',
+    bad_name: '活動名稱不對（1–100 字）。', bad_date: '活動日期不對。', pay_before_end: '發薪日早於活動結束日。', bad_pay: '發薪天數請填 0 到 90。' })[r.error] || fallback;
+}
 const PAY_ERR = { pay_before_end: '發薪日不能早於活動結束日。', bad_pay: '發薪天數請填 0 到 90 的數字。' };
 
 /* ---------- 活動清單 ---------- */
@@ -640,7 +646,7 @@ const stepAtt = {
     $('addatt').onclick = () => openDetail('addatt', 'new', e);
     $('cfgsave').onclick = async () => {
       const r = await rpc('admin_update_event', { p_id: e.id, p_patch: { default_break_minutes: $('br').value, default_hourly_rate: $('hr').value, insured_salary: $('ins').value } });
-      flash(r.ok ? 'ok' : 'err', r.ok ? '設定已儲存。時薪與投保薪資在重新產生薪資單時套用。' : '儲存失敗，請確認都是數字。'); refreshEvent(e, 'att');
+      flash(r.ok ? 'ok' : 'err', r.ok ? '設定已儲存。時薪與投保薪資在重新產生薪資單時套用。' : evErr(r, e, '儲存失敗，請確認時薪、休息分鐘、投保薪資都是數字。')); refreshEvent(e, 'att');
     };
     $('gen').onclick = async () => {
       const r = await rpc('admin_generate_payslips', { p_event: e.id });
@@ -767,7 +773,7 @@ const stepPayout = {
       if ($('ppmode').value === 'date' && !pm.pay_date) { flash('err', '請選擇發薪日。'); return refreshEvent(e, 'payout'); }
       if ($('ppmode').value === 'days' && pm.pay_within_days === '') { flash('err', '請填活動結束後幾天內發薪。'); return refreshEvent(e, 'payout'); }
       const r = await rpc('admin_update_event', { p_id: e.id, p_patch: Object.assign({ apply_to_payslips: true }, pm) });
-      flash(r.ok ? 'ok' : 'err', r.ok ? '發薪日 ' + d(r.pay_date) + ' 已套用到 ' + r.payslips_updated + ' 張薪資單。' : (PAY_ERR[r.error] || '儲存失敗。')); refreshEvent(e, 'payout');
+      flash(r.ok ? 'ok' : 'err', r.ok ? '發薪日 ' + d(r.pay_date) + ' 已套用到 ' + r.payslips_updated + ' 張薪資單。' : (PAY_ERR[r.error] || evErr(r, e, '儲存失敗。'))); refreshEvent(e, 'payout');
     };
     const c = $('csv'); if (c) c.onclick = async () => {
       // 下載當下向伺服器取最新的帳戶與核對狀態，不用畫面上的舊資料
@@ -844,7 +850,8 @@ async function openDetail(kind, key, e, keepScroll) {
     bindClose();
     $('save').onclick = async () => {
       const r = await rpc('admin_save_shifts', { p_event: e.id, p_shift: x ? key : null, p_patch: { work_date: $('sd').value, until_date: $('su') ? $('su').value : '', start: $('ss').value, end: $('se').value, role: $('sr').value, headcount: $('sh').value, rate: $('sp').value, note: $('sn').value } });
-      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + ({ below_accepted: '人數不能少於已錄取人數。', overlap: '改了之後會跟某位錄取者的其他班次時間重疊，請先調整他的錄取。' }[r.error] || '請確認日期、時間（例如 10:00）與人數。') + '</div>'; return; }
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + ({ below_accepted: '人數不能少於已錄取人數。', overlap: '改了之後會跟某位錄取者的其他班次時間重疊，請先調整他的錄取。',
+        outside_event: '班次日期不在活動期間（' + d(r.start_date) + (r.end_date !== r.start_date ? '–' + d(r.end_date) : '') + '）內。請先按上方「編輯活動」把活動日期延長，再新增這個班次。' }[r.error] || '請確認日期、時間（例如 10:00）與人數。') + '</div>'; return; }
       flash('ok', x ? '班次已更新。' : '已建立 ' + r.count + ' 個班次。'); S.detail = null; refreshEvent(e, 'staff');
     };
     if ($('del')) $('del').onclick = async () => {
@@ -1028,9 +1035,11 @@ function showQr(e) {
   let timer = null;
   overlay.innerHTML = `<div class="qrscreen"><p class="sub">掃描簽到／簽退</p><h1 style="margin:4px 0 18px">${esc(e.name)}</h1>
     <div class="qrbox" id="bigqr"><p class="sub">產生中…</p></div><p class="sub" style="margin-top:14px">每分鐘自動更換，請工讀生用手機相機掃描後登入。</p>
+    <div id="qrshare" style="max-width:460px;margin:18px auto 0;text-align:left"></div>
     <button class="btn ghost" id="qrclose" style="margin-top:18px">關閉</button></div>`;
   const stop = () => { clearTimeout(timer); overlay.innerHTML = ''; };
   $('qrclose').onclick = stop;
+  shareBox(e);
   const tick = async () => {
     if (!$('bigqr')) return;
     try {
@@ -1044,6 +1053,41 @@ function showQr(e) {
   tick();
 }
 
+
+// 獨立打卡頁：沒有督導或管理員在場時，把會自動更新的 QR 頁連結交給資深工讀生
+async function shareBox(e, fresh) {
+  const box = $('qrshare'); if (!box) return;
+  const ts = v => new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(v));
+  const note = '<p class="sub" style="margin:6px 0 0;line-height:1.7">沒有督導或管理員在現場時，把連結傳給信任的資深工讀生，用他的手機打開給大家掃。拿到連結的人都能開出打卡 QR，請不要貼到群組；活動結束隔天自動失效，也可以隨時停用。</p>';
+  let st = fresh;
+  if (!st) { box.innerHTML = '<p class="sub">讀取分享連結狀態…</p>'; try { st = await rpc('admin_checkin_share', { p_event: e.id, p_action: 'status' }); } catch (err) { box.innerHTML = ''; return; } }
+  if (!$('qrshare')) return;
+  const ERR = { archived: '活動已封存，不能產生分享連結。', ended: '活動已經結束，不能產生分享連結。' };
+  if (st.share) {
+    const url = new URL('qr.html', location.href).href + '#s=' + st.share;
+    box.innerHTML = `<div class="card pad"><b>獨立打卡頁連結</b>（到 ${esc(ts(st.expires_at))} 失效）
+      <div class="row" style="margin-top:8px;align-items:center"><input id="qslink" type="text" readonly value="${esc(url)}" class="grow" style="width:auto;min-width:160px"><button class="btn sm" id="qscopy" type="button">複製</button></div>
+      <p class="sub" style="margin:6px 0 0"><b>這個連結只會顯示這一次</b>，關掉後要重新產生（舊的會失效）。</p>${note}
+      <button class="link" id="qsrevoke" style="margin-top:8px;color:var(--danger)">停用連結</button></div>`;
+    $('qscopy').onclick = async () => { try { await navigator.clipboard.writeText(url); $('qscopy').textContent = '已複製'; } catch (err) { $('qslink').select(); } };
+  } else if (st.active) {
+    box.innerHTML = `<div class="card pad"><b>獨立打卡頁連結：使用中</b>（${esc(st.created_by || '')} 於 ${esc(ts(st.created_at))} 產生，到 ${esc(ts(st.expires_at))} 失效）${note}
+      <div class="row" style="margin-top:10px"><button class="btn ghost sm" id="qsnew" type="button">重新產生連結</button><button class="link" id="qsrevoke" style="color:var(--danger)">停用連結</button></div>
+      <p class="dim" style="margin-top:6px">重新產生後，舊連結立刻失效。</p></div>`;
+  } else {
+    box.innerHTML = `<div class="card pad"><button class="btn block" id="qsnew" type="button">產生獨立打卡頁（給現場工讀生）</button>${note}${st.error ? '<div class="msg err" style="margin-top:8px">' + esc(ERR[st.error] || '產生失敗，請再試一次。') + '</div>' : ''}</div>`;
+  }
+  const nb = $('qsnew'); if (nb) nb.onclick = async () => {
+    if (st.active && !nb.dataset.sure) { nb.dataset.sure = '1'; nb.textContent = '確定？舊連結會失效'; return; }
+    nb.disabled = true; const r = await rpc('admin_checkin_share', { p_event: e.id, p_action: 'create' });
+    shareBox(e, r.ok ? r : { active: false, error: r.error });
+  };
+  const rb = $('qsrevoke'); if (rb) rb.onclick = async () => {
+    if (!rb.dataset.sure) { rb.dataset.sure = '1'; rb.textContent = '確定停用？再按一次'; return; }
+    const r = await rpc('admin_checkin_share', { p_event: e.id, p_action: 'revoke' });
+    shareBox(e, r.ok ? { active: false } : { active: false, error: 'x' });
+  };
+}
 
 /* ---------- 班表行事曆 ---------- */
 const CAL_COLORS = [['#1f5c4a', '#e4efe9'], ['#2b4f8a', '#e3eaf6'], ['#8a5a00', '#fbf1d9'], ['#7a2f6b', '#f4e5f0'], ['#a3271f', '#fbe6e3'], ['#3d5a1e', '#ebf2df'], ['#4b4f57', '#eceef1']];

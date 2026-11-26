@@ -67,6 +67,7 @@ begin
   if coalesce(p_archived, false) then
     if e.archived_at is null then
       update public.events set archived_at = now(), archived_by = v_actor where id = e.id;
+      update public.checkin_shares set revoked_at = now(), revoked_by = v_actor where event_id = e.id and revoked_at is null;
       insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, 'event_archived', 'events', e.id);
     end if;
   else
@@ -907,6 +908,10 @@ begin
   exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
   if v_from is null or v_start is null or v_end is null or v_to < v_from or v_to > v_from + 60 or v_start = v_end or v_head < 1 or v_head > 500 or v_rate < 0 then
     return jsonb_build_object('ok', false, 'error', 'bad_value');
+  end if;
+  -- 班次要落在活動日期內，否則之後存活動設定會被日期檢查擋下
+  if exists (select 1 from public.events where id = p_event and (v_from < start_date or v_to > coalesce(end_date, start_date))) then
+    return (select jsonb_build_object('ok', false, 'error', 'outside_event', 'start_date', start_date, 'end_date', coalesce(end_date, start_date)) from public.events where id = p_event);
   end if;
   if p_shift is not null then
     -- 先鎖受影響的報名，再鎖班次、人員，與錄取流程同順序
@@ -2938,3 +2943,83 @@ grant execute on function public.admin_remind_incomplete(text, uuid) to anon, au
 insert into public.app_settings(key, value) values ('contact_info', null) on conflict (key) do nothing;
 revoke all on function public.payroll_contact() from public;
 grant execute on function public.payroll_contact() to anon, authenticated;
+
+-- 打卡 QR 分享頁：沒有督導在場時，把會自動更新的打卡 QR 頁連結交給資深工讀生
+-- 一場活動同時只有一條有效連結；連結只存雜湊；活動結束隔天結束時自動失效；可隨時停用
+create table if not exists public.checkin_shares (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events(id) on delete cascade,
+  token_hash text not null unique,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  revoked_at timestamptz,
+  revoked_by text
+);
+create index if not exists checkin_shares_event on public.checkin_shares(event_id);
+alter table public.checkin_shares enable row level security;
+revoke all on public.checkin_shares from anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_checkin_share(p_token text, p_event uuid, p_action text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- p_action：status 看目前連結、create 產生新連結（舊的同時停用）、revoke 停用
+declare v_actor text := public.admin_actor(p_token); e public.events; v_tok text; v_exp timestamptz; s public.checkin_shares;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into e from public.events where id = p_event for update;
+  if e.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if p_action = 'status' then
+    select * into s from public.checkin_shares where event_id = p_event and revoked_at is null and expires_at > now()
+      and e.archived_at is null and ((coalesce(e.end_date, e.start_date) + 2)::timestamp at time zone 'Asia/Taipei') > now() order by created_at desc limit 1;
+    return jsonb_build_object('ok', true, 'active', s.id is not null, 'created_at', s.created_at, 'created_by', s.created_by, 'expires_at', s.expires_at);
+  elsif p_action = 'revoke' then
+    update public.checkin_shares set revoked_at = now(), revoked_by = v_actor where event_id = p_event and revoked_at is null;
+    insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, 'checkin_share_revoked', 'events', p_event);
+    return jsonb_build_object('ok', true, 'active', false);
+  elsif p_action = 'create' then
+    if e.archived_at is not null then return jsonb_build_object('ok', false, 'error', 'archived'); end if;
+    -- 活動結束日的隔天 24:00（台北時間）失效，涵蓋跨夜班
+    v_exp := ((coalesce(e.end_date, e.start_date) + 2)::timestamp at time zone 'Asia/Taipei');
+    if v_exp <= now() then return jsonb_build_object('ok', false, 'error', 'ended'); end if;
+    update public.checkin_shares set revoked_at = now(), revoked_by = v_actor where event_id = p_event and revoked_at is null;
+    v_tok := encode(extensions.gen_random_bytes(24), 'hex');
+    insert into public.checkin_shares(event_id, token_hash, created_by, expires_at)
+    values (p_event, encode(extensions.digest(v_tok, 'sha256'), 'hex'), v_actor, v_exp);
+    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'checkin_share_created', 'events', p_event, jsonb_build_object('expires_at', v_exp));
+    return jsonb_build_object('ok', true, 'active', true, 'share', v_tok, 'expires_at', v_exp);
+  end if;
+  return jsonb_build_object('ok', false, 'error', 'bad_action');
+end $function$
+;
+revoke all on function public.admin_checkin_share(text, uuid, text) from public;
+grant execute on function public.admin_checkin_share(text, uuid, text) to anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.payroll_share_checkin_code(p_share text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 分享頁每分鐘取一次打卡碼；連結失效、被停用或活動封存就不給
+declare s public.checkin_shares; e public.events; v_code text;
+begin
+  if coalesce(p_share, '') !~ '^[0-9a-f]{48}$' then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
+  select * into s from public.checkin_shares where token_hash = encode(extensions.digest(p_share, 'sha256'), 'hex');
+  if s.id is null or s.revoked_at is not null then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
+  if s.expires_at <= now() then return jsonb_build_object('ok', false, 'error', 'expired'); end if;
+  select * into e from public.events where id = s.event_id;
+  if e.id is null or e.archived_at is not null then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
+  if ((coalesce(e.end_date, e.start_date) + 2)::timestamp at time zone 'Asia/Taipei') <= now() then return jsonb_build_object('ok', false, 'error', 'expired'); end if;
+  v_code := public.checkin_make_code(e.id, floor(extract(epoch from now()) / 60)::bigint);
+  return jsonb_build_object('ok', true, 'event', e.name, 'start_date', e.start_date, 'end_date', coalesce(e.end_date, e.start_date), 'expires_at', s.expires_at,
+    'code', v_code, 'refresh_in', 60 - floor(extract(epoch from now()))::bigint % 60);
+end $function$
+;
+revoke all on function public.payroll_share_checkin_code(text) from public;
+grant execute on function public.payroll_share_checkin_code(text) to anon, authenticated;
+-- 打卡碼只由資料庫內部函式產生，不開放直接呼叫
+revoke all on function public.checkin_make_code(uuid, bigint) from public, anon, authenticated;
