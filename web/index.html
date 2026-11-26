@@ -184,7 +184,6 @@ const BANKS = [['004', '臺灣銀行'], ['005', '土地銀行'], ['006', '合作
 document.addEventListener('change', ev => { if (ev.target.id === 'bk' && ev.target.value) { const bc = document.getElementById('bc'); if (bc) bc.value = ev.target.value; } });
 document.addEventListener('input', ev => { if (ev.target.id === 'bc') { const bk = document.getElementById('bk'); if (bk) bk.value = BANKS.some(([c]) => c === ev.target.value) ? ev.target.value : ''; } });
 
-const NEWBIE = '<div class="msg warn" style="margin-top:10px">新朋友還沒有帳號，請用活動負責人傳給你的<b>報名連結</b>點開，按「第一次報名，填寫基本資料」。填完就會建立帳號，之後用身分證字號和民國生日 7 碼登入。<br>沒有報名連結的話，請向活動負責人索取。</div>';
 function viewLogin(message) {
   state.flow = (state.flow || 0) + 1; // 離開開通頁後，晚到的開通回應不再寫入登入狀態
   document.title = '登入｜沃克思薪資查詢';
@@ -203,12 +202,12 @@ function viewLogin(message) {
       <div id="m">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
       <button class="btn" id="go">登入</button>
     </form>
-    ${state.join ? '<button class="btn ghost" id="toreg">第一次報名？先填基本資料</button>' : '<button class="btn ghost" id="newbie">第一次合作？還沒有帳號</button><div id="newbiebox"></div>'}
+    ${state.join ? '<button class="btn ghost" id="toreg">第一次報名？先填基本資料</button>' : '<button class="btn ghost" id="newbie">第一次合作？建立帳號</button>'}
     <button class="link" id="toclaim" style="margin-top:10px">合作過但一直登不進去？補生日開通帳號</button>
     <p class="foot">連續輸入錯誤 10 次會鎖定 15 分鐘。忘記密碼或資料有誤，請聯絡沃克思的活動窗口<span id="contact"></span>，核對身分後會幫你把密碼重設回民國生日 7 碼。${state.join ? '' : '第一次合作的夥伴，請用活動負責人提供的報名連結填寫基本資料。'}</p>`;
   showContact();
   if (state.join) document.getElementById('toreg').addEventListener('click', () => viewRegister());
-  else document.getElementById('newbie').addEventListener('click', () => { document.getElementById('newbiebox').innerHTML = NEWBIE; });
+  else document.getElementById('newbie').addEventListener('click', () => viewSignup());
   document.getElementById('toclaim').addEventListener('click', () => viewClaim());
   const f = document.getElementById('f'), nid = document.getElementById('nid'), pw = document.getElementById('pw'), m = document.getElementById('m'), go = document.getElementById('go');
   nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
@@ -223,7 +222,7 @@ function viewLogin(message) {
       const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
       if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList(); }
       else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。<div class="dim" style="margin-top:4px">請確認身分證字號沒有打錯；密碼是民國生日 7 碼，例如 0900101（改過密碼的請用新密碼）。連續錯 10 次會暫停 15 分鐘。</div>'
-        + '<div style="margin-top:6px"><b>還沒報名過的新朋友沒有帳號</b>，' + (state.join ? '請按下方「第一次報名？先填基本資料」。' : '要先用活動負責人給的報名連結填基本資料。') + '</div></div>';
+        + '<div style="margin-top:6px"><b>還沒報名過的新朋友沒有帳號</b>，' + (state.join ? '請按下方「第一次報名？先填基本資料」。' : '請按下方「第一次合作？建立帳號」。') + '</div></div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
     go.disabled = false; go.textContent = '登入'; pw.value = ''; pw.focus();
   });
@@ -469,7 +468,7 @@ function viewPassword() {
   });
 }
 
-const PERR = { bad_phone: '手機號碼請填 09 開頭的 10 碼。', bad_address: '請填完整的戶籍地址（含鄰里）。', bad_email: 'Email 格式不正確。', bad_bank_code: '銀行代碼是 3 個數字，例如 822。', bad_bank_account: '銀行帳號請只填數字（6 到 16 碼）。', payee_not_self: '戶名必須和本人姓名相同，薪資依法只能匯入本人帳戶。', bad_national_id: '身分證字號不正確，請再檢查一次。', bad_name: '請填寫姓名。', bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', exists: '這個身分證字號已經有資料了，請直接登入。', no_consent: '請勾選同意聲明。', bad_join: '報名連結已失效，請向活動負責人索取新的連結。' };
+const PERR = { bad_phone: '手機號碼請填 09 開頭的 10 碼。', bad_address: '請填完整的戶籍地址（含鄰里）。', bad_email: 'Email 格式不正確。', bad_bank_code: '銀行代碼是 3 個數字，例如 822。', bad_bank_account: '銀行帳號請只填數字（6 到 16 碼）。', payee_not_self: '戶名必須和本人姓名相同，薪資依法只能匯入本人帳戶。', bad_national_id: '身分證字號不正確，請再檢查一次。', bad_name: '請填寫姓名。', bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', exists: '這個身分證字號已經有資料了，請直接登入。', no_consent: '請勾選同意聲明。', bad_join: '報名連結已失效，請向活動負責人索取新的連結。', bad_ticket: 'Email 驗證已過期，請重新取得驗證碼。', ticket_mismatch: '身分證字號要和驗證 Email 時填的一樣。' };
 const profileFields = (p, withName) => `
   <label for="ph">手機</label><input id="ph" type="tel" inputmode="numeric" maxlength="10" value="${esc(p.phone || '')}" placeholder="0912345678" required>
   <label for="em">Email（選填）</label><input id="em" type="email" value="${esc(p.email || '')}">
@@ -485,8 +484,10 @@ const readProfile = name => ({ phone: document.getElementById('ph').value, email
 async function viewRegister() {
   document.title = '填寫基本資料｜沃克思';
   app.innerHTML = brand + '<div class="skeleton" style="height:160px"></div>';
-  let info;
-  try { info = await rpc('payroll_join_info', { p_join: state.join }); } catch (err) { info = { ok: false }; }
+  let info; const su = !state.join && state.signup;
+  if (!state.join && !su) return viewSignup();
+  if (su) info = { ok: true, event: '新人建檔（Email 已驗證）' };
+  else { try { info = await rpc('payroll_join_info', { p_join: state.join }); } catch (err) { info = { ok: false }; } }
   if (!info.ok) { saveJoin(null); return viewLogin(PERR.bad_join); }
   app.innerHTML = brand + `
     <p class="sub">${esc(info.event)}</p>
@@ -497,7 +498,7 @@ async function viewRegister() {
       <p class="sub" style="margin:8px 0 0">證件照片是辦勞健保與發薪核對用，沒上傳完整就看不到薪資單。</p></div>
     <form id="f" class="card pad" style="margin-top:16px" autocomplete="on">
       <label for="nm" style="margin-top:0">姓名（與身分證相同）</label><input id="nm" type="text" autocomplete="name" required>
-      <label for="nid">身分證字號</label><input id="nid" type="text" maxlength="14" autocapitalize="characters" spellcheck="false" required>
+      <label for="nid">身分證字號</label><input id="nid" type="text" maxlength="14" autocapitalize="characters" spellcheck="false" required ${su ? 'readonly value="' + esc(su.nid) + '"' : ''}>
       <label for="bd">生日</label><input id="bd" type="date" required>
       ${profileFields({}, true)}
       <p class="hint">戶名會自動使用你的姓名。</p>
@@ -508,14 +509,18 @@ async function viewRegister() {
     <button class="link" id="tologin" style="margin-top:10px">我已經有帳號，直接登入</button>`;
   const nid = document.getElementById('nid'), m = document.getElementById('m'), go = document.getElementById('go');
   nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
-  document.getElementById('tologin').addEventListener('click', () => viewLogin('登入後繼續報名。'));
+  if (su) { const em = document.getElementById('em'); if (em) { em.value = su.email; em.readOnly = true; } }
+  document.getElementById('tologin').addEventListener('click', () => viewLogin(su ? null : '登入後繼續報名。'));
   document.getElementById('f').addEventListener('submit', async e => {
     e.preventDefault(); m.innerHTML = ''; go.disabled = true;
     const name = document.getElementById('nm').value.trim(), bd = document.getElementById('bd').value;
     try {
-      const r = await rpc('payroll_register', { p_join: state.join, p_data: Object.assign(readProfile(name), { name, national_id: nid.value, birth_date: bd, consent: document.getElementById('ok').checked }) });
+      const data = Object.assign(readProfile(name), { name, national_id: nid.value, birth_date: bd, consent: document.getElementById('ok').checked });
+      if (su) { data.signup_ticket = su.ticket; data.email = su.email; }
+      const r = await rpc('payroll_register', { p_join: su ? null : state.join, p_data: data });
+      if (r.error === 'bad_ticket') state.signup = null;
       if (r.ok) {
-        saveToken(r.token);
+        saveToken(r.token); state.signup = null;
         const [y, mo, d] = bd.split('-'); const pw = String(Number(y) - 1911).padStart(3, '0') + mo + d;
         return viewDocs('基本資料已建立。之後登入的帳號是身分證字號，密碼是你的民國生日 7 碼（' + pw + '）。');
       }
@@ -523,6 +528,66 @@ async function viewRegister() {
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
     go.disabled = false;
   });
+}
+
+// 沒有報名連結的新朋友：身分證字號＋Email 驗證碼，驗證後才能填基本資料建檔
+const SERR = { bad_national_id: '身分證字號不正確，請再檢查一次。', bad_email: 'Email 格式不正確。', exists: '這個身分證字號已經有帳號了，請直接登入；忘記密碼請聯絡沃克思的活動窗口。',
+  mail_unavailable: '系統暫時無法寄送驗證信，請稍後再試，或向活動負責人索取報名連結。', too_many: '嘗試太多次了，請一小時後再試。', busy: '今天的驗證信已達上限，請明天再試。',
+  expired: '驗證碼已過期，請重新寄送。', bad_code: '驗證碼不對。' };
+function viewSignup(step) {
+  document.title = '建立帳號｜沃克思';
+  const s = state.signupForm = state.signupForm || {};
+  if (step !== 'code') {
+    app.innerHTML = brand + `<h1>建立帳號</h1><p class="sub">第一次和沃克思合作、還沒報名活動也可以先建檔。先用 Email 收驗證碼，再填基本資料與上傳證件。</p>
+      <form id="f" class="card pad" style="margin-top:18px" autocomplete="on">
+        <label for="snid" style="margin-top:0">身分證字號</label><input id="snid" type="text" maxlength="14" autocapitalize="characters" spellcheck="false" required value="${esc(s.nid || '')}">
+        <label for="sem">Email（收驗證碼用，之後也會存成你的聯絡 Email）</label><input id="sem" type="email" autocomplete="email" required value="${esc(s.email || '')}">
+        <div id="m"></div><button class="btn" id="go">寄驗證碼</button></form>
+      <button class="link" id="tologin" style="margin-top:10px">我已經有帳號，直接登入</button>
+      <p class="foot">建檔後要上傳身分證正反面與存摺封面，沃克思會核對證件。用別人的身分證字號建檔屬違法行為。</p>`;
+    const nid = document.getElementById('snid'), m = document.getElementById('m'), go = document.getElementById('go');
+    nid.addEventListener('input', () => { nid.value = cleanId(nid.value); });
+    document.getElementById('tologin').addEventListener('click', () => viewLogin());
+    document.getElementById('f').addEventListener('submit', async e => {
+      e.preventDefault(); m.innerHTML = '';
+      nid.value = cleanId(nid.value); const bad = idProblem(nid.value);
+      if (bad) { m.innerHTML = '<div class="msg err">' + esc(bad) + '</div>'; return; }
+      go.disabled = true; go.textContent = '寄送中…';
+      try {
+        const r = await rpc('payroll_signup_start', { p_national_id: nid.value, p_email: document.getElementById('sem').value });
+        if (r.ok) { s.nid = nid.value; s.email = document.getElementById('sem').value.trim().toLowerCase(); s.sentAt = Date.now(); return viewSignup('code'); }
+        m.innerHTML = '<div class="msg err">' + esc(SERR[r.error] || '寄送失敗，請再試一次。') + '</div>';
+      } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
+      go.disabled = false; go.textContent = '寄驗證碼';
+    });
+    return;
+  }
+  app.innerHTML = brand + `<h1>輸入驗證碼</h1><p class="sub">驗證碼已寄到 <b>${esc(s.email)}</b>，10 分鐘內有效。沒收到請看看垃圾郵件匣。</p>
+    <form id="f" class="card pad" style="margin-top:18px" autocomplete="off">
+      <label for="scode" style="margin-top:0">6 位數驗證碼</label><input id="scode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required>
+      <div id="m"></div><button class="btn" id="go">確認</button></form>
+    <button class="link" id="resend" style="margin-top:10px">重新寄送</button>　<button class="link" id="back" style="margin-top:10px">改 Email 或身分證字號</button>`;
+  const m = document.getElementById('m'), go = document.getElementById('go'), code = document.getElementById('scode');
+  document.getElementById('back').addEventListener('click', () => viewSignup());
+  document.getElementById('resend').addEventListener('click', async ev => {
+    const b = ev.target; const wait = 60 - Math.floor((Date.now() - (s.sentAt || 0)) / 1000);
+    if (wait > 0) { m.innerHTML = '<div class="msg warn">請等 ' + wait + ' 秒再重新寄送。</div>'; return; }
+    b.disabled = true;
+    try { const r = await rpc('payroll_signup_start', { p_national_id: s.nid, p_email: s.email }); s.sentAt = Date.now();
+      m.innerHTML = r.ok ? '<div class="msg ok">已重新寄送。</div>' : '<div class="msg err">' + esc(SERR[r.error] || '寄送失敗。') + '</div>'; }
+    catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+    b.disabled = false;
+  });
+  document.getElementById('f').addEventListener('submit', async e => {
+    e.preventDefault(); m.innerHTML = ''; go.disabled = true;
+    try {
+      const r = await rpc('payroll_signup_verify', { p_national_id: s.nid, p_email: s.email, p_code: code.value });
+      if (r.ok) { state.signup = { ticket: r.ticket, nid: s.nid, email: s.email }; state.signupForm = null; return viewRegister(); }
+      m.innerHTML = '<div class="msg err">' + esc((SERR[r.error] || '驗證失敗，請再試一次。') + (r.error === 'bad_code' && r.left != null ? '還可以再試 ' + r.left + ' 次。' : '')) + '</div>';
+    } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
+    go.disabled = false;
+  });
+  code.focus();
 }
 
 const DOCS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];

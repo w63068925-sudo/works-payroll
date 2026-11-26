@@ -822,7 +822,7 @@ begin
   select coalesce(array_agg(x), array['accepted']) into v_st from jsonb_array_elements_text(case when jsonb_typeof(f->'statuses') = 'array' then f->'statuses' else '[]'::jsonb end) x
     where x in ('accepted', 'applied', 'waitlist', 'rejected', 'attended');
   with src as (
-    select e.id event_id, e.name event_name, e.start_date event_start, p.id person_id, s.work_date, to_char(s.start_time, 'HH24:MI') t_start, to_char(s.end_time, 'HH24:MI') t_end, s.role, x.status
+    select e.id event_id, e.name event_name, e.start_date event_start, p.id person_id, s.work_date, to_char(s.start_time, 'HH24:MI') t_start, to_char(s.end_time, 'HH24:MI') t_end, s.role, x.status, e.archived_at is not null archived
       from public.application_shifts x
       join public.applications a on a.id = x.application_id and a.status = 'active'
       join public.shifts s on s.id = x.shift_id
@@ -831,14 +831,14 @@ begin
      where x.status = any(v_st)
     union all
     -- 沒開班次的活動（舊表匯入）：以出勤紀錄當工作日
-    select distinct e.id, e.name, e.start_date, p.id, t.work_date, null, null, null, 'attended'
+    select distinct e.id, e.name, e.start_date, p.id, t.work_date, null, null, null, 'attended', e.archived_at is not null
       from public.attendance t
       join public.events e on e.id = t.event_id
       join public.people p on p.id = t.person_id
      where 'attended' = any(v_st) and not exists (select 1 from public.shifts s2 where s2.event_id = e.id)
   ), flt as (
     select src.* from src
-     where (v_ev is null or src.event_id = v_ev)
+     where (v_ev is null or src.event_id = v_ev) and (v_ev is not null or not src.archived)
        and (v_q is null or strpos(src.event_name, v_q) > 0)
        and (v_from is null or src.work_date >= v_from)
        and (v_to is null or src.work_date <= v_to)
@@ -1887,7 +1887,7 @@ begin
   from (select '同一天也在其他活動出勤：' || string_agg(to_char(y.work_date, 'MM/DD') || '「' || y.name || '」', '、' order by y.work_date, y.name) detail
         from (select distinct o2.work_date, e2.name
               from public.attendance a1 join public.attendance o2 on o2.person_id = a1.person_id and o2.work_date = a1.work_date and o2.event_id <> a1.event_id
-              join public.events e2 on e2.id = o2.event_id
+              join public.events e2 on e2.id = o2.event_id and e2.archived_at is null
               where a1.event_id = p_event and a1.person_id = pr.id) y) x
   where x.detail is not null;
   if pr.bank_account is null then
@@ -2379,10 +2379,17 @@ CREATE OR REPLACE FUNCTION public.payroll_register(p_join text, p_data jsonb)
  SET search_path TO ''
 AS $function$
 declare e public.events; v_nid text := upper(btrim(coalesce(p_data->>'national_id',''))); v_name text := btrim(coalesce(p_data->>'name',''));
-  v_bd date; v_age int; c jsonb; v_id uuid; v_token text;
+  v_bd date; v_age int; c jsonb; v_id uuid; v_token text; sv public.signup_verifications;
 begin
-  select * into e from public.events where signup_code = btrim(coalesce(p_join,'')) and coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1;
-  if not found then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
+  if btrim(coalesce(p_join,'')) <> '' then
+    select * into e from public.events where signup_code = btrim(coalesce(p_join,'')) and coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1;
+    if not found then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
+  else
+    select * into sv from public.signup_verifications where ticket_hash = encode(extensions.digest(coalesce(p_data->>'signup_ticket',''), 'sha256'), 'hex')
+      and used_at is null and ticket_expires_at > now() for update;
+    if sv.id is null then return jsonb_build_object('ok', false, 'error', 'bad_ticket'); end if;
+    if sv.national_id <> upper(regexp_replace(public.halfwidth(v_nid), '\s', '', 'g')) then return jsonb_build_object('ok', false, 'error', 'ticket_mismatch'); end if;
+  end if;
   if not coalesce((p_data->>'consent')::boolean, false) then return jsonb_build_object('ok', false, 'error', 'no_consent'); end if;
   if not public.valid_tw_id(v_nid) then return jsonb_build_object('ok', false, 'error', 'bad_national_id'); end if;
   if length(v_name) < 2 or length(v_name) > 40 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
@@ -2399,14 +2406,18 @@ begin
     c->>'bank_code', c->>'bank_branch', c->>'bank_account_name', c->>'bank_account',
     extensions.crypt(lpad((extract(year from v_bd)::int - 1911)::text, 3, '0') || to_char(v_bd, 'MMDD'), extensions.gen_salt('bf', 10)), 'self', now())
   returning id into v_id;
-  insert into public.data_issues(event_id, person_id, severity, code, detail) values (e.id, v_id, 'warn', 'new_registration', '新登錄人員，請核對身分證與存摺影本');
+  if sv.id is not null then
+    update public.people set email = sv.email where id = v_id;
+    update public.signup_verifications set used_at = now() where id = sv.id;
+  end if;
+  insert into public.data_issues(event_id, person_id, severity, code, detail) values (e.id, v_id, 'warn', 'new_registration', case when sv.id is not null then '新人自行建檔（Email 已驗證），請核對身分證與存摺影本' else '新登錄人員，請核對身分證與存摺影本' end);
   if v_age < 18 then
     insert into public.data_issues(event_id, person_id, severity, code, detail)
     values (e.id, v_id, 'error', 'minor', format('未滿 18 歲（%s 歲），須備置法定代理人同意書及年齡證明文件（勞基法第46條）%s', v_age, case when v_age < 16 then '；未滿 16 歲為童工，工時與工作內容另有限制（第44、47、48條）' else '' end));
   end if;
   v_token := encode(extensions.gen_random_bytes(32), 'hex');
   insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(v_token, 'sha256'), 'hex'), v_id, now() + interval '8 hours');
-  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_id::text, 'registered', 'people', v_id, jsonb_build_object('event', e.id));
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_id::text, 'registered', 'people', v_id, jsonb_build_object('event', e.id, 'via', case when sv.id is not null then 'email' else 'join' end));
   return jsonb_build_object('ok', true, 'token', v_token, 'name', v_name, 'event', e.name);
 end $function$
 ;
@@ -2590,7 +2601,7 @@ AS $function$
 begin
   if new.status = 'accepted' and (tg_op = 'INSERT' or old.status is distinct from 'accepted') then
     insert into public.notifications(person_id, event_id, kind, send_after)
-    select a.person_id, a.event_id, 'accepted', now() + interval '2 minutes' from public.applications a where a.id = new.application_id
+    select a.person_id, a.event_id, 'accepted', now() + interval '2 minutes' from public.applications a join public.people p on p.id = a.person_id and p.line_user_id is not null where a.id = new.application_id
     on conflict do nothing;
   end if;
   return new;
@@ -2604,7 +2615,7 @@ CREATE OR REPLACE FUNCTION public.trg_notify_payslip()
  SET search_path TO ''
 AS $function$
 begin
-  if new.status = 'published' and old.status is distinct from 'published' then
+  if new.status = 'published' and old.status is distinct from 'published' and exists (select 1 from public.people where id = new.person_id and line_user_id is not null) then
     insert into public.notifications(person_id, event_id, kind, ref_id, dedupe_key, send_after)
     values (new.person_id, new.event_id, 'payslip', new.id, 'payslip:' || new.id, now() + interval '2 minutes')
     on conflict do nothing;
@@ -3023,3 +3034,99 @@ revoke all on function public.payroll_share_checkin_code(text) from public;
 grant execute on function public.payroll_share_checkin_code(text) to anon, authenticated;
 -- 打卡碼只由資料庫內部函式產生，不開放直接呼叫
 revoke all on function public.checkin_make_code(uuid, bigint) from public, anon, authenticated;
+
+-- 新人自行建檔：沒有活動報名連結也能建檔，用 Email 驗證碼確認（驗證碼由 w63068925 的 Apps Script 寄出）
+create table if not exists public.signup_verifications (
+  id uuid primary key default gen_random_uuid(),
+  national_id text not null,
+  email text not null,
+  code_hash text not null,
+  attempts int not null default 0,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  verified_at timestamptz,
+  ticket_hash text unique,
+  ticket_expires_at timestamptz,
+  used_at timestamptz
+);
+create index if not exists signup_verifications_nid on public.signup_verifications(national_id, created_at);
+create index if not exists signup_verifications_email on public.signup_verifications(email, created_at);
+alter table public.signup_verifications enable row level security;
+revoke all on public.signup_verifications from anon, authenticated;
+insert into public.app_settings(key, value) values ('mail_webapp_url', null), ('mail_key', null) on conflict (key) do nothing;
+
+CREATE OR REPLACE FUNCTION public.payroll_signup_start(p_national_id text, p_email text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 寄 6 位數驗證碼到 Email（10 分鐘有效）；同一身分證或 Email 一小時最多 3 次，全站一天最多 300 封
+declare v_nid text := upper(regexp_replace(public.halfwidth(coalesce(p_national_id,'')), '\s', '', 'g'));
+  v_email text := lower(btrim(public.halfwidth(coalesce(p_email,'')))); v_url text := public.setting('mail_webapp_url'); v_key text := public.setting('mail_key');
+  v_code text; v_id uuid;
+  v_ip text := nullif(btrim(split_part(coalesce((nullif(current_setting('request.headers', true), ''))::json->>'x-forwarded-for', ''), ',', 1)), '');
+begin
+  perform pg_advisory_xact_lock(hashtext('payroll_signup_start'));
+  v_url := nullif(btrim(coalesce(v_url, '')), ''); v_key := nullif(btrim(coalesce(v_key, '')), '');
+  if not public.valid_tw_id(v_nid) then return jsonb_build_object('ok', false, 'error', 'bad_national_id'); end if;
+  if length(v_email) > 120 or v_email !~ '^[^@\s]+@[^@\s]+\.[a-z]{2,}$' then return jsonb_build_object('ok', false, 'error', 'bad_email'); end if;
+  if v_ip is not null then
+    if (select count(*) from public.signup_attempts where ip = v_ip and created_at > now() - interval '1 hour') >= 10 then return jsonb_build_object('ok', false, 'error', 'too_many'); end if;
+    delete from public.signup_attempts where created_at < now() - interval '1 day';
+    insert into public.signup_attempts(ip) values (v_ip);
+  end if;
+  if exists (select 1 from public.people where national_id = v_nid) then return jsonb_build_object('ok', false, 'error', 'exists'); end if;
+  if v_url is null or v_key is null then return jsonb_build_object('ok', false, 'error', 'mail_unavailable'); end if;
+  if (select count(*) from public.signup_verifications where national_id = v_nid and created_at > now() - interval '1 hour') >= 3
+     or (select count(*) from public.signup_verifications where email = v_email and created_at > now() - interval '1 hour') >= 3 then
+    return jsonb_build_object('ok', false, 'error', 'too_many');
+  end if;
+  if (select count(*) from public.signup_verifications where created_at > now() - interval '1 day') >= 300 then return jsonb_build_object('ok', false, 'error', 'busy'); end if;
+  delete from public.signup_verifications where created_at < now() - interval '7 days';
+  v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
+  v_id := gen_random_uuid();
+  insert into public.signup_verifications(id, national_id, email, code_hash, expires_at)
+  values (v_id, v_nid, v_email, encode(extensions.digest(v_id::text || ':' || v_code, 'sha256'), 'hex'), now() + interval '10 minutes');
+  -- 不把寄信密鑰放進 pg_net 佇列：只送 HMAC 簽章（佇列表的 PUBLIC 權限由 Supabase 管，不能收回）
+  perform net.http_post(url := v_url, body := jsonb_build_object('type', 'signup_code', 'to', v_email, 'code', v_code, 'ts', floor(extract(epoch from now()))::bigint,
+      'sig', encode(extensions.hmac(v_email || '|' || v_code || '|' || floor(extract(epoch from now()))::bigint, v_key, 'sha256'), 'hex')),
+    headers := '{"Content-Type": "application/json"}'::jsonb, timeout_milliseconds := 10000);
+  return jsonb_build_object('ok', true);
+end $function$
+;
+revoke all on function public.payroll_signup_start(text, text) from public;
+grant execute on function public.payroll_signup_start(text, text) to anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.payroll_signup_verify(p_national_id text, p_email text, p_code text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 驗證碼對了就發一張 30 分鐘、只能用一次的建檔票；同一組驗證碼最多試 5 次
+declare v_nid text := upper(regexp_replace(public.halfwidth(coalesce(p_national_id,'')), '\s', '', 'g'));
+  v_email text := lower(btrim(public.halfwidth(coalesce(p_email,'')))); v_code text := regexp_replace(public.halfwidth(coalesce(p_code,'')), '\D', '', 'g');
+  v public.signup_verifications; v_ticket text;
+begin
+  select * into v from public.signup_verifications where national_id = v_nid and email = v_email and verified_at is null order by created_at desc limit 1 for update;
+  if v.id is null or v.expires_at <= now() then return jsonb_build_object('ok', false, 'error', 'expired'); end if;
+  if v.attempts >= 5 then return jsonb_build_object('ok', false, 'error', 'too_many'); end if;
+  if v.code_hash <> encode(extensions.digest(v.id::text || ':' || v_code, 'sha256'), 'hex') then
+    update public.signup_verifications set attempts = attempts + 1 where id = v.id;
+    return jsonb_build_object('ok', false, 'error', 'bad_code', 'left', 4 - v.attempts);
+  end if;
+  v_ticket := encode(extensions.gen_random_bytes(24), 'hex');
+  update public.signup_verifications set verified_at = now(), ticket_hash = encode(extensions.digest(v_ticket, 'sha256'), 'hex'), ticket_expires_at = now() + interval '30 minutes' where id = v.id;
+  return jsonb_build_object('ok', true, 'ticket', v_ticket);
+end $function$
+;
+revoke all on function public.payroll_signup_verify(text, text, text) from public;
+grant execute on function public.payroll_signup_verify(text, text, text) to anon, authenticated;
+
+-- 新人建檔安全加固（Codex xhigh 審查）：每個 IP 一小時最多 10 次（含「已經有帳號」的查詢）、寄信序列化避免同時送出超過上限、
+-- 寄信請求只帶 HMAC 簽章、不帶密鑰（net schema 沒對外開放；佇列表的 PUBLIC 權限屬 Supabase 管理，不能收回）
+create table if not exists public.signup_attempts (ip text not null, created_at timestamptz not null default now());
+create index if not exists signup_attempts_ip on public.signup_attempts(ip, created_at);
+alter table public.signup_attempts enable row level security;
+revoke all on public.signup_attempts from anon, authenticated;

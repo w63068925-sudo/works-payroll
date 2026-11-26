@@ -462,5 +462,62 @@ begin
     if has_function_privilege('anon', 'public.checkin_make_code(uuid,bigint)', 'execute') or has_function_privilege('authenticated', 'public.checkin_make_code(uuid,bigint)', 'execute') then fails := fails || ' [33m make_code exposed]'; end if;
   end;
 
-  if fails = '' then raise exception 'PASS 全部 33 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 34. 新人自行建檔：Email 驗證碼 → 建檔票 → 建檔（票只能用一次、身分證要一致、已存在不能建、次數上限）
+  declare n34 text; n34b text; tk text; vid uuid; k int;
+  begin
+    select x into n34 from (select 'Y2' || lpad((floor(random() * 10000000))::int::text, 7, '0') b) q,
+      lateral (select q.b || d::text x from generate_series(0, 9) d where public.valid_tw_id(q.b || d::text)) z limit 1;
+    select x into n34b from (select 'Y2' || lpad((floor(random() * 10000000))::int::text, 7, '0') b) q,
+      lateral (select q.b || d::text x from generate_series(0, 9) d where public.valid_tw_id(q.b || d::text) and q.b || d::text <> n34) z limit 1;
+    update public.app_settings set value = null where key = 'mail_webapp_url';
+    if public.payroll_signup_start(n34, 'reg34@example.com')->>'error' is distinct from 'mail_unavailable' then fails := fails || ' [34a mail unavailable]'; end if;
+    update public.app_settings set value = 'https://example.invalid/exec' where key = 'mail_webapp_url';
+    update public.app_settings set value = 'regression-mail-key' where key = 'mail_key';
+    if public.payroll_signup_start('A12345', 'reg34@example.com')->>'error' is distinct from 'bad_national_id' or public.payroll_signup_start(n34, 'not-mail')->>'error' is distinct from 'bad_email' then fails := fails || ' [34b validation]'; end if;
+    if (public.payroll_signup_start(n34, ' Reg34@Example.com ')->>'ok')::boolean is not true then fails := fails || ' [34c start]'; end if;
+    select id into vid from public.signup_verifications where national_id = n34 order by created_at desc limit 1;
+    update public.signup_verifications set code_hash = encode(extensions.digest(id::text || ':123456', 'sha256'), 'hex') where id = vid;
+    r := public.payroll_signup_verify(n34, 'reg34@example.com', '000000');
+    if r->>'error' is distinct from 'bad_code' or (r->>'left')::int <> 4 then fails := fails || ' [34d bad code ' || coalesce(r::text, '') || ']'; end if;
+    tk := public.payroll_signup_verify(n34, 'reg34@example.com', '１２３４５６')->>'ticket';
+    if tk is null then fails := fails || ' [34e verify]'; end if;
+    if public.payroll_register(null, jsonb_build_object('signup_ticket', tk, 'national_id', n34b, 'name', '建檔測試', 'birth_date', '2000-01-01', 'consent', true))->>'error' is distinct from 'ticket_mismatch' then fails := fails || ' [34f mismatch]'; end if;
+    r := public.payroll_register(null, jsonb_build_object('signup_ticket', tk, 'national_id', n34, 'name', '建檔測試', 'birth_date', '2000-01-01', 'consent', true, 'email', 'other@example.com',
+      'phone', '0912345034', 'address', '台北市信義區測試里一鄰測試路1號', 'bank_code', '822', 'bank_account', '123456789034', 'bank_account_name', '建檔測試'));
+    if (r->>'ok')::boolean is not true or (select email from public.people where national_id = n34) is distinct from 'reg34@example.com'
+       or not exists (select 1 from public.data_issues i join public.people p on p.id = i.person_id where p.national_id = n34 and i.code = 'new_registration' and i.event_id is null) then fails := fails || ' [34g register ' || coalesce(r::text, '') || ']'; end if;
+    if public.payroll_register(null, jsonb_build_object('signup_ticket', tk, 'national_id', n34b, 'name', '建檔測試', 'birth_date', '2000-01-01', 'consent', true))->>'error' is distinct from 'bad_ticket' then fails := fails || ' [34h ticket reuse]'; end if;
+    if public.payroll_register(null, jsonb_build_object('national_id', n34b, 'name', '建檔測試', 'birth_date', '2000-01-01', 'consent', true))->>'error' is distinct from 'bad_ticket' then fails := fails || ' [34i no ticket]'; end if;
+    if public.payroll_signup_start(n34, 'reg34@example.com')->>'error' is distinct from 'exists' then fails := fails || ' [34j exists]'; end if;
+    perform public.payroll_signup_start(n34b, 'a34@example.com'); perform public.payroll_signup_start(n34b, 'b34@example.com'); perform public.payroll_signup_start(n34b, 'c34@example.com');
+    if public.payroll_signup_start(n34b, 'd34@example.com')->>'error' is distinct from 'too_many' then fails := fails || ' [34k rate limit]'; end if;
+    if has_table_privilege('anon', 'public.signup_verifications', 'select') then fails := fails || ' [34l anon table]'; end if;
+    -- 每個 IP 一小時 10 次（含已存在的查詢）
+    perform set_config('request.headers', '{"x-forwarded-for": "203.0.113.34, 10.0.0.1"}', true);
+    for k in 1..10 loop perform public.payroll_signup_start(n34, 'reg34@example.com'); end loop;
+    if public.payroll_signup_start(n34, 'reg34@example.com')->>'error' is distinct from 'too_many' then fails := fails || ' [34m ip limit]'; end if;
+    perform set_config('request.headers', '', true);
+    -- 佇列裡的寄信請求不能含密鑰本身（只帶 HMAC 簽章）
+    if exists (select 1 from net.http_request_queue q where convert_from(q.body, 'UTF8') like '%regression-mail-key%') then fails := fails || ' [34n mail key in pg_net queue]'; end if;
+    if not exists (select 1 from net.http_request_queue q where convert_from(q.body, 'UTF8') like '%"sig"%') then fails := fails || ' [34o no signed request queued]'; end if;
+  end;
+
+  -- 35. 巡檢 22:07：沒綁 LINE 的人不排通知；加保名冊沒指定活動時不含已封存活動（指定活動時照列）
+  declare e35 uuid; p35 uuid; s35 uuid;
+  begin
+    select id into e35 from public.events where name = '回歸27乙';
+    insert into public.people(national_id, name, profile_source) values ('Z999990035', '測試戊', 'test') returning id into p35;
+    insert into public.payslips(person_id, event_id, gross, net, deductions, status) values (p35, e35, 100, 100, 0, 'draft') returning id into s35;
+    update public.payslips set status = 'published' where id = s35;
+    if exists (select 1 from public.notifications where ref_id = s35) then fails := fails || ' [35a unlinked notified]'; end if;
+    insert into public.attendance(person_id, event_id, work_date, source) values (p35, e35, (select start_date from public.events where id = e35), 'manual');
+    update public.events set archived_at = now() where id = e35;
+    r := public.admin_roster(atok, jsonb_build_object('statuses', jsonb_build_array('attended'), 'q', '回歸27乙'));
+    if jsonb_array_length(r->'rows') <> 0 then fails := fails || ' [35b archived in roster]'; end if;
+    r := public.admin_roster(atok, jsonb_build_object('event_id', e35, 'statuses', jsonb_build_array('attended')));
+    if jsonb_array_length(r->'rows') = 0 then fails := fails || ' [35c explicit archived event]'; end if;
+    update public.events set archived_at = null where id = e35;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 35 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

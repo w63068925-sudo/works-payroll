@@ -681,6 +681,14 @@ const stepReview = {
 const SHORT = { net_mismatch: '金額不符', missing_pay: '沒有金額', items_mismatch: '明細不符', payee_not_self: '戶名非本人', no_bank_account: '無帳戶', no_ins_deduction: '未扣勞保', ins_days_gt_worked: '勞保天數', relation_unconfirmed: '僱傭或承攬', invalid_national_id: '身分證有誤', birth_unparsed: '生日不明', consecutive_days: '連續出勤', below_min_wage: '低於最低工資', over_12h: '超過12小時', no_break: '休息不足', rest_day: '休息日', regular_leave_work: '例假出勤', week_over_40: '週超40時', nhi_supplement: '補充保費', no_pay_date: '無發薪日', new_registration: '新登錄', minor: '未成年', bank_changed: '改帳戶', contract_with_ins: '承攬有勞保', same_day_other_event: '同日兩場' };
 const issueShort = i => SHORT[i.code] || i.code;
 
+// 發布確認：LINE 沒設定好、或本人沒綁 LINE 的人收不到「薪資單已發布」通知，要另外告知
+function pubNote(sel) {
+  const ls = S.lineSt, rows = S.cache.slips.filter(s => sel.includes(s.id));
+  if (ls === undefined || ls === null) return '<div class="dim" style="margin-top:2px">正在確認 LINE 通知狀態…</div>';
+  if (!ls.ok || !ls.configured || !ls.valid) return '<div style="color:var(--warn);font-size:13px;margin-top:2px">LINE 通知還沒設定好，這 ' + rows.length + ' 人都不會收到通知，請另外告知。</div>';
+  const n = rows.filter(s => !s.has_line).length;
+  return n ? '<div style="color:var(--warn);font-size:13px;margin-top:2px">其中 ' + n + ' 人沒綁 LINE，不會收到通知，請另外告知。</div>' : '';
+}
 /* 步驟四：發布 */
 const stepPublish = {
   html: () => {
@@ -706,7 +714,7 @@ const stepPublish = {
         <td class="r">${money(s.gross)}</td><td class="r">${Number(s.deductions) ? money(s.deductions) : ''}</td><td class="r"><b>${money(s.net)}</b></td>
         <td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">沒有薪資單。到「出勤」按「依出勤產生薪資單」。</td></tr>'}</tbody>
       </table></div>
-      ${sel.length ? `<div class="bulk">${S.confirm ? `<span class="grow">${S.confirm === 'published' ? '確定發布 ' + sel.length + ' 筆？發布後工讀生登入就看得到。' : '確定把 ' + sel.length + ' 筆改回草稿？'}</span><button class="btn" id="yes">確定</button><button class="btn ghost" id="no">取消</button>`
+      ${sel.length ? `<div class="bulk">${S.confirm ? `<span class="grow">${S.confirm === 'published' ? '確定發布 ' + sel.length + ' 筆？發布後工讀生登入就看得到。' + pubNote(sel) : '確定把 ' + sel.length + ' 筆改回草稿？'}</span><button class="btn" id="yes" ${S.confirm === 'published' && (S.lineSt === undefined || S.lineSt === null) ? 'disabled' : ''}>確定</button><button class="btn ghost" id="no">取消</button>`
         : `<span class="grow">已選 ${sel.length} 筆</span><button class="btn" id="pub">發布</button><button class="btn ghost" id="unpub">改回草稿</button><button class="btn ghost" id="clr">取消選取</button>`}</div>` : ''}`);
   },
   bind: e => {
@@ -716,7 +724,7 @@ const stepPublish = {
     const all = $('all'); if (all) all.onchange = () => { const f = S.filter.pub || 'all'; S.cache.slips.filter(s => s.status !== 'void' && (f === 'all' || s.status === f)).forEach(s => all.checked ? S.sel.add(s.id) : S.sel.delete(s.id)); S.confirm = null; viewEvent(e.id, 'publish'); };
     const b = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
     b('pub', () => { S.confirm = 'published'; viewEvent(e.id, 'publish'); });
-    if (S.lineSt === undefined && S.cache.slips.some(s => s.status !== 'void' && s.missing)) {
+    if (S.lineSt === undefined) {
       S.lineSt = null; lineCall('status').catch(() => ({ ok: false })).then(st => { S.lineSt = st; if (location.hash === '#/events/' + e.id + '/publish') viewEvent(e.id, 'publish'); });
     }
     b('missx', async () => {
