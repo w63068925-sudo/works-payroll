@@ -303,6 +303,7 @@ begin
         'basis', s.basis, 'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
         'gross', s.gross, 'allowances', s.allowances, 'deductions', s.deductions, 'net', s.net, 'status', s.status,
         'pay_bank_code', s.pay_bank_code, 'pay_bank_branch', s.pay_bank_branch, 'pay_account_name', s.pay_account_name, 'pay_account', s.pay_account,
+        'pay_method', s.pay_method, 'cash_paid_at', s.cash_paid_at, 'cash_paid_by', s.cash_paid_by,
         'missing', public.person_incomplete_text(p.id), 'phone', p.phone, 'has_line', p.line_user_id is not null, 'has_password', p.password_hash is not null,
         'issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
             from public.data_issues i where i.payslip_id = s.id or (i.payslip_id is null and i.person_id = s.person_id and (i.event_id is null or i.event_id = s.event_id))), '[]'::jsonb)
@@ -586,6 +587,7 @@ begin
         'total', count(s.id), 'draft', count(s.id) filter (where s.status = 'draft'),
         'published', count(s.id) filter (where s.status = 'published'), 'void', count(s.id) filter (where s.status = 'void'),
         'net_sum', coalesce(sum(s.net) filter (where s.status <> 'void'), 0),
+        'cash_pending', count(s.id) filter (where s.status = 'published' and s.pay_method = 'cash' and s.cash_paid_at is null),
         'open_issues', (select count(*) from public.data_issues i where not i.resolved and i.severity <> 'info'
             and (i.event_id = e.id or i.payslip_id in (select id from public.payslips where event_id = e.id)))) x
       from public.events e left join public.payslips s on s.event_id = e.id group by e.id) t), '[]'::jsonb));
@@ -598,6 +600,7 @@ CREATE OR REPLACE FUNCTION public.admin_payout(p_token text, p_event uuid)
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
+-- 匯款清單只含轉帳；現金另列（簽收單用），並附已上傳的簽收單照片清單
 declare v_actor text := public.admin_actor(p_token);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
@@ -612,7 +615,13 @@ begin
         when btrim(regexp_replace(coalesce(p.bank_account_name, ''), '[（(].*$', '')) <> p.name then 'payee_mismatch'
         else null end) order by p.name)
     from public.payslips s join public.people p on p.id = s.person_id
-    where s.event_id = p_event and s.status = 'published' and s.relation = 'employment'), '[]'::jsonb));
+    where s.event_id = p_event and s.status = 'published' and s.relation = 'employment' and s.pay_method = 'transfer'), '[]'::jsonb),
+    'cash_rows', coalesce((select jsonb_agg(jsonb_build_object('id', s.id, 'name', p.name, 'national_id', p.national_id, 'net', s.net, 'pay_date', s.pay_date,
+        'paid_at', s.cash_paid_at, 'paid_by', s.cash_paid_by) order by p.name)
+      from public.payslips s join public.people p on p.id = s.person_id
+      where s.event_id = p_event and s.status = 'published' and s.relation = 'employment' and s.pay_method = 'cash'), '[]'::jsonb),
+    'receipts', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'uploaded_by', r.uploaded_by, 'uploaded_at', r.uploaded_at) order by r.uploaded_at)
+      from public.payout_receipts r where r.event_id = p_event), '[]'::jsonb));
 end $function$
 ;
 
@@ -1847,6 +1856,9 @@ begin
     return jsonb_build_object('result', 'skipped', 'reason', '承攬人員不自動算薪');
   end if;
   select * into v_existing from public.payslips where event_id = p_event and person_id = pr.id and status <> 'void' order by generated desc limit 1;
+  if v_existing.id is not null and v_existing.cash_paid_at is not null then
+    return jsonb_build_object('result', 'skipped', 'reason', '現金已發放，不重算（金額要調整請另行處理）');
+  end if;
   if v_existing.id is not null and v_existing.status = 'published' then
     return jsonb_build_object('result', 'skipped', 'reason', '薪資單已發布，請先取消發布再重算');
   end if;
@@ -1870,6 +1882,7 @@ begin
   values (pr.id, p_event, 'employment', c->>'role', (c->>'period_start')::date, (c->>'period_end')::date, v_pay, 'hourly',
     (c->>'gross')::numeric, 0, (c->>'deductions')::numeric, (c->>'net')::numeric, 'draft', true, v_existing.note, pr.bank_code, pr.bank_branch, pr.bank_account_name, pr.bank_account)
   returning id into v_id;
+  if v_existing.pay_method = 'cash' then update public.payslips set pay_method = 'cash' where id = v_id; end if;
   for it in select * from jsonb_array_elements(c->'items') loop
     insert into public.payslip_items(payslip_id, kind, code, label, work_date, hours, rate, amount, sort)
     values (v_id, 'earning', it->>'code', it->>'label', (it->>'work_date')::date, (it->>'hours')::numeric, (it->>'rate')::numeric, (it->>'amount')::numeric, (it->>'sort')::int);
@@ -1890,7 +1903,7 @@ begin
               join public.events e2 on e2.id = o2.event_id and e2.archived_at is null
               where a1.event_id = p_event and a1.person_id = pr.id) y) x
   where x.detail is not null;
-  if pr.bank_account is null then
+  if pr.bank_account is null and coalesce(v_existing.pay_method, 'transfer') <> 'cash' then
     insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail, resolved) values (p_event, v_id, pr.id, 'warn', 'no_bank_account', '沒有匯款帳號', 'no_bank_account|沒有匯款帳號' = any(v_done));
   end if;
   if v_pay is null then
@@ -2333,7 +2346,7 @@ begin
     'relation', s.relation, 'role', s.role, 'basis', s.basis,
     'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
     'gross', s.gross, 'allowances', s.allowances, 'deductions', s.deductions, 'net', s.net, 'note', s.note,
-    'published_at', s.published_at,
+    'published_at', s.published_at, 'pay_method', s.pay_method, 'cash_paid_at', s.cash_paid_at,
     'pay_account', jsonb_build_object('bank_code', s.pay_bank_code, 'branch', s.pay_bank_branch,
         'last4', case when s.pay_account is not null then right(s.pay_account, 4) end),
     'items', coalesce((select jsonb_agg(jsonb_build_object('kind', i.kind, 'code', i.code, 'label', i.label,
@@ -3162,3 +3175,98 @@ revoke all on function public.admin_mail_settings(text, jsonb) from public;
 grant execute on function public.admin_mail_settings(text, jsonb) to anon, authenticated;
 -- 設定值（含寄信密鑰）只給資料庫內部函式讀
 revoke all on function public.setting(text) from public, anon, authenticated;
+
+-- 現金發薪（使用者決定 2026-11-27）：發放方式記在每張薪資單；現金要列印簽收單、拍照上傳，管理員按「已發放」；領現金仍要存摺；不拆分
+alter table public.payslips add column if not exists pay_method text not null default 'transfer';
+alter table public.payslips drop constraint if exists payslips_pay_method_check;
+alter table public.payslips add constraint payslips_pay_method_check check (pay_method in ('transfer', 'cash'));
+alter table public.payslips add column if not exists cash_paid_at timestamptz;
+alter table public.payslips add column if not exists cash_paid_by text;
+create table if not exists public.payout_receipts (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events(id) on delete cascade,
+  path text not null unique,
+  uploaded_by text not null,
+  uploaded_at timestamptz not null default now()
+);
+create index if not exists payout_receipts_event on public.payout_receipts(event_id);
+alter table public.payout_receipts enable row level security;
+revoke all on public.payout_receipts from anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_set_pay_method(p_token text, p_ids uuid[], p_method text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 改發放方式（轉帳／現金）；現金已發放的不能改回轉帳。改成現金時「沒有匯款帳號」標為已處理；改回轉帳且仍沒帳號時重新打開
+declare v_actor text := public.admin_actor(p_token); v_n int; v_paid int; v_changed uuid[];
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_method is null or p_method not in ('transfer', 'cash') then return jsonb_build_object('ok', false, 'error', 'bad_method'); end if;
+  if coalesce(array_length(p_ids, 1), 0) = 0 or array_length(p_ids, 1) > 1000 then return jsonb_build_object('ok', false, 'error', 'bad_ids'); end if;
+  select count(*) into v_paid from public.payslips where id = any(p_ids) and cash_paid_at is not null and p_method = 'transfer';
+  with u as (
+    update public.payslips set pay_method = p_method where id = any(p_ids) and status <> 'void' and pay_method <> p_method and not (cash_paid_at is not null and p_method = 'transfer')
+    returning id)
+  select coalesce(array_agg(id), '{}') into v_changed from u;
+  v_n := coalesce(array_length(v_changed, 1), 0);
+  if p_method = 'cash' then
+    update public.data_issues set resolved = true where payslip_id = any(v_changed) and code = 'no_bank_account' and not resolved;
+  else
+    update public.data_issues i set resolved = false from public.payslips s
+     where i.payslip_id = s.id and s.id = any(v_changed) and i.code = 'no_bank_account' and i.resolved and s.pay_account is null;
+  end if;
+  insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'pay_method_set', 'payslips', jsonb_build_object('method', p_method, 'ids', to_jsonb(p_ids), 'updated', v_n));
+  return jsonb_build_object('ok', true, 'updated', v_n, 'skipped_paid', v_paid);
+end $function$
+;
+revoke all on function public.admin_set_pay_method(text, uuid[], text) from public;
+grant execute on function public.admin_set_pay_method(text, uuid[], text) to anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_mark_cash_paid(p_token text, p_ids uuid[], p_paid boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 現金已發放／取消：只對已發布、發放方式為現金的薪資單；標記已發放前，該活動要先上傳過簽收單照片
+declare v_actor text := public.admin_actor(p_token); v_n int;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_paid is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+  if coalesce(array_length(p_ids, 1), 0) = 0 or array_length(p_ids, 1) > 1000 then return jsonb_build_object('ok', false, 'error', 'bad_ids'); end if;
+  if p_paid then
+    if exists (select 1 from public.payslips s where s.id = any(p_ids) and s.pay_method = 'cash' and s.status = 'published' and s.cash_paid_at is null
+               and not exists (select 1 from public.payout_receipts r where r.event_id = s.event_id)) then
+      return jsonb_build_object('ok', false, 'error', 'no_receipt');
+    end if;
+    update public.payslips set cash_paid_at = now(), cash_paid_by = v_actor where id = any(p_ids) and pay_method = 'cash' and status = 'published' and cash_paid_at is null;
+  else
+    update public.payslips set cash_paid_at = null, cash_paid_by = null where id = any(p_ids) and pay_method = 'cash' and status = 'published' and cash_paid_at is not null;
+  end if;
+  get diagnostics v_n = row_count;
+  insert into public.audit_log(actor, action, table_name, detail) values (v_actor, case when p_paid then 'cash_paid' else 'cash_paid_undone' end, 'payslips', jsonb_build_object('ids', to_jsonb(p_ids), 'updated', v_n));
+  return jsonb_build_object('ok', true, 'updated', v_n);
+end $function$
+;
+revoke all on function public.admin_mark_cash_paid(text, uuid[], boolean) from public;
+grant execute on function public.admin_mark_cash_paid(text, uuid[], boolean) to anon, authenticated;
+
+
+CREATE OR REPLACE FUNCTION public.admin_payout_receipts(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 發薪步驟顯示已上傳的現金簽收單清單（不含檔案路徑）
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true, 'receipts', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'uploaded_by', r.uploaded_by, 'uploaded_at', r.uploaded_at) order by r.uploaded_at)
+    from public.payout_receipts r where r.event_id = p_event), '[]'::jsonb));
+end $function$
+;
+revoke all on function public.admin_payout_receipts(text, uuid) from public;
+grant execute on function public.admin_payout_receipts(text, uuid) to anon, authenticated;

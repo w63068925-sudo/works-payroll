@@ -759,23 +759,89 @@ const stepPayout = {
   html: e => {
     const live = S.cache.slips.filter(s => s.status !== 'void' && s.relation !== 'contract');
     const pub = live.filter(s => s.status === 'published');
-    const noAcct = pub.filter(s => !s.pay_account).length;
+    const tr = pub.filter(s => s.pay_method !== 'cash'), cash = pub.filter(s => s.pay_method === 'cash');
+    const noAcct = tr.filter(s => !s.pay_account).length, cashLeft = cash.filter(s => !s.cash_paid_at).length;
+    const sum = list => money(list.reduce((a, s) => a + Number(s.net || 0), 0));
+    const sel = [...S.sel].filter(id => live.some(s => s.id === id));
+    const how = s => s.pay_method === 'cash' ? (s.cash_paid_at ? '<span class="badge ok">現金・已發放</span><div class="dim">' + esc(d(s.cash_paid_at)) + ' ' + esc(s.cash_paid_by || '') + '</div>' : '<span class="badge warn">現金・待發放</span>') : '<span class="badge">轉帳</span>';
     return `<div class="card pad" style="margin-bottom:14px"><div class="row">
         ${payModeHtml('pp', e)}
         <button class="btn ghost" id="pdsave">儲存並套用到全部薪資單</button><span class="grow"></span>
-        <button class="btn" id="csv" ${pub.length ? '' : 'disabled'}>下載匯款清單（CSV）</button></div>
-        <p class="sub" style="margin-top:10px">${e.pay_date ? '目前發薪日：' + esc(d(e.pay_date)) + '。' : e.pay_within_days != null ? '目前為活動結束後 ' + esc(e.pay_within_days) + ' 天內發薪，薪資單發薪日為 ' + esc(d(addDays(e.end_date || e.start_date, Number(e.pay_within_days)))) + '。' : '<span style="color:var(--warn)">尚未設定發薪日。</span>'}薪資單上必須顯示發薪日。匯款清單只含已發布、屬於僱傭的薪資單，可直接在 Excel 開啟後交給銀行或會計。</p></div>
+        <button class="btn" id="csv" ${tr.length ? '' : 'disabled'}>下載匯款清單（CSV）</button>
+        <button class="btn ghost" id="cashprint" ${cash.length ? '' : 'disabled'}>列印現金簽收單</button></div>
+        <p class="sub" style="margin-top:10px">${e.pay_date ? '目前發薪日：' + esc(d(e.pay_date)) + '。' : e.pay_within_days != null ? '目前為活動結束後 ' + esc(e.pay_within_days) + ' 天內發薪，薪資單發薪日為 ' + esc(d(addDays(e.end_date || e.start_date, Number(e.pay_within_days)))) + '。' : '<span style="color:var(--warn)">尚未設定發薪日。</span>'}薪資單上必須顯示發薪日。勾選下方的人可改成「現金」或「轉帳」；匯款清單只含轉帳，現金的人列印簽收單、簽名後拍照上傳，再按「已發放」。</p></div>
       <div class="stats"><div class="card stat"><div class="k">已發布</div><div class="v">${pub.length} / ${live.length}</div></div>
-        <div class="card stat"><div class="k">匯款總額</div><div class="v">${money(pub.reduce((a, s) => a + Number(s.net || 0), 0))}</div></div>
-        <div class="card stat"><div class="k">缺匯款帳戶</div><div class="v" style="${noAcct ? 'color:var(--warn)' : ''}">${noAcct}</div></div></div>
+        <div class="card stat"><div class="k">轉帳</div><div class="v">${sum(tr)}</div><div class="dim">${tr.length} 人${noAcct ? '，<span style="color:var(--warn)">缺帳戶 ' + noAcct + '</span>' : ''}</div></div>
+        <div class="card stat"><div class="k">現金</div><div class="v">${sum(cash)}</div><div class="dim">${cash.length} 人${cashLeft ? '，<span style="color:var(--warn)">待發放 ' + cashLeft + '</span>' : cash.length ? '，都已發放' : ''}</div></div></div>
+      <div class="card pad" style="margin-bottom:14px"><b>現金簽收單照片</b><span class="dim">　簽好的簽收單拍照上傳存檔（只存在系統的私有空間，查看會留紀錄）</span>
+        <div class="row" style="margin-top:8px;align-items:center"><label class="btn ghost sm" style="cursor:pointer">上傳照片<input type="file" id="rcpt" accept="image/*,application/pdf" hidden></label><span id="rcptlist" class="grow dim">載入中…</span></div></div>
       <div class="card tablebox"><table>
-      <thead><tr><th>姓名</th><th>銀行</th><th>戶名</th><th>帳號</th><th class="r">實發</th><th>狀態</th></tr></thead>
-      <tbody>${live.map(s => `<tr><td>${esc(s.name)}</td><td>${esc([s.pay_bank_code, s.pay_bank_branch].filter(Boolean).join(' ') || '—')}</td><td>${esc(s.pay_account_name || '—')}</td>
-        <td>${s.pay_account ? esc(s.pay_account) : '<span class="badge warn">缺</span>'}${openIssues(s.issues).some(i => i.code === 'bank_changed') ? ' <span class="badge warn">帳戶待核</span>' : ''}</td><td class="r">${money(s.net)}</td><td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">沒有薪資單</td></tr>'}</tbody>
-      </table></div>`;
+      <thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${live.length && live.every(s => S.sel.has(s.id)) ? 'checked' : ''}></th><th>姓名</th><th>發放方式</th><th>銀行</th><th>帳號</th><th class="r">實發</th><th>狀態</th></tr></thead>
+      <tbody>${live.map(s => `<tr><td><input type="checkbox" class="ck" data-id="${esc(s.id)}" aria-label="選取 ${esc(s.name)}" ${S.sel.has(s.id) ? 'checked' : ''}></td><td>${esc(s.name)}</td><td>${how(s)}</td><td>${esc([s.pay_bank_code, s.pay_bank_branch].filter(Boolean).join(' ') || '—')}</td>
+        <td>${s.pay_account ? esc(s.pay_account) : s.pay_method === 'cash' ? '<span class="dim">—</span>' : '<span class="badge warn">缺</span>'}${openIssues(s.issues).some(i => i.code === 'bank_changed') ? ' <span class="badge warn">帳戶待核</span>' : ''}</td><td class="r">${money(s.net)}</td><td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="7" class="empty">沒有薪資單</td></tr>'}</tbody>
+      </table></div>
+      ${sel.length ? `<div class="bulk"><span class="grow">已選 ${sel.length} 人</span><button class="btn ghost" id="tocash">改為現金</button><button class="btn ghost" id="totr">改為轉帳</button><button class="btn" id="paid">現金已發放</button><button class="btn ghost" id="unpaid">取消已發放</button><button class="btn ghost" id="clr">取消選取</button></div>` : ''}`;
   },
   bind: e => {
     bindPayMode('pp');
+    on('.ck', 'change', (ev, c) => { c.checked ? S.sel.add(c.dataset.id) : S.sel.delete(c.dataset.id); viewEvent(e.id, 'payout'); });
+    const all = $('all'); if (all) all.onchange = () => { S.cache.slips.filter(s => s.status !== 'void' && s.relation !== 'contract').forEach(s => all.checked ? S.sel.add(s.id) : S.sel.delete(s.id)); viewEvent(e.id, 'payout'); };
+    const ids = () => [...S.sel];
+    const act = async (fn, args, ok) => { const r = await rpc(fn, Object.assign({ p_ids: ids() }, args)); flash(r.ok ? 'ok' : 'err', r.ok ? ok(r) : r.error === 'no_receipt' ? '請先在上方上傳簽收單照片，再標記現金已發放。' : '更新失敗，請再試一次。'); if (r.ok) S.sel = new Set(); refreshEvent(e, 'payout'); };
+    const b = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+    b('tocash', () => act('admin_set_pay_method', { p_method: 'cash' }, r => '已改為現金 ' + r.updated + ' 張。'));
+    b('totr', () => act('admin_set_pay_method', { p_method: 'transfer' }, r => '已改為轉帳 ' + r.updated + ' 張。' + (r.skipped_paid ? r.skipped_paid + ' 張現金已發放，先取消已發放才能改。' : '')));
+    b('paid', () => act('admin_mark_cash_paid', { p_paid: true }, r => '已標記現金發放 ' + r.updated + ' 張（只算已發布、選現金的）。'));
+    b('unpaid', () => act('admin_mark_cash_paid', { p_paid: false }, r => '已取消 ' + r.updated + ' 張的發放紀錄。'));
+    b('clr', () => { S.sel = new Set(); viewEvent(e.id, 'payout'); });
+    // 簽收單照片清單與上傳
+    const listRcpt = async () => {
+      const box = $('rcptlist'); if (!box) return;
+      let r; try { r = await rpc('admin_payout_receipts', { p_event: e.id }); } catch (err) { box.textContent = '讀取失敗'; return; }
+      if (!$('rcptlist')) return;
+      box.innerHTML = (r.receipts || []).length ? r.receipts.map((x, i) => `<button class="link" data-rcpt="${esc(x.id)}">第 ${i + 1} 張（${esc(d(x.uploaded_at))} ${esc(x.uploaded_by)}）</button>`).join('　') : '還沒有上傳';
+      box.querySelectorAll('[data-rcpt]').forEach(btn => btn.onclick = async () => {
+        // 點擊當下先開視窗（避免被瀏覽器擋），拿到 2 分鐘連結後再導過去
+        const w = window.open('', '_blank'); if (w) w.opener = null;
+        const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'receipt_view', admin_token: S.token, receipt_id: btn.dataset.rcpt }) });
+        const j = await res.json().catch(() => ({}));
+        if (j.ok && /^https:\/\//.test(j.url) && w) w.location.href = j.url; else { if (w) w.close(); flash('err', '無法開啟簽收單。'); viewEvent(e.id, 'payout'); }
+      });
+    };
+    if ($('rcptlist')) listRcpt();
+    const rf = $('rcpt'); if (rf) rf.onchange = async () => {
+      const f = rf.files[0]; rf.value = ''; if (!f) return;
+      if (f.size > 15 * 1024 * 1024) { flash('err', '檔案超過 15MB。'); return viewEvent(e.id, 'payout'); }
+      const type = f.type === 'image/jpg' ? 'image/jpeg' : f.type;
+      try {
+        const call = body => fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify(Object.assign({ admin_token: S.token, event_id: e.id }, body)) }).then(x => x.json());
+        const u = await call({ action: 'receipt_upload_url', content_type: type });
+        if (!u.ok) throw new Error(u.error === 'bad_type' ? '只收 JPG、PNG、WebP 或 PDF' : '上傳失敗');
+        const put = await fetch(u.signed_url, { method: 'PUT', headers: { 'Content-Type': type }, body: f });
+        if (!put.ok) throw new Error('上傳失敗');
+        const c = await call({ action: 'receipt_confirm', path: u.path });
+        if (!c.ok) throw new Error('上傳失敗');
+        flash('ok', '簽收單已上傳。');
+      } catch (err) { flash('err', err.message || '上傳失敗'); }
+      viewEvent(e.id, 'payout');
+    };
+    // 列印現金簽收單（向伺服器取最新名單）
+    const cp = $('cashprint'); if (cp) cp.onclick = async () => {
+      const w = window.open('', '_blank'); if (!w) { flash('err', '瀏覽器擋住了新視窗，請允許彈出視窗。'); return; }
+      const r = await rpc('admin_payout', { p_event: e.id });
+      const rows = (r.cash_rows || []);
+      const mask = id => String(id || '').slice(0, 3) + '****' + String(id || '').slice(-3);
+      const total = rows.reduce((a, x) => a + Number(x.net || 0), 0);
+      w.document.write(`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>${esc(e.name)} 現金簽收單</title>
+        <style>body{font-family:-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;margin:24px;color:#111}h1{font-size:20px;margin:0 0 4px}p{margin:0 0 14px;color:#444;font-size:13px}
+        table{width:100%;border-collapse:collapse;font-size:14px}th,td{border:1px solid #999;padding:10px 8px;text-align:left}th{background:#f2f2f2}td.r,th.r{text-align:right}.sig{width:28%}@media print{button{display:none}}</style></head><body>
+        <button onclick="print()" style="float:right;padding:6px 14px">列印</button>
+        <h1>${esc(e.name)}　現金薪資簽收單</h1><p>雇主：${esc((S.ov.employer || {}).legal_name || (S.ov.employer || {}).name || '')}　發薪日：${esc(rows[0] && rows[0].pay_date ? d(rows[0].pay_date) : '—')}　共 ${rows.length} 人，合計 ${money(total)} 元。本人確認已收到下列金額之現金薪資。</p>
+        <table><thead><tr><th>#</th><th>姓名</th><th>身分證字號</th><th class="r">實發金額</th><th class="sig">簽名</th><th>日期</th></tr></thead><tbody>
+        ${rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td>${esc(mask(x.national_id))}</td><td class="r">${money(x.net)}</td><td></td><td></td></tr>`).join('')}
+        </tbody></table><p style="margin-top:18px">發放人：＿＿＿＿＿＿＿＿　日期：＿＿＿＿＿＿＿＿</p></body></html>`);
+      w.document.close();
+    };
     $('pdsave').onclick = async () => {
       const pm = readPayMode('pp');
       if ($('ppmode').value === 'date' && !pm.pay_date) { flash('err', '請選擇發薪日。'); return refreshEvent(e, 'payout'); }
@@ -1574,7 +1640,7 @@ function viewPayouts() {
   const t = today(), soonEnd = addDays(t, 30);
   const pending = e => e.total - e.void - e.published;
   const late = e => payDateOf(e) && payDateOf(e) < t && pending(e) > 0;
-  const isTodo = e => !payDateOf(e) || pending(e) > 0;
+  const isTodo = e => !payDateOf(e) || pending(e) > 0 || Number(e.cash_pending || 0) > 0;
   const isSoon = e => payDateOf(e) && payDateOf(e) >= t && payDateOf(e) <= soonEnd;
   const rank = e => late(e) ? 0 : isTodo(e) && payDateOf(e) ? 1 : isTodo(e) ? 2 : 3;
   const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => rank(a) - rank(b) || (rank(a) === 3 ? String(payDateOf(b)).localeCompare(String(payDateOf(a))) : String(payDateOf(a) || '9999').localeCompare(String(payDateOf(b) || '9999'))));
@@ -1592,7 +1658,7 @@ function viewPayouts() {
     <div class="card tablebox"><table><thead><tr><th>發薪日</th><th>活動</th><th class="r">已發布</th><th class="r">實發合計</th><th>狀態</th></tr></thead>
       <tbody>${list.map(e => { const n = pending(e);
         return `<tr data-k="${esc(e.id)}"><td>${payDateOf(e) ? esc(d(payDateOf(e))) : '<span class="badge warn">未設</span>'}</td><td><b>${esc(e.name)}</b></td><td class="r">${e.published} / ${e.total - e.void}</td><td class="r">${money(e.net_sum)}</td>
-        <td>${late(e) ? '<span class="badge error">已過發薪日仍有未發布</span>' : n ? '<span class="badge warn">尚有 ' + n + ' 張未發布</span>' : !payDateOf(e) ? '<span class="badge warn">待設發薪日</span>' : payDateOf(e) > t ? '<span class="badge">已發布・待匯款</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || `<tr><td colspan="5" class="empty">${v === 'todo' ? '沒有待辦，都發完了。' : v === 'soon' ? '30 天內沒有要發薪的活動。' : '還沒有薪資單'}</td></tr>`}</tbody></table></div>
+        <td>${late(e) ? '<span class="badge error">已過發薪日仍有未發布</span>' : n ? '<span class="badge warn">尚有 ' + n + ' 張未發布</span>' : !payDateOf(e) ? '<span class="badge warn">待設發薪日</span>' : Number(e.cash_pending || 0) ? '<span class="badge warn">現金待發放 ' + Number(e.cash_pending) + ' 人</span>' : payDateOf(e) > t ? '<span class="badge">已發布・待匯款</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || `<tr><td colspan="5" class="empty">${v === 'todo' ? '沒有待辦，都發完了。' : v === 'soon' ? '30 天內沒有要發薪的活動。' : '還沒有薪資單'}</td></tr>`}</tbody></table></div>
     ${full.length > list.length ? `<div class="row" style="justify-content:center;margin-top:12px"><span class="dim">顯示 ${list.length} / ${full.length} 場</span><button class="btn ghost" id="paymore">顯示更多</button></div>` : ''}`);
   on('button.stat', 'click', (ev, b) => { S.filter.payouts = b.dataset.v; S.filter.payLimit = 50; viewPayouts(); });
   if ($('paymore')) $('paymore').onclick = () => { S.filter.payLimit = lim + 100; viewPayouts(); };

@@ -288,6 +288,43 @@ Deno.serve(async (req: Request) => {
       await sb.from("audit_log").insert({ actor, action: "documents_verified", table_name: "people", row_id: personId, detail: { downgraded: [], kept: "all" } });
       return json({ ok: true, downgraded: [], kept: [] });
     }
+    // 現金發薪簽收單照片：管理員上傳到私有空間 receipts/活動ID/，查看時核發 2 分鐘連結並留紀錄
+    if (b.action === "receipt_upload_url" || b.action === "receipt_confirm" || b.action === "receipt_view") {
+      const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
+      if (!actor) return json({ ok: false, error: "session" });
+      const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (b.action === "receipt_view") {
+        const rid = String(b.receipt_id ?? "");
+        if (!UUID.test(rid)) return json({ ok: false, error: "bad_id" });
+        const { data: rec } = await sb.from("payout_receipts").select("event_id, path").eq("id", rid).maybeSingle();
+        if (!rec) return json({ ok: false, error: "missing" });
+        const { error: auditErr } = await sb.from("audit_log").insert({ actor, action: "receipt_url_issued", table_name: "payout_receipts", row_id: rec.event_id, detail: { receipt: rid } });
+        if (auditErr) return json({ ok: false, error: "audit" });
+        const { data, error } = await sb.storage.from("documents").createSignedUrl(rec.path, 120);
+        if (error || !data) return json({ ok: false, error: "storage" });
+        return json({ ok: true, url: data.signedUrl });
+      }
+      const eventId = String(b.event_id ?? "");
+      if (!UUID.test(eventId)) return json({ ok: false, error: "bad_event" });
+      const { data: ev } = await sb.from("events").select("id").eq("id", eventId).maybeSingle();
+      if (!ev) return json({ ok: false, error: "not_found" });
+      if (b.action === "receipt_upload_url") {
+        const ext = ({ "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" } as Record<string, string>)[String(b.content_type ?? "")];
+        if (!ext) return json({ ok: false, error: "bad_type" });
+        const path = `receipts/${eventId}/${Date.now()}.${ext}`;
+        const { data, error } = await sb.storage.from("documents").createSignedUploadUrl(path);
+        if (error || !data) return json({ ok: false, error: "storage" });
+        return json({ ok: true, path, signed_url: data.signedUrl });
+      }
+      const path = String(b.path ?? "");
+      if (!new RegExp(`^receipts/${eventId}/\\d{13}\\.(jpg|png|webp|pdf)$`).test(path)) return json({ ok: false, error: "bad_path" });
+      const { data: found } = await sb.storage.from("documents").list(`receipts/${eventId}`, { search: path.split("/")[2] });
+      if (!found || !found.some((f) => `receipts/${eventId}/${f.name}` === path)) return json({ ok: false, error: "missing" });
+      const { error: insErr } = await sb.from("payout_receipts").insert({ event_id: eventId, path, uploaded_by: actor });
+      if (insErr) return json({ ok: false, error: "db" });
+      await sb.from("audit_log").insert({ actor, action: "receipt_uploaded", table_name: "payout_receipts", row_id: eventId, detail: { path } });
+      return json({ ok: true });
+    }
     if (b.action === "view_url") {
       const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
       if (!actor) return json({ ok: false, error: "session" });

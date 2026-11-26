@@ -409,7 +409,8 @@ async function viewSlip(id) {
           <dt>${contract ? '性質' : '崗位'}</dt><dd>${contract ? '勞務報酬（承攬）' : esc(p.role || '—')}</dd>
           <dt>計薪區間</dt><dd>${esc(fmtPeriod(p.period_start, p.period_end))}</dd>
           <dt>發薪日</dt><dd>${esc(fmtDate(p.pay_date))}</dd>
-          <dt>匯款帳戶</dt><dd>${p.pay_account.last4 ? esc(p.pay_account.bank_code || '') + ' ' + esc(p.pay_account.branch || '') + '　末四碼 ' + esc(p.pay_account.last4) : '—'}</dd>
+          ${p.pay_method === 'cash' ? `<dt>發放方式</dt><dd>現金發放${p.cash_paid_at ? '（' + esc(fmtDate(new Date(p.cash_paid_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' }))) + ' 已發放）' : '（待發放）'}</dd>`
+            : `<dt>匯款帳戶</dt><dd>${p.pay_account.last4 ? esc(p.pay_account.bank_code || '') + ' ' + esc(p.pay_account.branch || '') + '　末四碼 ' + esc(p.pay_account.last4) : '—'}</dd>`}
         </dl>
       </div>
     </div>

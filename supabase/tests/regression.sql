@@ -531,5 +531,42 @@ begin
   if public.setting('mail_webapp_url') <> 'https://script.google.com/macros/s/AKfycbRegressionTest000000000/exec' then fails := fails || ' [36e partial update]'; end if;
   if has_function_privilege('anon', 'public.setting(text)', 'execute') then fails := fails || ' [36f setting exposed]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 36 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 37. 現金發薪：改發放方式、已發放只對已發布的現金單、已發放不能改回轉帳、匯款清單不含現金、重算保留現金、總覽待發放數
+  declare e37 uuid; p37 uuid; s37 uuid;
+  begin
+    insert into public.events(employer_id, name, start_date, end_date, pay_date) values (emp, '回歸37現金', v_today - 2, v_today - 2, v_today + 5) returning id into e37;
+    insert into public.people(national_id, name, profile_source) values ('Z999990037', '測試庚', 'test') returning id into p37;
+    insert into public.payslips(person_id, event_id, gross, net, deductions, status, pay_date, relation) values (p37, e37, 1000, 1000, 0, 'draft', v_today + 5, 'employment') returning id into s37;
+    insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (e37, s37, p37, 'warn', 'no_bank_account', '沒有匯款帳號');
+    if public.admin_set_pay_method('bad-token', array[s37], 'cash')->>'error' is distinct from 'session' then fails := fails || ' [37a no session]'; end if;
+    if public.admin_set_pay_method(atok, array[s37], 'bitcoin')->>'error' is distinct from 'bad_method' then fails := fails || ' [37b bad method]'; end if;
+    perform public.admin_set_pay_method(atok, array[s37], 'cash');
+    if (select pay_method from public.payslips where id = s37) <> 'cash' or exists (select 1 from public.data_issues where payslip_id = s37 and code = 'no_bank_account' and not resolved) then fails := fails || ' [37c set cash]'; end if;
+    if (public.admin_mark_cash_paid(atok, array[s37], true)->>'updated')::int <> 0 then fails := fails || ' [37d draft marked paid]'; end if;
+    update public.payslips set status = 'published' where id = s37;
+    if (select (x->>'cash_pending')::int from jsonb_array_elements(public.admin_overview(atok)->'events') x where (x->>'id')::uuid = e37) <> 1 then fails := fails || ' [37e overview cash_pending]'; end if;
+    r := public.admin_payout(atok, e37);
+    if jsonb_array_length(r->'rows') <> 0 or jsonb_array_length(r->'cash_rows') <> 1 then fails := fails || ' [37f payout split ' || r::text || ']'; end if;
+    -- 還沒上傳簽收單不能標記已發放
+    if public.admin_mark_cash_paid(atok, array[s37], true)->>'error' is distinct from 'no_receipt' then fails := fails || ' [37k no receipt]'; end if;
+    insert into public.payout_receipts(event_id, path, uploaded_by) values (e37, 'receipts/' || e37 || '/1700000000000.jpg', 'regression-admin');
+    -- 分兩句：同一個運算式看不到函式內剛寫入的資料
+    r := public.admin_mark_cash_paid(atok, array[s37], true);
+    if (r->>'updated')::int <> 1 or (select cash_paid_by from public.payslips where id = s37) is null then fails := fails || ' [37g mark paid]'; end if;
+    r := public.admin_set_pay_method(atok, array[s37], 'transfer');
+    if (r->>'skipped_paid')::int <> 1 or (select pay_method from public.payslips where id = s37) <> 'cash' then fails := fails || ' [37h paid switched back]'; end if;
+    -- 已發放的不重算（避免重複發放）
+    update public.payslips set status = 'draft', generated = true where id = s37;
+    if (public.payslip_regenerate(e37, p37)->>'result') is distinct from 'skipped' or (select cash_paid_at from public.payslips where id = s37) is null then fails := fails || ' [37l regen paid]'; end if;
+    update public.payslips set status = 'published' where id = s37;
+    if public.admin_mark_cash_paid(atok, array[s37], null)->>'error' is distinct from 'bad_value' then fails := fails || ' [37m null paid]'; end if;
+    perform public.admin_mark_cash_paid(atok, array[s37], false);
+    if (select cash_paid_at from public.payslips where id = s37) is not null then fails := fails || ' [37i undo paid]'; end if;
+    -- 改回轉帳且沒帳號：缺帳戶問題重新打開
+    perform public.admin_set_pay_method(atok, array[s37], 'transfer');
+    if not exists (select 1 from public.data_issues where payslip_id = s37 and code = 'no_bank_account' and not resolved) then fails := fails || ' [37n reopen no account]'; end if;
+    if public.admin_payout_receipts('bad-token', e37)->>'error' is distinct from 'session' or has_table_privilege('anon', 'public.payout_receipts', 'select') then fails := fails || ' [37j receipts access]'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 37 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

@@ -184,3 +184,5 @@
 - 2026-11-26 證件畫質（使用者選：舊證件改存清楚版＋核對後不再縮小）：docs 函式「資料已核對」只記錄核對人與時間，不再縮成 500px 存證圖；新增 legacy_hd_todo／legacy_hd，Apps Script importHdThumbs 把 6,390 張 500px／8KB 舊縮圖換成 1200px 約 60KB（最多 120KB）並刪掉舊縮圖；本人重新上傳時一併清掉舊表縮圖與清楚版。後台按鈕條件與文字同步。
   - Codex 審查（gpt-6-luna，medium）：已修更新後重讀確認再刪檔（避免本人同時重新上傳留下孤兒檔）、刪不掉的檔案記進稽核 cleanup_needed、Apps Script 跑完 3 輪仍有換不到的照實回報、personId 完整 UUID 檢查、只有舊表證件的人也能按「資料已核對」。
 - 2026-11-27 舊證件清楚版：巡檢發現換圖期間 docs 函式約四成請求 546（Edge Function 資源上限）。改為 Google 給的 JPEG ≤70KB 直接存、否則只壓兩次（目標 70KB，最多 110KB），每次請求 1 張；失敗的會在後續輪次重試。
+- 2026-11-27 現金發薪（使用者決定：記在每張薪資單、紙本簽收單拍照上傳＋管理員按已發放、領現金仍要存摺、不拆分）：payslips.pay_method／cash_paid_at／cash_paid_by、payout_receipts；admin_set_pay_method、admin_mark_cash_paid、admin_payout_receipts，admin_payout 只匯出轉帳並另列 cash_rows；docs 函式 receipt_upload_url／confirm／view（私有 documents/receipts/活動ID/，查看留紀錄）；後台「發薪」步驟勾選改方式、標已發放、列印現金簽收單（身分證遮蔽）、上傳簽收單照片；薪資發放頁「現金待發放」算待辦；工讀生薪資單顯示現金發放。regression 第 37 組。
+  - Codex 安全審查（gpt-6-luna，xhigh）：已修已發放的現金單重算會遺失發放紀錄（改為已發放不重算）、取消發放限已發布並拒絕 null、標已發放前須該活動已上傳簽收單、收據檢視先開視窗避免被擋、改回轉帳且無帳號時重開缺帳戶問題。未改：收據放在私有 documents bucket 的 receipts/ 路徑（審查以為要獨立 bucket，屬 brief 用語誤會）。
