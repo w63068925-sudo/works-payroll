@@ -343,5 +343,27 @@ begin
     'people', jsonb_build_array(jsonb_build_object('national_id', 'bad', 'name', 'x'))), null, true);
   if not coalesce((r->>'ok')::boolean, false) or (r->>'shifts')::int <> 1 then fails := fails || ' [26r shifts dropped when all people invalid ' || r::text || ']'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 26 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 27. 巡檢第一輪修正：同日兩場出勤警示、發布前標出看不到的人、LINE 補資料提醒（一天一次）、人員參加紀錄
+  declare px uuid; e27 uuid; e28 uuid; dd date := v_today - 3;
+  begin
+    insert into public.people(national_id, name, profile_source, line_user_id) values ('Z999990077', '測試丁', 'test', 'Uregress27') returning id into px;
+    insert into public.events(employer_id, name, start_date, end_date, default_hourly_rate, recruiting) values (emp, '回歸27甲', dd, dd, 200, false) returning id into e27;
+    insert into public.events(employer_id, name, start_date, end_date, default_hourly_rate, recruiting) values (emp, '回歸27乙', dd, dd, 200, false) returning id into e28;
+    insert into public.attendance(person_id, event_id, work_date, clock_in, clock_out, source) values
+      (px, e27, dd, (dd + time '09:00') at time zone 'Asia/Taipei', (dd + time '13:00') at time zone 'Asia/Taipei', 'manual'),
+      (px, e28, dd, (dd + time '14:00') at time zone 'Asia/Taipei', (dd + time '18:00') at time zone 'Asia/Taipei', 'manual');
+    perform public.admin_generate_payslips(atok, e27);
+    if not exists (select 1 from public.data_issues where event_id = e27 and person_id = px and code = 'same_day_other_event') then fails := fails || ' [27a same-day warning]'; end if;
+    r := public.admin_event(atok, e27);
+    if r#>>'{payslips,0,missing}' is null or (r#>>'{payslips,0,has_line}')::boolean is not true then fails := fails || ' [27b missing info]'; end if;
+    r := public.admin_remind_incomplete(atok, e27);
+    if (r->>'queued')::int <> 1 or (r->>'incomplete')::int <> 1 then fails := fails || ' [27c remind]'; end if;
+    if (public.admin_remind_incomplete(atok, e27)->>'queued')::int <> 0 then fails := fails || ' [27d remind dedupe]'; end if;
+    perform public.admin_generate_payslips(atok, e28);
+    if (public.admin_remind_incomplete(atok, e28)->>'queued')::int <> 1 then fails := fails || ' [27d2 other event not queued]'; end if;
+    if public.admin_remind_incomplete('bad-token', e27)->>'error' is distinct from 'session' then fails := fails || ' [27e no session]'; end if;
+    if jsonb_array_length(public.admin_person(atok, px)#>'{person,history}') <> 2 then fails := fails || ' [27f history]'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 27 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

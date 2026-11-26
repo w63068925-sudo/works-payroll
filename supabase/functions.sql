@@ -302,6 +302,7 @@ begin
         'basis', s.basis, 'period_start', s.period_start, 'period_end', s.period_end, 'pay_date', s.pay_date,
         'gross', s.gross, 'allowances', s.allowances, 'deductions', s.deductions, 'net', s.net, 'status', s.status,
         'pay_bank_code', s.pay_bank_code, 'pay_bank_branch', s.pay_bank_branch, 'pay_account_name', s.pay_account_name, 'pay_account', s.pay_account,
+        'missing', public.person_incomplete_text(p.id), 'has_line', p.line_user_id is not null, 'has_password', p.password_hash is not null,
         'issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
             from public.data_issues i where i.payslip_id = s.id or (i.payslip_id is null and i.person_id = s.person_id and (i.event_id is null or i.event_id = s.event_id))), '[]'::jsonb)
       ) order by s.source_row nulls last, p.name)
@@ -683,7 +684,15 @@ begin
     'issues', coalesce((select jsonb_agg(jsonb_build_object('id', i.id, 'severity', i.severity, 'code', i.code, 'detail', i.detail, 'resolved', i.resolved) order by i.id)
         from public.data_issues i where i.person_id = p.id and i.payslip_id is null), '[]'::jsonb),
     'payslips', coalesce((select jsonb_agg(jsonb_build_object('event', e.name, 'net', s.net, 'status', s.status, 'period_start', s.period_start) order by s.period_start desc nulls last)
-        from public.payslips s join public.events e on e.id = s.event_id where s.person_id = p.id), '[]'::jsonb)
+        from public.payslips s join public.events e on e.id = s.event_id where s.person_id = p.id), '[]'::jsonb),
+    'history', coalesce((select jsonb_agg(h order by h->>'start_date' desc nulls last) from (
+        select jsonb_build_object('event_id', e.id, 'event', e.name, 'start_date', e.start_date, 'end_date', e.end_date, 'archived', e.archived_at is not null,
+          'applied', exists (select 1 from public.applications a where a.event_id = e.id and a.person_id = p.id),
+          'accepted', exists (select 1 from public.applications a join public.application_shifts x on x.application_id = a.id where a.event_id = e.id and a.person_id = p.id and a.status = 'active' and x.status = 'accepted'),
+          'days', (select count(*) from public.attendance t where t.event_id = e.id and t.person_id = p.id),
+          'slip', (select jsonb_build_object('id', s.id, 'status', s.status, 'gross', s.gross, 'net', s.net, 'role', s.role) from public.payslips s where s.event_id = e.id and s.person_id = p.id order by (s.status = 'void'), s.created_at desc limit 1)) h
+        from public.events e
+        where e.id in (select event_id from public.applications where person_id = p.id union select event_id from public.attendance where person_id = p.id union select event_id from public.payslips where person_id = p.id)) q), '[]'::jsonb)
   ) into r from public.people p where p.id = p_id;
   if r is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   return jsonb_build_object('ok', true, 'person', r);
@@ -1319,7 +1328,13 @@ begin
       select * into s from public.payslips where id = r.ref_id;
       if s.id is null or s.status <> 'published' then update public.notifications set status = 'skipped', error = 'not_published' where id = r.id; continue; end if;
       v_text := '【沃克思】「' || r.event_name || '」的薪資單已發布' || E'\n' || ''
-        || '發薪日 ' || coalesce(to_char(s.pay_date, 'YYYY/MM/DD'), '另行通知') || E'\n' || '登入查看明細：' || v_site;
+        || '發薪日 ' || coalesce(to_char(s.pay_date, 'YYYY/MM/DD'), '另行通知') || E'\n'
+        || coalesce('目前還缺：' || public.person_incomplete_text(r.person_id) || '，補齊後才看得到薪資單。' || E'\n', '')
+        || '登入查看明細：' || v_site;
+    elsif r.kind = 'docs' then
+      v_lines := public.person_incomplete_text(r.person_id);
+      if v_lines is null then update public.notifications set status = 'skipped', error = 'already_complete' where id = r.id; continue; end if;
+      v_text := '【沃克思】要在系統看到「' || coalesce(r.event_name, '活動') || '」的薪資單，還需要你補上：' || v_lines || E'\n' || '請登入補齊：' || v_site;
     elsif r.kind = 'checkout' then
       if exists (select 1 from public.attendance where id = r.ref_id and clock_out is not null) then
         update public.notifications set status = 'skipped', error = 'already_out' where id = r.id; continue;
@@ -1852,6 +1867,14 @@ begin
     insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail, resolved)
     values (p_event, v_id, pr.id, w->>'severity', w->>'code', w->>'detail', (w->>'code') || '|' || (w->>'detail') = any(v_done));
   end loop;
+  insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail, resolved)
+  select p_event, v_id, pr.id, 'warn', 'same_day_other_event', x.detail, ('same_day_other_event|' || x.detail) = any(v_done)
+  from (select '同一天也在其他活動出勤：' || string_agg(to_char(y.work_date, 'MM/DD') || '「' || y.name || '」', '、' order by y.work_date, y.name) detail
+        from (select distinct o2.work_date, e2.name
+              from public.attendance a1 join public.attendance o2 on o2.person_id = a1.person_id and o2.work_date = a1.work_date and o2.event_id <> a1.event_id
+              join public.events e2 on e2.id = o2.event_id
+              where a1.event_id = p_event and a1.person_id = pr.id) y) x
+  where x.detail is not null;
   if pr.bank_account is null then
     insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail, resolved) values (p_event, v_id, pr.id, 'warn', 'no_bank_account', '沒有匯款帳號', 'no_bank_account|沒有匯款帳號' = any(v_done));
   end if;
@@ -2831,3 +2854,56 @@ end $function$
 ;
 revoke all on function public.admin_ai_import(text, jsonb, uuid, boolean) from public;
 grant execute on function public.admin_ai_import(text, jsonb, uuid, boolean) to anon, authenticated;
+
+-- notifications.kind 允許 docs（補資料提醒）
+alter table public.notifications drop constraint if exists notifications_kind_check;
+alter table public.notifications add constraint notifications_kind_check check (kind = any (array['accepted','reminder','checkout','payslip','test','docs']));
+CREATE OR REPLACE FUNCTION public.person_incomplete_text(p_person uuid)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select nullif(concat_ws('、',
+    (select string_agg(case k when 'id_front' then '身分證正面' when 'id_back' then '身分證反面' else '存摺封面' end, '、' order by o)
+       from jsonb_array_elements_text(i->'docs') with ordinality t(k, o)),
+    case when (i->>'bank')::boolean then '匯款帳戶' end), '')
+  from (select public.person_incomplete(p_person) i) x where i is not null;
+$function$
+;
+revoke execute on function public.person_incomplete_text(uuid) from public, anon, authenticated;
+
+-- 活動的薪資單附上：工讀生看不看得到、缺什麼、有沒有綁 LINE、能不能登入
+CREATE OR REPLACE FUNCTION public.admin_remind_incomplete(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_actor text := public.admin_actor(p_token); e public.events; v_q int; v_total int; v_noline int;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into e from public.events where id = p_event;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  with t as (
+    select distinct s.person_id, p.line_user_id, public.person_incomplete_text(s.person_id) miss
+    from public.payslips s join public.people p on p.id = s.person_id
+    where s.event_id = p_event and s.status <> 'void'
+  ), ins as (
+    insert into public.notifications(person_id, event_id, kind, body, dedupe_key)
+    select person_id, p_event, 'docs',
+      '【沃克思】要在系統看到「' || e.name || '」的薪資單，還需要你補上：' || miss || E'\n' || '請登入補齊：' || coalesce(public.setting('site_url'), ''),
+      'docs:' || person_id || ':' || p_event || ':' || ((now() at time zone 'Asia/Taipei')::date)
+    from t where miss is not null and line_user_id is not null
+    on conflict do nothing returning 1
+  )
+  select (select count(*) from ins), (select count(*) from t where miss is not null), (select count(*) from t where miss is not null and line_user_id is null)
+  into v_q, v_total, v_noline;
+  insert into public.audit_log(actor, action, table_name, row_id, detail)
+  values (v_actor, 'remind_incomplete', 'events', p_event, jsonb_build_object('queued', v_q, 'incomplete', v_total, 'no_line', v_noline));
+  return jsonb_build_object('ok', true, 'queued', v_q, 'incomplete', v_total, 'no_line', v_noline);
+end $function$
+;
+revoke all on function public.admin_remind_incomplete(text, uuid) from public;
+grant execute on function public.admin_remind_incomplete(text, uuid) to anon, authenticated;
+

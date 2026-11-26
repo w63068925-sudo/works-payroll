@@ -95,6 +95,10 @@ input:focus,select:focus,textarea:focus{border-color:var(--ink);box-shadow:0 0 0
 @media (max-width:640px){.steps{display:flex;overflow-x:auto;scrollbar-width:none}.step{flex:0 0 118px}}
 /* 表格 */
 .tablebox{overflow-x:auto}
+/* 手機：活動列表每場一張卡片，日期、狀態、薪資單、待處理都看得到 */
+@media (max-width:760px){.evlist thead{display:none}.evlist table,.evlist tbody,.evlist tr,.evlist td{display:block;width:100%}
+  .evlist tr{padding:10px 12px;border-bottom:1px solid var(--line)}.evlist td{border:0!important;padding:2px 0!important;text-align:left!important;display:flex;gap:10px}
+  .evlist td[data-l]::before{content:attr(data-l);color:var(--muted);font-size:12.5px;min-width:64px;flex:none}.evlist td[data-l="活動"]::before{display:none}}
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
 th{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.04em;background:rgba(29,28,26,.025)}
@@ -297,7 +301,8 @@ function eventState(e) {
   const t = today(), end = e.end_date || e.start_date;
   if (e.start_date && e.start_date <= t && end >= addDays(t, -1)) return ['進行中', 'dark'];
   if (e.start_date && e.start_date > t) return ['即將開始', ''];
-  if (e.closed_at) return ['已結案', 'ok']; // 管理員直接設為結案（例如沒有薪資單的舊活動）
+  // 管理員直接設為結案（例如沒有薪資單的舊活動）；但發薪日還沒到，仍算待發薪
+  if (e.closed_at && !(payDateOf(e) && payDateOf(e) > t)) return ['已結案', 'ok'];
   // 薪資單全部發佈，且發薪日已到；沒設發薪日的（例如舊表匯入的活動）活動結束後即視為結案
   if (e.total > 0 && e.published === e.total - e.void && (payDateOf(e) ? payDateOf(e) <= t : end < t)) return ['已結案', 'ok'];
   return ['待發薪', 'warn'];
@@ -313,13 +318,13 @@ function viewEvents() {
       <div class="chips" style="margin:0">${[['all', '全部', S.ov.events.length], ['進行中', '進行中', counts('進行中')], ['即將開始', '即將開始', counts('即將開始')], ['待發薪', '待發薪', counts('待發薪')], ['已結案', '已結案', counts('已結案')], ['已封存', '已封存', S.ov.archived.length]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
       <span class="grow"></span><input id="q" type="search" placeholder="搜尋活動名稱" value="${esc(q)}" style="width:220px" aria-label="搜尋活動">
     </div>
-    <div class="card tablebox"><table>
+    <div class="card tablebox evlist"><table>
       <thead><tr><th>活動</th><th>日期</th><th>狀態</th><th class="r">薪資單</th><th class="r">已發布</th><th class="r">待處理</th><th>發薪日</th><th class="r">實發合計</th></tr></thead>
       <tbody>${list.map(e => { const [st, cls] = eventState(e); return `<tr data-k="${esc(e.id)}">
-        <td><b>${esc(e.name)}</b></td><td>${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(md(e.end_date)) : ''}</td>
-        <td><span class="badge ${cls}">${st}</span>${e.archived_at ? ' <span class="badge">已封存</span>' : ''}</td><td class="r">${e.total}</td><td class="r">${e.published}</td>
-        <td class="r">${e.open_issues ? '<span class="badge warn">' + e.open_issues + '</span>' : '—'}</td>
-        <td>${payDateOf(e) ? esc(d(payDateOf(e))) + (e.pay_date ? '' : ' <span class="dim">結束後 ' + esc(e.pay_within_days) + ' 天</span>') : '<span class="dim">未設</span>'}</td><td class="r">${money(e.net_sum)}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">沒有符合的活動</td></tr>'}</tbody>
+        <td data-l="活動"><b>${esc(e.name)}</b></td><td data-l="日期">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(md(e.end_date)) : ''}</td>
+        <td data-l="狀態"><span class="badge ${cls}">${st}</span>${e.archived_at ? ' <span class="badge">已封存</span>' : ''}</td><td class="r" data-l="薪資單">${e.total}</td><td class="r" data-l="已發布">${e.published}</td>
+        <td class="r" data-l="待處理">${e.open_issues ? '<span class="badge warn">' + e.open_issues + '</span>' : '—'}</td>
+        <td data-l="發薪日">${payDateOf(e) ? esc(d(payDateOf(e))) + (e.pay_date ? '' : ' <span class="dim">結束後 ' + esc(e.pay_within_days) + ' 天</span>') : '<span class="dim">未設</span>'}</td><td class="r" data-l="實發合計">${money(e.net_sum)}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">沒有符合的活動</td></tr>'}</tbody>
     </table></div>`);
   on('tbody tr[data-k]', 'click', (e, tr) => go('#/events/' + tr.dataset.k));
   on('.chip', 'click', (e, b) => { S.filter.events = b.dataset.f; viewEvents(); });
@@ -651,7 +656,7 @@ const stepReview = {
     bindIssues(e);
   }
 };
-const SHORT = { net_mismatch: '金額不符', missing_pay: '沒有金額', items_mismatch: '明細不符', payee_not_self: '戶名非本人', no_bank_account: '無帳戶', no_ins_deduction: '未扣勞保', ins_days_gt_worked: '勞保天數', relation_unconfirmed: '僱傭或承攬', invalid_national_id: '身分證有誤', birth_unparsed: '生日不明', consecutive_days: '連續出勤', below_min_wage: '低於最低工資', over_12h: '超過12小時', no_break: '休息不足', rest_day: '休息日', regular_leave_work: '例假出勤', week_over_40: '週超40時', nhi_supplement: '補充保費', no_pay_date: '無發薪日', new_registration: '新登錄', minor: '未成年', bank_changed: '改帳戶', contract_with_ins: '承攬有勞保' };
+const SHORT = { net_mismatch: '金額不符', missing_pay: '沒有金額', items_mismatch: '明細不符', payee_not_self: '戶名非本人', no_bank_account: '無帳戶', no_ins_deduction: '未扣勞保', ins_days_gt_worked: '勞保天數', relation_unconfirmed: '僱傭或承攬', invalid_national_id: '身分證有誤', birth_unparsed: '生日不明', consecutive_days: '連續出勤', below_min_wage: '低於最低工資', over_12h: '超過12小時', no_break: '休息不足', rest_day: '休息日', regular_leave_work: '例假出勤', week_over_40: '週超40時', nhi_supplement: '補充保費', no_pay_date: '無發薪日', new_registration: '新登錄', minor: '未成年', bank_changed: '改帳戶', contract_with_ins: '承攬有勞保', same_day_other_event: '同日兩場' };
 const issueShort = i => SHORT[i.code] || i.code;
 
 /* 步驟四：發布 */
@@ -661,11 +666,17 @@ const stepPublish = {
     const live = c.slips.filter(s => s.status !== 'void');
     const rows = live.filter(s => f === 'all' || s.status === f);
     const sel = [...S.sel];
-    return splitWrap(`<div class="chips">${[['all', '全部', live.length], ['draft', '草稿', live.filter(s => s.status === 'draft').length], ['published', '已發布', live.filter(s => s.status === 'published').length]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
+    // 資料不齊的人：薪資單發布了，工讀生登入也看不到
+    const hid = [...new Map(live.filter(s => s.missing).map(s => [s.person_id, s])).values()];
+    const hidLine = hid.filter(s => s.has_line).length, hidBank = hid.filter(s => /匯款帳戶/.test(s.missing)).length, hidDocs = hid.filter(s => /身分證|存摺/.test(s.missing)).length;
+    const hidBox = hid.length ? `<div class="msg warn">${hid.length} 人資料不齊，薪資單發布後他們登入也看不到（缺證件 ${hidDocs} 人、缺匯款帳戶 ${hidBank} 人）。
+      ${hidLine ? `<button class="btn ghost sm" id="remind" style="margin-left:6px">用 LINE 提醒補資料（${hidLine} 人）</button>` : ''}
+      ${hid.length - hidLine ? `<div class="dim" style="margin-top:4px">其中 ${hid.length - hidLine} 人沒有綁 LINE，需要另外聯絡。</div>` : ''}</div>` : '';
+    return splitWrap(`${hidBox}<div class="chips">${[['all', '全部', live.length], ['draft', '草稿', live.filter(s => s.status === 'draft').length], ['published', '已發布', live.filter(s => s.status === 'published').length]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
       <div class="card tablebox"><table>
       <thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${rows.length && rows.every(s => S.sel.has(s.id)) ? 'checked' : ''}></th><th>姓名</th><th class="r">應發</th><th class="r">扣款</th><th class="r">實發</th><th>狀態</th></tr></thead>
       <tbody>${rows.map(s => `<tr data-k="${esc(s.id)}" class="${S.detail && S.detail.key === s.id ? 'on' : ''}"><td><input type="checkbox" class="ck" data-id="${esc(s.id)}" aria-label="選取 ${esc(s.name)}" ${S.sel.has(s.id) ? 'checked' : ''}></td>
-        <td>${esc(s.name)}${openIssues(s.issues).length ? ' <span class="badge warn">' + openIssues(s.issues).length + '</span>' : ''}<div class="dim">${esc(s.role || '')}${s.relation === 'contract' ? '・承攬' : ''}</div></td>
+        <td>${esc(s.name)}${openIssues(s.issues).length ? ' <span class="badge warn">' + openIssues(s.issues).length + '</span>' : ''}${s.missing ? ' <span class="badge warn" title="缺：' + esc(s.missing) + '">看不到</span>' : ''}<div class="dim">${esc(s.role || '')}${s.relation === 'contract' ? '・承攬' : ''}${s.missing ? '　缺' + esc(s.missing) : ''}</div></td>
         <td class="r">${money(s.gross)}</td><td class="r">${Number(s.deductions) ? money(s.deductions) : ''}</td><td class="r"><b>${money(s.net)}</b></td>
         <td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">沒有薪資單。到「出勤」按「依出勤產生薪資單」。</td></tr>'}</tbody>
       </table></div>
@@ -679,6 +690,12 @@ const stepPublish = {
     const all = $('all'); if (all) all.onchange = () => { const f = S.filter.pub || 'all'; S.cache.slips.filter(s => s.status !== 'void' && (f === 'all' || s.status === f)).forEach(s => all.checked ? S.sel.add(s.id) : S.sel.delete(s.id)); S.confirm = null; viewEvent(e.id, 'publish'); };
     const b = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
     b('pub', () => { S.confirm = 'published'; viewEvent(e.id, 'publish'); });
+    b('remind', async () => {
+      const el = $('remind'); el.disabled = true; el.textContent = '傳送中…';
+      const r = await rpc('admin_remind_incomplete', { p_event: e.id });
+      flash(r.ok ? 'ok' : 'err', r.ok ? `已排入 LINE 提醒 ${r.queued} 人（今天已提醒過的不會重複）。${r.no_line ? r.no_line + ' 人沒有綁 LINE，需要另外聯絡。' : ''}` : '提醒失敗，請再試一次。');
+      viewEvent(e.id, 'publish');
+    });
     b('unpub', () => { S.confirm = 'draft'; viewEvent(e.id, 'publish'); });
     b('clr', () => { S.sel = new Set(); viewEvent(e.id, 'publish'); });
     b('no', () => { S.confirm = null; viewEvent(e.id, 'publish'); });
@@ -825,7 +842,7 @@ async function openDetail(kind, key, e, keepScroll) {
       <label for="abr">休息分鐘</label><input id="abr" type="text" inputmode="numeric" value="${esc(r.break_minutes)}">
       <label for="anote">修改原因</label><textarea id="anote" placeholder="忘記簽退，依現場負責人確認">${esc(r.note || '')}</textarea>
       <div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">儲存</button>
-      <p class="sub" style="margin-top:10px">修改會留下紀錄，來源改標為「人工」。</p>
+      <p class="sub" style="margin-top:10px">修改會留下紀錄，來源改標為「人工」。存檔後薪資單不會自動改，請到「核對」打開這個人的薪資單按「儲存出勤並重算薪資」，或在「出勤」重新產生薪資單。加班照 8 小時內 1 倍、9–10 小時 1.34 倍、11–12 小時 1.67 倍、超過 12 小時 2 倍計算。</p>
       ${r.sched_in ? `<h2>表定 ${esc(hm(r.sched_in))}–${esc(hm(r.sched_out))}</h2>
         <p class="sub">計薪從表定上班時間起算、算到表定下班時間；主管核准後，提早開工或延長工時才照實際時間計薪。</p>
         ${r.in_notice === 'early' ? `<div class="issue"><div>提早 ${esc(r.in_notice_minutes)} 分鐘到場<div class="dim">${r.early_approved ? '已核准提早開工，從實際簽到時間計薪' : '未核准，從表定時間起算'}</div></div><button class="btn ghost sm" data-appr="early" data-on="${!r.early_approved}">${r.early_approved ? '撤銷核准' : '核准提早開工'}</button></div>` : ''}
@@ -1403,7 +1420,8 @@ async function openPerson(id) {
       ? `<div class="issue"><div>核對完身分證字號與匯款帳號後<div class="dim">按「資料已核對」，本人上傳的證件會縮成約 500px 的存證圖，節省系統空間；縮了就無法還原。</div></div><button class="btn sm" id="verifydocs">資料已核對</button></div>`
       : p.docs_verified_at ? `<p class="dim">已於 ${esc(d(p.docs_verified_at))} 由 ${esc(p.docs_verified_by || '')} 核對。</p>` : ''}
     ${p.issues.length ? '<h2>待確認</h2>' + p.issues.map(issueRow).join('') : ''}
-    ${p.payslips.length ? '<h2>薪資單</h2><table>' + p.payslips.map(x => `<tr><td>${esc(x.event)}<div class="dim">${esc(d(x.period_start))}</div></td><td class="r">${money(x.net)} <span class="badge ${esc(x.status)}">${STATUS[x.status]}</span></td></tr>`).join('') + '</table>' : ''}
+    ${(p.history || []).length ? '<h2>參加過的活動（' + p.history.length + '）</h2><table>' + p.history.map(x => `<tr><td><a href="#/events/${esc(x.event_id)}">${esc(x.event)}</a>${x.archived ? ' <span class="badge">已封存</span>' : ''}<div class="dim">${esc(d(x.start_date))}${x.end_date && x.end_date !== x.start_date ? ' – ' + esc(md(x.end_date)) : ''}${x.slip && x.slip.role ? '　' + esc(x.slip.role) : ''}　${x.accepted ? '已錄取' : x.applied ? '已報名' : ''}${x.days ? (x.accepted || x.applied ? '・' : '') + '出勤 ' + x.days + ' 天' : ''}</div></td>
+      <td class="r">${x.slip ? money(x.slip.net) + ' <span class="badge ' + esc(x.slip.status) + '">' + STATUS[x.slip.status] + '</span>' : '<span class="dim">沒有薪資單</span>'}</td></tr>`).join('') + '</table>' : '<h2>參加過的活動</h2><p class="sub">還沒有參加紀錄。</p>'}
     <h2>帳號</h2><p class="sub">${p.has_password ? (p.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
     <div id="dm" style="margin-top:10px"></div><button class="btn ghost" id="reset" ${p.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button>`;
   box.querySelectorAll('[data-issue]').forEach(b => b.onclick = async () => { await rpc('admin_resolve_issue', { p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' }); openPerson(id); });
@@ -1495,9 +1513,9 @@ async function viewSettings(tab) {
       <label for="wm">每月最低工資</label><input id="wm" type="text" inputmode="numeric" required><div id="dm" style="margin-top:12px"></div><button class="btn block">儲存</button></form></div>`;
   } else if (tab === 'line') {
     const [ov, st] = await Promise.all([rpc('admin_line_overview'), lineCall('status').catch(() => ({ ok: false }))]);
-    const KIND = { accepted: '錄取', reminder: '前一天提醒', checkout: '未簽退', payslip: '薪資單', test: '測試' };
+    const KIND = { accepted: '錄取', reminder: '前一天提醒', checkout: '未簽退', payslip: '薪資單', test: '測試', docs: '補資料提醒' };
     const NST = { sent: ['已送出', 'ok'], pending: ['等待中', ''], skipped: ['未送', 'warn'], failed: ['失敗', 'error'] };
-    const WHY = { not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退', expired: '過期未送' };
+    const WHY = { not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退', expired: '過期未送', already_complete: '已補齊' };
     const hook = LINE_FN;
     const conn = !st.ok ? '<div class="msg err">無法檢查連線狀態。</div>'
       : !st.configured ? `<div class="msg warn">還沒設定 LINE 金鑰（${st.has_secret ? '已有' : '缺少'} Channel secret、${st.has_token ? '已有' : '缺少'} Channel access token）。請照下方步驟設定。</div>`
