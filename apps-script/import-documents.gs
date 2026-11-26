@@ -9,6 +9,8 @@
  * 4. 等系統整理好人員資料後，第二步：選 importDocuments → 執行。同樣會自動接續，直到「證件全部完成」。
  * 5. 第三步：選 importThumbs → 執行。向 Google 雲端要每張證件的 500px 縮圖送進系統（系統再壓到約 8KB），
  *    後台就能直接看到縮圖；會自動接續，直到「縮圖全部完成」。
+ * 6. 第四步（2026-11-26 起）：選 importHdThumbs → 執行。把 500px 舊縮圖換成 1200px 清楚版（系統壓到約 60KB），
+ *    會自動接續，直到「清楚版全部換完」。
  *
  * 規則：系統裡已經有的證件（例如本人自己上傳的）不會被覆蓋；同一人在多份表單都有，以最新一場活動為準。
  * 舊證件原檔不複製進系統：記錄雲端檔案 ID，另存一張約 8KB 的縮圖；點縮圖會開雲端原檔（只有被分享的帳號打得開）。
@@ -225,5 +227,72 @@ function testThumb() {
   res.forEach(r => Logger.log('狀態 ' + r.getResponseCode() + '、格式 ' + (r.getHeaders()['Content-Type'] || '') + '、大小 ' + r.getContent().length + ' bytes'));
 }
 
+/* ---------- 第四步：舊證件換清楚版（2026-11-26） ---------- */
+// 把系統裡 500px／8KB 的舊縮圖，換成 Google 雲端 1200px 的版本（系統再壓到約 60KB）；換好的會自動從清單消失
+function hdReq_(id, token) { return { url: 'https://drive.google.com/thumbnail?sz=w1200&id=' + encodeURIComponent(id), headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true, followRedirects: true }; }
+
+function importHdThumbs() {
+  const lock = LockService.getUserLock();
+  if (!lock.tryLock(1000)) { Logger.log('已有一輪在跑，這次略過。'); return; }
+  const props = PropertiesService.getUserProperties();
+  const stat = { stored: 0, noThumb: 0, failed: 0 };
+  let cursor = props.getProperty('hdCursor') || '';
+  let pass = Number(props.getProperty('hdPass') || 1);
+  try {
+    const key = key_(), start = Date.now(), token = ScriptApp.getOAuthToken();
+    continueLater_('importHdThumbs', 15);
+    while (true) {
+      const todo = post_({ action: 'legacy_hd_todo', import_key: key, after: cursor, limit: 100 });
+      if (!todo.ok) throw new Error('清單取得失敗：' + todo.error);
+      if (!todo.ids.length) {
+        if (!cursor || pass >= 3) break;
+        pass++; cursor = ''; props.setProperties({ hdPass: String(pass), hdCursor: '' });
+        continue;
+      }
+      for (let i = 0; i < todo.ids.length; i += 12) {
+        if (Date.now() - start > BUDGET_MS) { props.setProperty('hdCursor', cursor); props.deleteProperty('hdErrors'); continueLater_('importHdThumbs', 1); return hdLog_(stat, false); }
+        const ids = todo.ids.slice(i, i + 12);
+        const items = [];
+        UrlFetchApp.fetchAll(ids.map(id => hdReq_(id, token))).forEach((res, j) => {
+          if (isImage_(res) && res.getContent().length <= 1200 * 1024) items.push({ drive_file_id: ids[j], data: Utilities.base64Encode(res.getContent()) });
+          else stat.noThumb++;
+        });
+        const groups = [];
+        for (let k = 0; k < items.length; k += 3) groups.push(items.slice(k, k + 3));
+        UrlFetchApp.fetchAll(groups.map(g => req_({ action: 'legacy_hd', import_key: key, items: g }))).forEach((res, gi) => {
+          if (res.getResponseCode() === 401) throw new Error('IMPORT_KEY 不正確或已過期');
+          let o = {};
+          try { o = JSON.parse(res.getContentText() || '{}'); } catch (e) { o = {}; }
+          if (!o.ok) { stat.failed += groups[gi].length; return; }
+          o.results.forEach(r => { if (r === 'stored') stat.stored++; else stat.failed++; });
+        });
+        cursor = ids[ids.length - 1];
+        props.setProperty('hdCursor', cursor);
+      }
+    }
+  } catch (e) {
+    const msg = String(e.message);
+    props.setProperty('hdCursor', cursor);
+    if (msg.includes('IMPORT_KEY')) { stopTriggers_('importHdThumbs'); lock.releaseLock(); throw e; }
+    if (/too many times|次數過多|Bandwidth quota|Service invoked|too much computer time/i.test(msg)) { continueLater_('importHdThumbs', 180); Logger.log('今天的 Google 配額用完了，3 小時後自動再接著跑。'); lock.releaseLock(); return hdLog_(stat, false); }
+    const errs = Number(props.getProperty('hdErrors') || 0) + 1;
+    props.setProperty('hdErrors', String(errs));
+    if (errs >= 5) { stopTriggers_('importHdThumbs'); Logger.log('連續出錯 5 次，已停止自動接續。進度有保存，修好後再執行 importHdThumbs 會接著跑。'); }
+    lock.releaseLock();
+    throw e;
+  }
+  stopTriggers_('importHdThumbs');
+  props.deleteProperty('hdCursor'); props.deleteProperty('hdPass'); props.deleteProperty('hdErrors');
+  lock.releaseLock();
+  // 跑完 3 輪仍有換不到的（雲端拿不到或格式不對）：照實回報，不說「全部換完」
+  let left = 0;
+  try { left = (post_({ action: 'legacy_hd_todo', import_key: key_(), after: '', limit: 200 }).ids || []).length; } catch (e) { left = -1; }
+  hdLog_(stat, left === 0, left);
+}
+function hdLog_(stat, complete, left) {
+  Logger.log((complete ? '清楚版全部換完。' : left > 0 ? '跑完 3 輪，還有 ' + (left >= 200 ? '200 張以上' : left + ' 張') + '換不到（雲端拿不到或格式不對），維持舊縮圖；要再試請重新執行 importHdThumbs。' : '還沒跑完，會自動接著跑。')
+    + ' 本次換成清楚版 ' + stat.stored + '、雲端拿不到 ' + stat.noThumb + '、失敗 ' + stat.failed);
+}
+
 // 想從頭重跑時執行（系統已有的資料仍會略過，不會重複）
-function resetProgress() { PropertiesService.getUserProperties().deleteAllProperties(); stopTriggers_('importSheets'); stopTriggers_('importDocuments'); stopTriggers_('importThumbs'); }
+function resetProgress() { PropertiesService.getUserProperties().deleteAllProperties(); stopTriggers_('importSheets'); stopTriggers_('importDocuments'); stopTriggers_('importThumbs'); stopTriggers_('importHdThumbs'); }

@@ -1,6 +1,6 @@
 // 證件上傳與調閱。本函式自行驗證：工讀生用登入 token、管理員用管理 token、舊表匯入用一次性匯入金鑰。（部署時 verify_jwt = false）
-// 儲存原則（使用者定案 1＋2）：舊表證件存雲端檔案 ID，另存一張約 500px／8KB 的縮圖（由 Google 雲端產生 500px 縮圖，這裡只再壓畫質）；
-// 本人上傳的在瀏覽器先壓到約 1000px／50KB，管理員核對後再降成約 500px／8KB 的存證圖。
+// 儲存原則：舊表證件存雲端檔案 ID，另存一張縮圖（2026-11-26 使用者改為 1200px 約 60KB 的清楚版，舊的 500px／8KB 縮圖逐批換掉）；
+// 本人上傳的在瀏覽器先壓到約 1000px；管理員按「資料已核對」只記錄核對，不再縮小（2026-11-26 使用者決定）。
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { decode, Image } from "https://deno.land/x/imagescript@1.3.0/mod.ts";
 
@@ -95,8 +95,8 @@ Deno.serve(async (req: Request) => {
       if (upErr) return json({ ok: false, error: "db" });
       if (old?.path && old.path !== path) await sb.storage.from("documents").remove([old.path]);
       // 與縮圖匯入同時發生時可能留下舊表縮圖：本人上傳後同類別的舊表縮圖一律不再使用，清掉
-      const { data: stale } = await sb.storage.from("documents").list(String(pid), { search: `${kind}-lthumb-` });
-      const orphan = (stale ?? []).map((f) => `${pid}/${f.name}`).filter((x) => x.startsWith(`${pid}/${kind}-lthumb-`) && x !== path);
+      const stale = [...((await sb.storage.from("documents").list(String(pid), { search: `${kind}-lthumb-` })).data ?? []), ...((await sb.storage.from("documents").list(String(pid), { search: `${kind}-lhd-` })).data ?? [])];
+      const orphan = stale.map((f) => `${pid}/${f.name}`).filter((x) => (x.startsWith(`${pid}/${kind}-lthumb-`) || x.startsWith(`${pid}/${kind}-lhd-`)) && x !== path);
       if (orphan.length) await sb.storage.from("documents").remove(orphan);
       await sb.from("audit_log").insert({ actor: String(pid), action: "document_uploaded", table_name: "people_documents", row_id: pid, detail: { kind } });
       return json({ ok: true });
@@ -197,6 +197,63 @@ Deno.serve(async (req: Request) => {
       if (stored) await sb.from("audit_log").insert({ actor: "legacy_import", action: "legacy_thumbs_stored", table_name: "people_documents", detail: { count: stored } });
       return json({ ok: true, results });
     }
+    // 舊表證件換清楚版：列出還是 500px 舊縮圖（-lthumb-）的雲端檔案 ID
+    if (b.action === "legacy_hd_todo") {
+      if (!(await importKeyOk())) return json({ ok: false, error: "key" }, 401);
+      const after = String(b.after ?? "");
+      const limit = Math.min(200, Math.max(1, Number(b.limit) || 100));
+      let q = sb.from("people_documents").select("drive_file_id").like("path", "%-lthumb-%").not("drive_file_id", "is", null).in("kind", ID_KINDS).order("drive_file_id").limit(limit);
+      if (after) q = q.gt("drive_file_id", after);
+      const { data, error } = await q;
+      if (error) return json({ ok: false, error: "db" });
+      return json({ ok: true, ids: [...new Set((data ?? []).map((r) => r.drive_file_id))] });
+    }
+    // 舊表證件換清楚版：Apps Script 送來 Google 雲端的 1200px 縮圖，壓到約 60KB（最多 120KB）後取代舊縮圖，並刪掉舊縮圖檔
+    if (b.action === "legacy_hd") {
+      if (!(await importKeyOk())) return json({ ok: false, error: "key" }, 401);
+      if (!Array.isArray(b.items) || b.items.length > 4) return json({ ok: false, error: "bad_items" });
+      const results: string[] = [];
+      const orphans: string[] = [];   // 刪不掉或不確定的檔案：記進稽核紀錄，之後清理
+      let stored = 0;
+      for (const it of b.items as Record<string, unknown>[]) {
+        const driveId = String(it?.drive_file_id ?? "");
+        if (!DRIVE_ID.test(driveId)) { results.push("bad_id"); continue; }
+        const { data: rows } = await sb.from("people_documents").select("person_id, kind, path").eq("drive_file_id", driveId).like("path", "%-lthumb-%").in("kind", ID_KINDS);
+        if (!rows || !rows.length) { results.push("not_found"); continue; }
+        let hd: Uint8Array | null = null;
+        try {
+          const b64 = String(it.data ?? "");
+          if (b64.length > 0 && b64.length <= 1600 * 1024) {
+            const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+            const dims = imageDims(raw);
+            if (dims && dims[0] > 0 && dims[1] > 0 && dims[0] <= 2400 && dims[1] <= 2400) {
+              hd = await shrink(raw, 1200, 60 * 1024, 120 * 1024, [72, 62, 52, 44, 36], [1, 0.84]);
+            }
+          }
+        } catch { hd = null; }
+        if (!hd) { results.push("bad_image"); continue; }
+        let ok = 0;
+        for (const r of rows) {
+          const path = `${r.person_id}/${r.kind}-lhd-${Date.now()}.jpg`;
+          const { error: upErr } = await sb.storage.from("documents").upload(path, hd, { contentType: "image/jpeg", upsert: false });
+          if (upErr) continue;
+          // 只換仍是舊縮圖的那筆（期間本人重新上傳就放棄）
+          await sb.from("people_documents").update({ path, downgraded_at: new Date().toISOString() })
+            .eq("person_id", r.person_id).eq("kind", r.kind).eq("path", r.path);
+          // 不管更新回應如何，都重新讀一次：資料列指向新檔才刪舊縮圖，否則刪掉沒被用到的新檔
+          const { data: now, error: reErr } = await sb.from("people_documents").select("path").eq("person_id", r.person_id).eq("kind", r.kind).maybeSingle();
+          if (reErr) { orphans.push(path); continue; }
+          const drop = now?.path === path ? r.path : path;
+          const { error: rmErr } = await sb.storage.from("documents").remove([drop]);
+          if (rmErr) orphans.push(drop);
+          if (now?.path === path) ok++;
+        }
+        stored += ok;
+        results.push(ok === rows.length ? "stored" : ok ? "partial" : "error");
+      }
+      if (stored || orphans.length) await sb.from("audit_log").insert({ actor: "legacy_import", action: "legacy_hd_stored", table_name: "people_documents", detail: { count: stored, cleanup_needed: orphans } });
+      return json({ ok: true, results });
+    }
     // 把之前複製進來的舊證件（縮圖或原尺寸）全部改成只存連結，釋出空間
     if (b.action === "legacy_unlink_copies") {
       if (!(await importKeyOk())) return json({ ok: false, error: "key" }, 401);
@@ -217,31 +274,16 @@ Deno.serve(async (req: Request) => {
       }
       return json({ ok: true, converted, removed, more: (rows ?? []).length === 200 });
     }
-    // 管理員核對完資料：本人上傳的證件降成約 500px／8KB 的存證圖
+    // 管理員核對完資料：只記錄核對時間與核對人，證件維持原本的畫質（2026-11-26 起不再縮成存證圖）
     if (b.action === "verify_docs") {
       const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
       if (!actor) return json({ ok: false, error: "session" });
       const personId = String(b.person_id ?? "");
-      const { data: docs } = await sb.from("people_documents").select("kind, path").eq("person_id", personId).in("kind", ID_KINDS).not("path", "is", null).is("downgraded_at", null);
-      const done: string[] = [], skipped: string[] = [];
-      for (const d of docs ?? []) {
-        if (!/\.(jpe?g|png|webp)$/i.test(d.path)) { skipped.push(d.kind); continue; } // PDF、HEIC 保留原檔
-        const { data: file, error } = await sb.storage.from("documents").download(d.path);
-        if (error || !file) { skipped.push(d.kind); continue; }
-        let small: Uint8Array | null = null;
-        try { small = await shrink(new Uint8Array(await file.arrayBuffer()), 500, 9 * 1024); } catch { small = null; }
-        if (!small) { skipped.push(d.kind); continue; }
-        const path = `${personId}/${d.kind}-proof-${Date.now()}.jpg`;
-        const { error: upErr } = await sb.storage.from("documents").upload(path, small, { contentType: "image/jpeg", upsert: false });
-        if (upErr) { skipped.push(d.kind); continue; }
-        const { error: dbErr } = await sb.from("people_documents").update({ path, downgraded_at: new Date().toISOString() }).eq("person_id", personId).eq("kind", d.kind).eq("path", d.path);
-        if (dbErr) { await sb.storage.from("documents").remove([path]); skipped.push(d.kind); continue; }
-        await sb.storage.from("documents").remove([d.path]);
-        done.push(d.kind);
-      }
-      await sb.from("people").update({ docs_verified_at: new Date().toISOString(), docs_verified_by: actor }).eq("id", personId);
-      await sb.from("audit_log").insert({ actor, action: "documents_verified", table_name: "people", row_id: personId, detail: { downgraded: done, kept: skipped } });
-      return json({ ok: true, downgraded: done, kept: skipped });
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(personId)) return json({ ok: false, error: "bad_person" });
+      const { data: upd, error } = await sb.from("people").update({ docs_verified_at: new Date().toISOString(), docs_verified_by: actor }).eq("id", personId).select("id");
+      if (error || !upd || !upd.length) return json({ ok: false, error: "not_found" });
+      await sb.from("audit_log").insert({ actor, action: "documents_verified", table_name: "people", row_id: personId, detail: { downgraded: [], kept: "all" } });
+      return json({ ok: true, downgraded: [], kept: [] });
     }
     if (b.action === "view_url") {
       const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
