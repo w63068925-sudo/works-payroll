@@ -112,7 +112,10 @@ tbody tr.on{background:var(--accent-soft)}
 .split{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(330px,1fr);gap:16px;align-items:start}
 .detail{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow:auto;padding:16px 18px}
 .detail .x{float:right}
-@media (max-width:1080px){.split{grid-template-columns:1fr}.detail{position:static;max-height:none}}
+@media (max-width:1080px){.split{grid-template-columns:minmax(0,1fr)}.detail{position:static;max-height:none}}
+/* 窄螢幕：捲到明細後，右下角有「返回名單」 */
+.backlist{display:none}
+@media (max-width:1080px){body.indetail .backlist{display:block;position:fixed;right:16px;bottom:16px;z-index:20;box-shadow:0 4px 14px rgba(0,0,0,.18)}}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:14px;margin:0}.kv dt{color:var(--muted)}.kv dd{margin:0;text-align:right;word-break:break-all}
 .detail table td{padding:8px 0;white-space:normal}
 .issue{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
@@ -195,6 +198,9 @@ const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }
 const STATUS = { draft: '草稿', published: '已發布', void: '作廢' };
 const SRC = { qr: 'QR 打卡', manual: '人工', legacy: '舊資料' };
 const openIssues = list => (list || []).filter(i => !i.resolved && i.severity !== 'info');
+// 草稿沒有金額（例如只匯入人員與日期）：不能發布，算一件待處理；已有 missing_pay 問題就不重複算
+const noPay = s => s.status === 'draft' && s.net == null && !openIssues(s.issues).some(i => i.code === 'missing_pay');
+const slipIssues = s => openIssues(s.issues).concat(noPay(s) ? [{ code: 'missing_pay', severity: 'error' }] : []);
 const $ = id => document.getElementById(id);
 function on(sel, ev, fn) { root.querySelectorAll(sel).forEach(el => el.addEventListener(ev, e => fn(e, el))); }
 function clearTimers() { S.timers.forEach(t => clearTimeout(t)); S.timers = []; }
@@ -238,15 +244,17 @@ const NAV = [['today', '今日現場'], ['events', '活動'], ['import', 'AI 匯
 function activeEvents() { const t = today(); return (S.ov ? S.ov.events : []).filter(e => e.start_date && e.start_date <= t && (e.end_date || e.start_date) >= addDays(t, -1)); }
 function addDays(s, n) { const x = new Date(s + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
 function shell(section, html) {
+  document.body.classList.remove('indetail');
   const badges = { today: activeEvents().length, events: (S.ov ? S.ov.events : []).reduce((a, e) => a + Number(e.open_issues || 0), 0) };
   root.innerHTML = `<div class="shell">
     <nav class="side" aria-label="主選單">
       <div class="logo"><b>WORKS</b><span>沃克思 薪資管理</span></div>
-      ${NAV.map(([k, t]) => `<a class="nav ${section === k ? 'on' : ''}" href="#/${k}" ${section === k ? 'aria-current="page"' : ''}><span>${t}</span>${badges[k] ? '<span class="cnt">' + badges[k] + '</span>' : ''}</a>`).join('')}
+      ${NAV.map(([k, t]) => `<a class="nav ${section === k ? 'on' : ''}" href="#/${k}" ${section === k ? 'aria-current="page"' : ''}><span>${t}</span>${badges[k] ? '<span class="cnt" title="' + (k === 'events' ? '各活動待處理問題合計 ' + badges[k] + ' 件' : '進行中的活動 ' + badges[k] + ' 場') + '">' + badges[k] + '</span>' : ''}</a>`).join('')}
       <div class="me"><span>${esc(S.user || '')}</span><button class="link" id="logout">登出</button></div>
     </nav>
-    <main class="main" id="main">${S.flash ? '<div class="msg ' + S.flash.type + '">' + esc(S.flash.text) + '</div>' : ''}${html}</main></div>`;
+    <main class="main" id="main">${S.flash ? '<div class="msg ' + S.flash.type + '">' + esc(S.flash.text) + '</div>' : ''}${html}</main><button class="btn backlist" id="backlist" type="button">← 返回名單</button></div>`;
   S.flash = null;
+  $('backlist').onclick = backToList;
   $('logout').onclick = async () => { try { await rpc('admin_logout'); } catch (e) {} saveToken(null); S.ov = null; viewAuth('login'); };
 }
 // 封存的活動只出現在「活動 › 已封存」；其他畫面（今日、班表、名冊、發放、徽章）都看不到
@@ -312,7 +320,7 @@ function viewEvents() {
   const list = (f === '已封存' ? S.ov.archived : S.ov.events).filter(e => (f === 'all' || f === '已封存' || eventState(e)[0] === f) && (!q || e.name.includes(q)));
   const counts = k => S.ov.events.filter(e => eventState(e)[0] === k).length;
   shell('events', `
-    <div class="head"><div><h1>活動</h1><p class="sub">共 ${S.ov.events.length} 場${S.ov.archived.length ? '，另有 ' + S.ov.archived.length + ' 場已封存' : ''}</p></div><button class="btn" id="new">新增活動</button></div>
+    <div class="head"><div><h1>活動</h1><p class="sub">共 ${S.ov.events.length} 場（含還沒有薪資單的）${S.ov.archived.length ? '，另有 ' + S.ov.archived.length + ' 場已封存' : ''}。左側選單的數字是待處理問題件數。</p></div><button class="btn" id="new">新增活動</button></div>
     <div id="newbox"></div>
     <div class="row" style="margin-bottom:12px;align-items:center">
       <div class="chips" style="margin:0">${[['all', '全部', S.ov.events.length], ['進行中', '進行中', counts('進行中')], ['即將開始', '即將開始', counts('即將開始')], ['待發薪', '待發薪', counts('待發薪')], ['已結案', '已結案', counts('已結案')], ['已封存', '已封存', S.ov.archived.length]].map(([k, t, n]) => `<button class="chip" aria-pressed="${f === k}" data-f="${k}">${t} ${n}</button>`).join('')}</div>
@@ -322,7 +330,7 @@ function viewEvents() {
       <thead><tr><th>活動</th><th>日期</th><th>狀態</th><th class="r">薪資單</th><th class="r">已發布</th><th class="r">待處理</th><th>發薪日</th><th class="r">實發合計</th></tr></thead>
       <tbody>${list.map(e => { const [st, cls] = eventState(e); return `<tr data-k="${esc(e.id)}">
         <td data-l="活動"><b>${esc(e.name)}</b></td><td data-l="日期">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(md(e.end_date)) : ''}</td>
-        <td data-l="狀態"><span class="badge ${cls}">${st}</span>${e.archived_at ? ' <span class="badge">已封存</span>' : ''}</td><td class="r" data-l="薪資單">${e.total}</td><td class="r" data-l="已發布">${e.published}</td>
+        <td data-l="狀態"><span class="badge ${cls}">${st}</span>${e.recruiting ? ' <span class="badge ok">招募中</span>' : ''}${e.archived_at ? ' <span class="badge">已封存</span>' : ''}</td><td class="r" data-l="薪資單">${e.total}</td><td class="r" data-l="已發布">${e.published}</td>
         <td class="r" data-l="待處理">${e.open_issues ? '<span class="badge warn">' + e.open_issues + '</span>' : '—'}</td>
         <td data-l="發薪日">${payDateOf(e) ? esc(d(payDateOf(e))) + (e.pay_date ? '' : ' <span class="dim">結束後 ' + esc(e.pay_within_days) + ' 天</span>') : '<span class="dim">未設</span>'}</td><td class="r" data-l="實發合計">${money(e.net_sum)}</td></tr>`; }).join('') || '<tr><td colspan="8" class="empty">沒有符合的活動</td></tr>'}</tbody>
     </table></div>`);
@@ -361,7 +369,7 @@ async function loadEventData(id) {
 function stepInfo(e) {
   const c = S.cache, t = today();
   const live = c.slips.filter(s => s.status !== 'void');
-  const issues = openIssues(c.eventIssues).length + live.reduce((a, s) => a + openIssues(s.issues).length, 0);
+  const issues = openIssues(c.eventIssues).length + live.reduce((a, s) => a + slipIssues(s).length, 0);
   const openAtt = c.att.filter(r => r.clock_in && !r.clock_out).length;
   const pub = live.filter(s => s.status === 'published').length;
   return {
@@ -472,7 +480,9 @@ function payOf(st, cfg) {
   return rate == null ? '<span class="badge warn">未設定</span>' : (st.pay_type === 'daily' ? '日薪 ' : '時薪 ') + money(rate) + (st.rate == null ? ' <span class="dim">預設</span>' : '');
 }
 // 窄螢幕（左右兩欄變上下）：明細在列表下方，直接跳到明細；用瞬間捲動，避免平滑捲動被重繪打斷
-const toDetail = () => { const b = $('detail'); if (b && matchMedia('(max-width:1080px)').matches) requestAnimationFrame(() => b.scrollIntoView({ block: 'start' })); };
+const toDetail = () => { const b = $('detail'); if (!b) return; document.body.classList.add('indetail'); if (matchMedia('(max-width:1080px)').matches) requestAnimationFrame(() => b.scrollIntoView({ block: 'start' })); };
+// 返回名單：捲回剛才點的那一列
+function backToList() { document.body.classList.remove('indetail'); const r = document.querySelector('tbody tr.on') || document.querySelector('.split'); if (r) r.scrollIntoView({ block: 'center' }); }
 function splitWrap(listHtml) { return `<div class="split"><div>${listHtml}</div><aside class="card detail" id="detail" aria-live="polite"><p class="empty" style="padding:30px 0">點左側一筆查看明細</p></aside></div>`; }
 
 /* 步驟一：招募 */
@@ -502,15 +512,16 @@ const recruitApps = {
     const rows = rc.applicants.filter(a => !shift || a.shifts[shift.id]);
     const sel = [...S.sel];
     if (!rc.shifts.length) return '<div class="card empty">還沒有班次。先到「班次」分頁開班，工讀生才能報名。</div>';
-    return `<div class="chips"><button class="chip" aria-pressed="${!shift}" data-rs="">全部班次</button>${rc.shifts.map(x => `<button class="chip" aria-pressed="${x.id === fs}" data-rs="${esc(x.id)}">${esc(shiftLabel(x))}　${x.accepted}/${x.headcount}</button>`).join('')}</div>
-      ${splitWrap(`${shift ? '<p class="sub" style="margin-bottom:10px">' + esc(shiftLabel(shift)) + '　需要 ' + shift.headcount + ' 人，已錄取 ' + shift.accepted + ' 人。勾選後批次處理。</p>' : '<p class="sub" style="margin-bottom:10px">點選上方班次可以批次錄取；點任一人查看報名內容。</p>'}
+    return `<div class="chips"><button class="chip" aria-pressed="${!shift}" data-rs="">全部班次</button>${rc.shifts.map(x => `<button class="chip" aria-pressed="${x.id === fs}" data-rs="${esc(x.id)}">${esc(shiftLabel(x))}　${x.accepted}/${x.headcount}${Number(x.accepted) >= Number(x.headcount) ? ' <span class="badge ok">已額滿</span>' : ''}</button>`).join('')}</div>
+      ${splitWrap(`${shift ? '<p class="sub" style="margin-bottom:10px">' + esc(shiftLabel(shift)) + '　需要 ' + shift.headcount + ' 人，已錄取 ' + shift.accepted + ' 人' + (Number(shift.accepted) >= Number(shift.headcount) ? '，<span class="badge ok">已額滿</span> 再錄取會被擋下，可改列備取' : '，還差 ' + (shift.headcount - shift.accepted) + ' 人') + '。勾選後批次處理。</p>' : '<p class="sub" style="margin-bottom:10px">點選上方班次可以批次錄取；點任一人查看報名內容。</p>'}
         <div class="card tablebox"><table><thead><tr>${shift ? '<th><input type="checkbox" id="all" aria-label="全選"></th>' : ''}<th>姓名</th><th>${shift ? '這個班次' : '報名班次'}</th><th class="r">合作過</th><th>契約</th></tr></thead>
         <tbody>${rows.map(a => `<tr data-k="${esc(a.app_id)}" class="${S.detail && S.detail.key === a.app_id ? 'on' : ''}">${shift ? `<td><input type="checkbox" class="ck" data-id="${esc(a.app_id)}" ${S.sel.has(a.app_id) ? 'checked' : ''} aria-label="選取 ${esc(a.name)}"></td>` : ''}
           <td>${esc(a.name)}${a.source === 'self' && !a.past_events ? ' <span class="badge ok">新人</span>' : ''}${a.has_photo ? ' <span class="dim">有照片</span>' : ''}<div class="dim">${esc(a.phone || '')}</div></td>
           <td style="white-space:normal">${shift ? '<span class="badge ' + AST[a.shifts[shift.id]][1] + '">' + AST[a.shifts[shift.id]][0] + '</span>' : rc.shifts.filter(x => a.shifts[x.id]).map(x => '<span class="badge ' + AST[a.shifts[x.id]][1] + '" title="' + esc(shiftLabel(x) + ' ' + AST[a.shifts[x.id]][0]) + '">' + esc(md(x.work_date) + (rc.shifts.some(y => y !== x && y.work_date === x.work_date) ? ' ' + x.start + (x.role ? ' ' + x.role : '') : '')) + ' ' + esc(AST[a.shifts[x.id]][0]) + '</span>').join(' ')}</td>
           <td class="r">${a.past_events ? a.past_events + ' 場' : '—'}</td>
           <td>${a.contract_accepted_at ? '<span class="badge ok">已確認</span>' : Object.values(a.shifts).includes('accepted') ? '<span class="badge warn">待確認</span>' : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">還沒有人報名。把報名連結傳到 LINE 群組。</td></tr>'}</tbody></table></div>
-        ${shift && sel.length ? `<div class="bulk"><span class="grow">已選 ${sel.length} 人</span><button class="btn" data-dec="accepted">錄取</button><button class="btn ghost" data-dec="waitlist">備取</button><button class="btn ghost" data-dec="rejected">不錄取</button></div>` : ''}`)}`;
+        ${shift && sel.length ? `<div class="bulk"><span class="grow">已選 ${sel.length} 人${(() => { const add = sel.filter(id => { const a = rc.applicants.find(q => q.app_id === id); return a && a.shifts[shift.id] !== 'accepted'; }).length, left = Math.max(0, shift.headcount - shift.accepted);
+          return add > left ? `<div style="color:var(--warn);font-size:13px">名額只剩 ${left} 人，選了 ${add} 位未錄取的人；按「錄取」時超出的 ${add - left} 人會被擋下，可改列備取。</div>` : ''; })()}</span><button class="btn" data-dec="accepted">錄取</button><button class="btn ghost" data-dec="waitlist">備取</button><button class="btn ghost" data-dec="rejected">不錄取</button></div>` : ''}`)}`;
   },
   bind: e => {
     on('[data-rs]', 'click', (ev, b) => { S.filter.rshift = b.dataset.rs; S.sel = new Set(); viewEvent(e.id, 'staff'); });
@@ -533,7 +544,7 @@ const recruitShifts = {
       <div class="card tablebox"><table><thead><tr><th>日期</th><th>時段</th><th>崗位</th><th class="r">時薪</th><th class="r">錄取 / 名額</th><th class="r">待審</th></tr></thead>
       <tbody>${rc.shifts.map(x => `<tr data-k="${esc(x.id)}" class="${S.detail && S.detail.key === x.id ? 'on' : ''}"><td>${esc(d(x.work_date))}</td><td>${esc(x.start)}–${esc(x.end)}${x.overnight ? ' <span class="dim">翌日</span>' : ''}</td><td>${esc(x.role || '—')}</td>
         <td class="r">${x.rate != null ? money(x.rate) : cfg.default_hourly_rate != null ? money(cfg.default_hourly_rate) + ' <span class="dim">預設</span>' : '<span class="badge warn">未設</span>'}</td>
-        <td class="r">${x.accepted >= x.headcount ? '<span class="badge ok">' + x.accepted + ' / ' + x.headcount + '</span>' : x.accepted + ' / ' + x.headcount}</td><td class="r">${x.applied || '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">還沒有班次，按「新增班次」開始。</td></tr>'}</tbody></table></div>`);
+        <td class="r">${x.accepted >= x.headcount ? '<span class="badge ok">已額滿 ' + x.accepted + ' / ' + x.headcount + '</span>' : x.accepted + ' / ' + x.headcount}</td><td class="r">${x.applied || '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">還沒有班次，按「新增班次」開始。</td></tr>'}</tbody></table></div>`);
   },
   bind: e => { $('newshift').onclick = () => openDetail('newshift', 'new', e); on('tbody tr[data-k]', 'click', (ev, tr) => openDetail('shift', tr.dataset.k, e)); }
 };
@@ -642,14 +653,15 @@ const stepAtt = {
 const stepReview = {
   html: () => {
     const c = S.cache, all = S.filter.reviewAll;
-    const rows = c.slips.filter(s => s.status !== 'void' && (all || openIssues(s.issues).length));
+    const live = c.slips.filter(s => s.status !== 'void');
+    const rows = live.filter(s => all || slipIssues(s).length);
     return `${c.eventIssues.length ? '<div class="card pad" style="padding-top:6px;padding-bottom:6px;margin-bottom:14px">' + c.eventIssues.map(issueRow).join('') + '</div>' : ''}
-      ${splitWrap(`<div class="chips"><button class="chip" aria-pressed="${!all}" data-f="0">待處理 ${c.slips.filter(s => s.status !== 'void' && openIssues(s.issues).length).length}</button><button class="chip" aria-pressed="${!!all}" data-f="1">全部 ${c.slips.filter(s => s.status !== 'void').length}</button></div>
+      ${splitWrap(`<div class="chips"><button class="chip" aria-pressed="${!all}" data-f="0">待處理 ${live.filter(s => slipIssues(s).length).length}</button><button class="chip" aria-pressed="${!!all}" data-f="1">全部 ${live.length}</button></div>
         <div class="card tablebox"><table>
         <thead><tr><th>姓名</th><th>問題</th><th class="r">實發</th></tr></thead>
-        <tbody>${rows.map(s => { const oi = openIssues(s.issues); return `<tr data-k="${esc(s.id)}" class="${S.detail && S.detail.key === s.id ? 'on' : ''}"><td>${esc(s.name)}<div class="dim">${esc(s.role || '')}${s.relation === 'contract' ? '・承攬' : ''}</div></td>
+        <tbody>${rows.map(s => { const oi = slipIssues(s); return `<tr data-k="${esc(s.id)}" class="${S.detail && S.detail.key === s.id ? 'on' : ''}"><td>${esc(s.name)}<div class="dim">${esc(s.role || '')}${s.relation === 'contract' ? '・承攬' : ''}</div></td>
           <td style="white-space:normal">${oi.length ? oi.slice(0, 2).map(i => '<span class="badge ' + esc(i.severity) + '">' + esc(issueShort(i)) + '</span>').join(' ') + (oi.length > 2 ? ' <span class="dim">+' + (oi.length - 2) + '</span>' : '') : '<span class="dim">—</span>'}</td>
-          <td class="r">${money(s.net)}</td></tr>`; }).join('') || '<tr><td colspan="3" class="empty">' + (all ? '沒有薪資單' : '都處理完了，可以到「發布」。') + '</td></tr>'}</tbody>
+          <td class="r">${money(s.net)}</td></tr>`; }).join('') || '<tr><td colspan="3" class="empty">' + (!live.length ? '這場還沒有薪資單。有打卡出勤的到「出勤」按「依出勤產生薪資單」；只匯入人員與日期的，要先補上金額才能發布。' : all ? '沒有薪資單' : '都處理完了，可以到「發布」。') + '</td></tr>'}</tbody>
       </table></div>`)}`;
   },
   bind: e => {
@@ -682,7 +694,7 @@ const stepPublish = {
       <div class="card tablebox"><table>
       <thead><tr><th><input type="checkbox" id="all" aria-label="全選" ${rows.length && rows.every(s => S.sel.has(s.id)) ? 'checked' : ''}></th><th>姓名</th><th class="r">應發</th><th class="r">扣款</th><th class="r">實發</th><th>狀態</th></tr></thead>
       <tbody>${rows.map(s => `<tr data-k="${esc(s.id)}" class="${S.detail && S.detail.key === s.id ? 'on' : ''}"><td><input type="checkbox" class="ck" data-id="${esc(s.id)}" aria-label="選取 ${esc(s.name)}" ${S.sel.has(s.id) ? 'checked' : ''}></td>
-        <td>${esc(s.name)}${openIssues(s.issues).length ? ' <span class="badge warn">' + openIssues(s.issues).length + '</span>' : ''}${s.missing ? ' <span class="badge warn" title="缺：' + esc(s.missing) + '">看不到</span>' : ''}<div class="dim">${esc(s.role || '')}${s.relation === 'contract' ? '・承攬' : ''}${s.missing ? '　缺' + esc(s.missing) : ''}</div></td>
+        <td>${esc(s.name)}${openIssues(s.issues).length ? ' <span class="badge warn">' + openIssues(s.issues).length + '</span>' : ''}${s.missing ? ' <span class="badge warn" title="缺：' + esc(s.missing) + '">看不到</span>' : ''}${s.status === 'draft' && s.net == null ? ' <span class="badge error">沒有金額，不能發布</span>' : ''}<div class="dim">${esc(s.role || '')}${s.relation === 'contract' ? '・承攬' : ''}${s.missing ? '　缺' + esc(s.missing) : ''}</div></td>
         <td class="r">${money(s.gross)}</td><td class="r">${Number(s.deductions) ? money(s.deductions) : ''}</td><td class="r"><b>${money(s.net)}</b></td>
         <td><span class="badge ${esc(s.status)}">${STATUS[s.status]}</span></td></tr>`).join('') || '<tr><td colspan="6" class="empty">沒有薪資單。到「出勤」按「依出勤產生薪資單」。</td></tr>'}</tbody>
       </table></div>
@@ -788,9 +800,9 @@ async function openDetail(kind, key, e, keepScroll) {
   S.detail = { kind, key };
   document.querySelectorAll('tbody tr[data-k]').forEach(tr => tr.classList.toggle('on', tr.dataset.k === key));
   const box = $('detail'); if (!box) return;
-  if (!keepScroll) toDetail();
+  if (!keepScroll) toDetail(); else document.body.classList.add('indetail');
   const close = '<button class="link x" id="dx">關閉</button>';
-  const bindClose = () => { $('dx').onclick = () => { S.detail = null; box.innerHTML = '<p class="empty" style="padding:30px 0">點左側一筆查看明細</p>'; document.querySelectorAll('tbody tr.on').forEach(tr => tr.classList.remove('on')); }; };
+  const bindClose = () => { $('dx').onclick = () => { S.detail = null; box.innerHTML = '<p class="empty" style="padding:30px 0">點左側一筆查看明細</p>'; document.querySelectorAll('tbody tr.on').forEach(tr => tr.classList.remove('on')); backToList(); }; };
   if (kind === 'app') {
     const rc = S.cache.rc, a = rc.applicants.find(x => x.app_id === key); if (!a) return;
     const qs = (rc.event.form && rc.event.form.questions) || [];
@@ -1228,6 +1240,10 @@ async function viewImport() {
   const bankOf = row => { const x = ((I.preview && I.preview.payloadRef && I.preview.payloadRef.people) || []).find(q => String(q.row) === String(row)) || {};
     const acct = String(x.bank_account || '').replace(/\D/g, ''); return acct ? ((String(x.bank_code || '').match(/\d{3}/) || [''])[0] + ' •••' + acct.slice(-4)) : '—'; };
   const evOpts = S.ov.events.slice().sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || '')));
+  // 活動很多時用「找活動」篩選下拉選單；目前選的那場一定保留
+  const tOpts = () => { const q = (I.tq || '').trim().toLowerCase();
+    return '<option value="">建立新活動（用匯入碼裡的活動資料）</option>' + evOpts.filter(e => e.id === I.target || !q || (e.name + ' ' + (e.start_date || '')).toLowerCase().includes(q))
+      .map(e => `<option value="${esc(e.id)}" ${e.id === I.target ? 'selected' : ''}>加到既有活動：${esc(e.name)}（${esc(e.start_date || '')}）</option>`).join(''); };
   const p = I.preview, people = p ? p.people : [], shifts = p ? p.shifts : [];
   const cnt = k => people.filter(x => x.status === k).length;
   const list = I.view === 'all' ? people : people.filter(x => x.status === I.view);
@@ -1242,7 +1258,8 @@ async function viewImport() {
       <label for="icode">匯入碼</label>
       <textarea id="icode" rows="3" placeholder="貼上匯入台產生的匯入碼（WKS1. 開頭）" style="width:100%;font-family:var(--num);font-size:12.5px">${esc(I.code)}</textarea>
       <div class="row" style="margin-top:10px">
-        <div style="flex:2;min-width:240px"><label for="itarget">匯入到</label><select id="itarget"><option value="">建立新活動（用匯入碼裡的活動資料）</option>${evOpts.map(e => `<option value="${esc(e.id)}" ${e.id === I.target ? 'selected' : ''}>加到既有活動：${esc(e.name)}</option>`).join('')}</select></div>
+        <div style="flex:1;min-width:160px"><label for="itq">找活動</label><input id="itq" type="search" placeholder="輸入活動名稱或日期" value="${esc(I.tq || '')}"></div>
+        <div style="flex:2;min-width:240px"><label for="itarget">匯入到</label><select id="itarget">${tOpts()}</select></div>
         <button class="btn" id="icheck">檢查</button>
       </div>
     </div>
@@ -1277,6 +1294,7 @@ async function viewImport() {
     duplicate_source: '這份試算表已經匯入過了。要補人請選「加到既有活動」。', not_found: '找不到這場活動。', too_many: '名單超過 500 人，請分批匯入。', all_rows_invalid: '每一列都有錯，沒有可匯入的資料。', similar_event: '已經有同名、日期重疊的活動。確定要另建請重新檢查並勾選確認。' };
   // 匯入碼或目標一改，舊預覽立刻作廢；確認匯入只送「預覽當時」的資料與目標
   $('icode').oninput = () => { I.code = $('icode').value; I.seq++; I.simOk = false; if (I.preview) { I.preview = null; viewImport().then(() => { const x = $('icode'); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }); } };
+  $('itq').oninput = () => { I.tq = $('itq').value; $('itarget').innerHTML = tOpts(); };
   $('itarget').onchange = () => { I.target = $('itarget').value; I.seq++; I.simOk = false; I.preview = null; viewImport(); };
   $('icheck').onclick = async () => {
     const b = $('icheck'); b.disabled = true; b.textContent = '檢查中…';
@@ -1506,19 +1524,24 @@ function viewPayouts() {
   const isSoon = e => payDateOf(e) && payDateOf(e) >= t && payDateOf(e) <= soonEnd;
   const rank = e => late(e) ? 0 : isTodo(e) && payDateOf(e) ? 1 : isTodo(e) ? 2 : 3;
   const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => rank(a) - rank(b) || (rank(a) === 3 ? String(payDateOf(b)).localeCompare(String(payDateOf(a))) : String(payDateOf(a) || '9999').localeCompare(String(payDateOf(b) || '9999'))));
-  const todo = evs.filter(isTodo), soon = evs.filter(isSoon);
+  // 30 天內：發薪日近的在前
+  const todo = evs.filter(isTodo), soon = evs.filter(isSoon).sort((a, b) => String(payDateOf(a)).localeCompare(String(payDateOf(b))));
   const v = S.filter.payouts = S.filter.payouts || (todo.length ? 'todo' : 'soon');
-  const list = v === 'todo' ? todo : v === 'soon' ? soon : evs;
+  const full = v === 'todo' ? todo : v === 'soon' ? soon : evs;
+  // 清單太長時先顯示 50 場，按「顯示更多」再加
+  const lim = S.filter.payLimit || 50, list = full.slice(0, lim);
   const card = (k, label, val, dim, warn) => `<button class="card stat ${v === k ? 'sel' : ''}" data-v="${k}" aria-pressed="${v === k}"><div class="k">${label}</div><div class="v" style="${warn ? 'color:var(--warn)' : ''}">${val}</div><div class="dim">${dim}</div></button>`;
-  shell('payouts', `<div class="head"><div><h1>薪資發放</h1><p class="sub">已過發薪日還沒發布的排最前面，其次是有未發布薪資單或沒設發薪日的活動，最後是已發完的（新的在前）。點上方卡片切換清單。</p></div></div>
+  shell('payouts', `<div class="head"><div><h1>薪資發放</h1><p class="sub">已過發薪日還沒發布的排最前面，其次是有未發布薪資單或沒設發薪日的活動，最後是已發完的（新的在前）。「已發布」只代表工讀生看得到薪資單；發薪日還沒到的標「待匯款」。點上方卡片切換清單。</p></div></div>
     <div class="stats">${card('todo', '待辦活動', todo.length, todo.filter(late).length ? todo.filter(late).length + ' 場已過發薪日' : '未發布或未設發薪日', todo.length)}
       ${card('soon', '30 天內要發', money(soon.reduce((a, e) => a + Number(e.net_sum || 0), 0)), soon.length + ' 場活動')}
-      ${card('all', '全部活動', evs.length, '未發布薪資單 ' + evs.reduce((a, e) => a + pending(e), 0) + ' 張')}</div>
+      ${card('all', '有薪資單的活動', evs.length, '未發布薪資單 ' + evs.reduce((a, e) => a + pending(e), 0) + ' 張（不含已封存、沒有薪資單的活動）')}</div>
     <div class="card tablebox"><table><thead><tr><th>發薪日</th><th>活動</th><th class="r">已發布</th><th class="r">實發合計</th><th>狀態</th></tr></thead>
       <tbody>${list.map(e => { const n = pending(e);
         return `<tr data-k="${esc(e.id)}"><td>${payDateOf(e) ? esc(d(payDateOf(e))) : '<span class="badge warn">未設</span>'}</td><td><b>${esc(e.name)}</b></td><td class="r">${e.published} / ${e.total - e.void}</td><td class="r">${money(e.net_sum)}</td>
-        <td>${late(e) ? '<span class="badge error">已過發薪日仍有未發布</span>' : n ? '<span class="badge warn">尚有 ' + n + ' 張未發布</span>' : !payDateOf(e) ? '<span class="badge warn">待設發薪日</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || `<tr><td colspan="5" class="empty">${v === 'todo' ? '沒有待辦，都發完了。' : v === 'soon' ? '30 天內沒有要發薪的活動。' : '還沒有薪資單'}</td></tr>`}</tbody></table></div>`);
-  on('button.stat', 'click', (ev, b) => { S.filter.payouts = b.dataset.v; viewPayouts(); });
+        <td>${late(e) ? '<span class="badge error">已過發薪日仍有未發布</span>' : n ? '<span class="badge warn">尚有 ' + n + ' 張未發布</span>' : !payDateOf(e) ? '<span class="badge warn">待設發薪日</span>' : payDateOf(e) > t ? '<span class="badge">已發布・待匯款</span>' : '<span class="badge ok">完成</span>'}</td></tr>`; }).join('') || `<tr><td colspan="5" class="empty">${v === 'todo' ? '沒有待辦，都發完了。' : v === 'soon' ? '30 天內沒有要發薪的活動。' : '還沒有薪資單'}</td></tr>`}</tbody></table></div>
+    ${full.length > list.length ? `<div class="row" style="justify-content:center;margin-top:12px"><span class="dim">顯示 ${list.length} / ${full.length} 場</span><button class="btn ghost" id="paymore">顯示更多</button></div>` : ''}`);
+  on('button.stat', 'click', (ev, b) => { S.filter.payouts = b.dataset.v; S.filter.payLimit = 50; viewPayouts(); });
+  if ($('paymore')) $('paymore').onclick = () => { S.filter.payLimit = lim + 100; viewPayouts(); };
   on('tbody tr[data-k]', 'click', (ev, tr) => go('#/events/' + tr.dataset.k + '/payout'));
 }
 
@@ -1557,6 +1580,9 @@ async function viewSettings(tab) {
     const NST = { sent: ['已送出', 'ok'], pending: ['等待中', ''], skipped: ['未送', 'warn'], failed: ['失敗', 'error'] };
     const WHY = { not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退', expired: '過期未送', already_complete: '已補齊' };
     const hook = LINE_FN;
+    // 金鑰沒設好：等待中的通知永遠不會送出，不讓人以為快送了；測試訊息也送不出去
+    const lineOff = !st.ok || !st.configured || !st.valid;
+    if (lineOff) NST.pending = [st.ok ? 'LINE 未設定，不會送出' : '狀態不明，可能不會送出', 'warn'];
     const conn = !st.ok ? '<div class="msg err">無法檢查連線狀態。</div>'
       : !st.configured ? `<div class="msg warn">還沒設定 LINE 金鑰（${st.has_secret ? '已有' : '缺少'} Channel secret、${st.has_token ? '已有' : '缺少'} Channel access token）。請照下方步驟設定。</div>`
       : !st.valid ? '<div class="msg err">LINE 金鑰無效（' + esc(st.error) + '）。請重新發行 Channel access token 並更新。</div>'
@@ -1565,7 +1591,7 @@ async function viewSettings(tab) {
       <div class="stats"><div class="card stat"><div class="k">已綁定人數</div><div class="v">${ov.linked} / ${ov.people}</div></div>
         <div class="card stat"><div class="k">本月已送出</div><div class="v">${ov.month.sent}</div></div>
         <div class="card stat"><div class="k">本月未送（未綁定等）</div><div class="v">${ov.month.skipped}</div></div>
-        <div class="card stat"><div class="k">等待發送</div><div class="v">${ov.pending}</div></div></div>
+        <div class="card stat"><div class="k">等待發送</div><div class="v" style="${lineOff && ov.pending ? 'color:var(--warn)' : ''}">${ov.pending}</div>${lineOff ? '<div class="dim">LINE 未設定好，通知不會送出</div>' : ''}</div></div>
       <div class="split" style="grid-template-columns:minmax(0,1fr) minmax(300px,380px)"><div>
         <div class="card tablebox"><table><thead><tr><th>時間</th><th>類型</th><th>對象</th><th>狀態</th></tr></thead>
         <tbody>${ov.recent.map(n => `<tr title="${esc(n.body || '')}"><td>${esc(d(n.at))} ${esc(new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(n.at)))}</td><td>${esc(KIND[n.kind] || n.kind)}</td>
@@ -1575,10 +1601,11 @@ async function viewSettings(tab) {
         <form id="lf" class="card pad"><b>設定</b>
           <label for="bid">官方帳號 ID（@ 開頭）</label><input id="bid" type="text" autocapitalize="none" value="${esc(ov.basic_id || '')}" placeholder="@123abcde">
           <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin-top:14px"><input type="checkbox" id="len" ${ov.enabled ? 'checked' : ''}> 啟用自動通知</label>
+          ${lineOff ? '<p class="sub" style="margin:10px 0 0">金鑰還沒設定好，儲存後也不會發出通知；請先完成下方「首次設定步驟」。</p>' : ''}
           <div id="lm" style="margin-top:12px"></div><button class="btn block">儲存</button></form>
         <form id="tf" class="card pad" style="margin-top:16px"><b>傳送測試訊息</b><p class="sub" style="margin:4px 0 0">對象必須已在網站綁定 LINE。建議先用你自己的工讀生帳號測試。</p>
           <label for="tid">身分證字號</label><input id="tid" type="text" maxlength="10" autocapitalize="characters">
-          <div id="tm" style="margin-top:12px"></div><button class="btn ghost block">傳送</button></form>
+          <div id="tm" style="margin-top:12px">${lineOff ? '<div class="msg warn">LINE 金鑰設定好後才能傳送測試訊息。</div>' : ''}</div><button class="btn ghost block" ${lineOff ? 'disabled' : ''}>傳送</button></form>
         <div class="card pad" style="margin-top:16px"><b>首次設定步驟</b>
           <ol class="sub" style="padding-left:18px;margin:8px 0 0;line-height:1.9">
             <li>LINE Official Account Manager → 設定 → 回應設定：關閉「自動回應訊息」，開啟「Webhook」。</li>

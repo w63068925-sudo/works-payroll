@@ -408,5 +408,10 @@ begin
     if not exists (select 1 from jsonb_array_elements(r#>'{event,similar}') x where (x->>'id')::uuid = e30) then fails := fails || ' [29f null end_date]'; end if;
   end;
 
-  if fails = '' then raise exception 'PASS 全部 29 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 30. 巡檢第三輪：活動總覽帶 recruiting（活動列表顯示「招募中」）
+  if exists (select 1 from jsonb_array_elements(public.admin_overview(atok)->'events') x where not (x ? 'recruiting')) then fails := fails || ' [30a overview recruiting]'; end if;
+  update public.events set recruiting = true where name = '回歸27甲';
+  if not exists (select 1 from jsonb_array_elements(public.admin_overview(atok)->'events') x join public.events e on e.id = (x->>'id')::uuid where e.name = '回歸27甲' and x->'recruiting' = 'true'::jsonb) then fails := fails || ' [30b recruiting value]'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 30 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;
