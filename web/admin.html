@@ -471,6 +471,8 @@ function payOf(st, cfg) {
   const rate = st.rate != null ? st.rate : (st.pay_type === 'daily' ? null : cfg.default_hourly_rate);
   return rate == null ? '<span class="badge warn">未設定</span>' : (st.pay_type === 'daily' ? '日薪 ' : '時薪 ') + money(rate) + (st.rate == null ? ' <span class="dim">預設</span>' : '');
 }
+// 窄螢幕（左右兩欄變上下）：明細在列表下方，直接跳到明細；用瞬間捲動，避免平滑捲動被重繪打斷
+const toDetail = () => { const b = $('detail'); if (b && matchMedia('(max-width:1080px)').matches) requestAnimationFrame(() => b.scrollIntoView({ block: 'start' })); };
 function splitWrap(listHtml) { return `<div class="split"><div>${listHtml}</div><aside class="card detail" id="detail" aria-live="polite"><p class="empty" style="padding:30px 0">點左側一筆查看明細</p></aside></div>`; }
 
 /* 步驟一：招募 */
@@ -786,7 +788,7 @@ async function openDetail(kind, key, e, keepScroll) {
   S.detail = { kind, key };
   document.querySelectorAll('tbody tr[data-k]').forEach(tr => tr.classList.toggle('on', tr.dataset.k === key));
   const box = $('detail'); if (!box) return;
-  if (!keepScroll && matchMedia('(max-width:1080px)').matches) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (!keepScroll) toDetail();
   const close = '<button class="link x" id="dx">關閉</button>';
   const bindClose = () => { $('dx').onclick = () => { S.detail = null; box.innerHTML = '<p class="empty" style="padding:30px 0">點左側一筆查看明細</p>'; document.querySelectorAll('tbody tr.on').forEach(tr => tr.classList.remove('on')); }; };
   if (kind === 'app') {
@@ -1355,7 +1357,7 @@ async function viewRoster() {
       <div class="chips" style="margin:0">${R_STATUS.map(([k, t]) => `<button class="chip rst" aria-pressed="${F.statuses.includes(k)}" data-s="${k}">${t}</button>`).join('')}</div>
     </div>
     <div class="stats">
-      <button class="card stat ${F.view === 'all' ? 'sel' : ''}" data-v="all" aria-pressed="${F.view === 'all'}"><div class="k">加保期間</div><div class="v">${groups.length}</div><div class="dim">${people} 人</div></button>
+      <button class="card stat ${F.view === 'all' ? 'sel' : ''}" data-v="all" aria-pressed="${F.view === 'all'}"><div class="k">加保期間${r.truncated ? '（不完整）' : ''}</div><div class="v">${groups.length}</div><div class="dim">${people} 人${r.truncated ? '，只算到前 5,000 筆' : ''}</div></button>
       <button class="card stat ${F.view === 'need' ? 'sel' : ''}" data-v="need" aria-pressed="${F.view === 'need'}"><div class="k">需加保</div><div class="v">${need.length}</div><div class="dim">承攬不需加保</div></button>
       <button class="card stat ${F.view === 'bad' ? 'sel' : ''}" data-v="bad" aria-pressed="${F.view === 'bad'}"><div class="k">資料缺漏</div><div class="v" style="${bad.length ? 'color:var(--warn)' : ''}">${bad.length}</div><div class="dim">姓名、身分證、生日</div></button>
     </div>
@@ -1423,7 +1425,7 @@ async function viewPeople(id) {
 async function openPerson(id) {
   document.querySelectorAll('tbody tr[data-k]').forEach(tr => tr.classList.toggle('on', tr.dataset.k === id));
   const box = $('detail'); box.innerHTML = '<p class="sub">載入中…</p>';
-  if (matchMedia('(max-width:1080px)').matches) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  toDetail();
   const r = await rpc('admin_person', { p_id: id }); if (!r.ok) { box.innerHTML = '<p class="empty">找不到這個人</p>'; return; }
   const p = r.person, DOCS = [['id_front', '身分證正面'], ['id_back', '身分證反面'], ['bankbook', '存摺封面']];
   box.innerHTML = `<h1 style="font-size:19px">${esc(p.name)}</h1><p class="sub" style="margin:4px 0 12px">${{ self: '自行登錄', legacy: '舊表匯入', test: '測試資料' }[p.source] || esc(p.source)}　建檔 ${esc(d(p.created_at))}</p>
@@ -1475,6 +1477,7 @@ async function openPerson(id) {
       setTimeout(() => { if ($('dm')) $('dm').innerHTML = '<div class="msg ok">已核對。' + (j.downgraded.length ? '已縮成存證圖 ' + j.downgraded.length + ' 張。' : '') + (j.kept.length ? '有 ' + j.kept.length + ' 張（PDF 或特殊格式）保留原檔。' : '') + '</div>'; }, 400);
     } catch (err) { b2.disabled = false; b2.textContent = '資料已核對'; $('dm').innerHTML = '<div class="msg err">處理失敗，請再試一次。</div>'; }
   };
+  toDetail();
   $('reset').onclick = async () => { const r2 = await rpc('admin_reset_password', { p_person: id }); $('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>'; };
 }
 
@@ -1495,12 +1498,12 @@ function viewPayouts() {
   const isTodo = e => !payDateOf(e) || pending(e) > 0;
   const isSoon = e => payDateOf(e) && payDateOf(e) >= t && payDateOf(e) <= soonEnd;
   const rank = e => late(e) ? 0 : isTodo(e) && payDateOf(e) ? 1 : isTodo(e) ? 2 : 3;
-  const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => rank(a) - rank(b) || ((payDateOf(a) || '9999') < (payDateOf(b) || '9999') ? -1 : 1));
+  const evs = S.ov.events.filter(e => e.total > 0).slice().sort((a, b) => rank(a) - rank(b) || (rank(a) === 3 ? String(payDateOf(b)).localeCompare(String(payDateOf(a))) : String(payDateOf(a) || '9999').localeCompare(String(payDateOf(b) || '9999'))));
   const todo = evs.filter(isTodo), soon = evs.filter(isSoon);
   const v = S.filter.payouts = S.filter.payouts || (todo.length ? 'todo' : 'soon');
   const list = v === 'todo' ? todo : v === 'soon' ? soon : evs;
   const card = (k, label, val, dim, warn) => `<button class="card stat ${v === k ? 'sel' : ''}" data-v="${k}" aria-pressed="${v === k}"><div class="k">${label}</div><div class="v" style="${warn ? 'color:var(--warn)' : ''}">${val}</div><div class="dim">${dim}</div></button>`;
-  shell('payouts', `<div class="head"><div><h1>薪資發放</h1><p class="sub">已過發薪日還沒發布的排最前面，其次是有未發布薪資單或沒設發薪日的活動，再依發薪日由近到遠。點上方卡片切換清單。</p></div></div>
+  shell('payouts', `<div class="head"><div><h1>薪資發放</h1><p class="sub">已過發薪日還沒發布的排最前面，其次是有未發布薪資單或沒設發薪日的活動，最後是已發完的（新的在前）。點上方卡片切換清單。</p></div></div>
     <div class="stats">${card('todo', '待辦活動', todo.length, todo.filter(late).length ? todo.filter(late).length + ' 場已過發薪日' : '未發布或未設發薪日', todo.length)}
       ${card('soon', '30 天內要發', money(soon.reduce((a, e) => a + Number(e.net_sum || 0), 0)), soon.length + ' 場活動')}
       ${card('all', '全部活動', evs.length, '未發布薪資單 ' + evs.reduce((a, e) => a + pending(e), 0) + ' 張')}</div>
