@@ -1,5 +1,6 @@
 // LINE 官方帳號：接收 Webhook（綁定）、發送通知、檢查連線狀態。
-// 需要的 Edge Function Secrets：LINE_CHANNEL_SECRET、LINE_CHANNEL_ACCESS_TOKEN（部署時 verify_jwt = false，本函式自行驗證）
+// 需要的 Edge Function Secrets：LINE_CHANNEL_SECRET，以及 LINE_CHANNEL_ID（用 ID＋secret 自動換 15 分鐘的無狀態 token）
+// 或 LINE_CHANNEL_ACCESS_TOKEN（長期 token，有設就優先用）。部署時 verify_jwt = false，本函式自行驗證。
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const cors = {
@@ -10,7 +11,30 @@ const cors = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 const SECRET = Deno.env.get("LINE_CHANNEL_SECRET") ?? "";
-const TOKEN = Deno.env.get("LINE_CHANNEL_ACCESS_TOKEN") ?? "";
+const LONG_TOKEN = Deno.env.get("LINE_CHANNEL_ACCESS_TOKEN") ?? "";
+const CHANNEL_ID = Deno.env.get("LINE_CHANNEL_ID") ?? "";
+const CONFIGURED = !!SECRET && (!!LONG_TOKEN || !!CHANNEL_ID);
+// 沒有長期 token 時，用頻道 ID＋secret 換無狀態 token（15 分鐘有效，快到期前重換）
+let cached = { token: "", exp: 0 };
+let refreshing: Promise<string> | null = null;   // 同時有多個請求時只換一次
+async function accessToken(): Promise<string> {
+  if (LONG_TOKEN) return LONG_TOKEN;
+  if (!CHANNEL_ID || !SECRET) return "";
+  if (cached.token && Date.now() < cached.exp - 60_000) return cached.token;
+  if (!refreshing) refreshing = (async () => {
+    try {
+      const res = await fetch("https://api.line.me/oauth2/v3/token", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "client_credentials", client_id: CHANNEL_ID, client_secret: SECRET }),
+      });
+      if (!res.ok) return "";
+      const j = await res.json();
+      cached = { token: j.access_token ?? "", exp: Date.now() + Number(j.expires_in ?? 900) * 1000 };
+      return cached.token;
+    } catch { return ""; } finally { refreshing = null; }
+  })();
+  return refreshing;
+}
 const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 
 async function validSignature(raw: string, sig: string): Promise<boolean> {
@@ -24,7 +48,10 @@ async function validSignature(raw: string, sig: string): Promise<boolean> {
   return diff === 0;
 }
 async function line(path: string, init: RequestInit = {}) {
-  return fetch("https://api.line.me" + path, { ...init, headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json", ...(init.headers ?? {}) } });
+  const token = await accessToken();
+  // 換不到 token：不打 LINE，回 503 讓通知走「稍後重試」而不是被標成永久失敗
+  if (!token) return new Response(null, { status: 503 });
+  return fetch("https://api.line.me" + path, { ...init, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init.headers ?? {}) } });
 }
 async function reply(token: string, text: string) {
   await line("/v2/bot/message/reply", { method: "POST", body: JSON.stringify({ replyToken: token, messages: [{ type: "text", text }] }) });
@@ -35,7 +62,7 @@ async function siteUrl() {
 }
 
 async function flush() {
-  if (!TOKEN) return { ok: false, error: "not_configured" };
+  if (!CONFIGURED || !(await accessToken())) return { ok: false, error: "not_configured" };
   let sent = 0, failed = 0;
   for (let round = 0; round < 10; round++) {
     const { data: batch, error } = await sb.rpc("notify_batch", { p_limit: 25 });
@@ -75,12 +102,11 @@ Deno.serve(async (req: Request) => {
       const uid = ev.source?.type === "user" ? ev.source.userId : null;
       if (!uid) continue;
       if (ev.type === "unfollow") { const { error } = await sb.rpc("line_unfollow", { p_user: uid }); if (error) return json({ ok: false }, 500); continue; }
-      if (ev.type === "follow") {
-        await reply(ev.replyToken, `歡迎加入沃克思！\n要收到錄取、上班前一天提醒和薪資單通知，請到薪資查詢網站登入 → 我的資料 → 綁定 LINE，再把 6 位數綁定碼傳給我。\n${site}`);
-        continue;
-      }
+      // 共用「沃克思活動團隊」主帳號：加好友的歡迎訊息、一般聊天與自動回應都交給官方帳號原本的設定，這裡不回覆
+      if (ev.type === "follow") continue;
       if (ev.type === "message" && ev.message?.type === "text") {
-        const m = String(ev.message.text).match(/\b(\d{6})\b/);
+        // 整則訊息就是綁定碼（或「綁定 123456」）才處理，避免把一般聊天裡的數字當成綁定碼
+        const m = String(ev.message.text).match(/^\s*(?:綁定\s*)?(\d{6})\s*$/);
         if (m) {
           const { data, error } = await sb.rpc("line_bind", { p_code: m[1], p_user: uid });
           if (error) return json({ ok: false }, 500);
@@ -89,8 +115,6 @@ Deno.serve(async (req: Request) => {
             : data?.error === "too_many"
             ? `嘗試次數太多，請一小時後再試。`
             : `綁定碼不正確或已過期（15 分鐘內有效），請到網站重新產生。\n${site}`);
-        } else {
-          await reply(ev.replyToken, `這個帳號負責發送排班與薪資通知，無法回覆訊息。有問題請直接聯絡活動負責人。\n薪資查詢：${site}`);
         }
       }
     }
@@ -106,7 +130,8 @@ Deno.serve(async (req: Request) => {
 
   if (b.action === "flush") return json(await flush());
   if (b.action === "status" && admin) {
-    if (!SECRET || !TOKEN) return json({ ok: true, configured: false, has_secret: !!SECRET, has_token: !!TOKEN });
+    if (!CONFIGURED) return json({ ok: true, configured: false, has_secret: !!SECRET, has_channel_id: !!CHANNEL_ID, has_access_token: !!LONG_TOKEN });
+    if (!(await accessToken())) return json({ ok: true, configured: true, valid: false, error: "token_exchange" });
     const info = await line("/v2/bot/info");
     if (!info.ok) return json({ ok: true, configured: true, valid: false, error: `http_${info.status}` });
     const i = await info.json();

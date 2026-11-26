@@ -1643,8 +1643,8 @@ async function viewSettings(tab) {
     const lineOff = !st.ok || !st.configured || !st.valid;
     if (lineOff) NST.pending = [st.ok ? 'LINE 未設定，不會送出' : '狀態不明，可能不會送出', 'warn'];
     const conn = !st.ok ? '<div class="msg err">無法檢查連線狀態。</div>'
-      : !st.configured ? `<div class="msg warn">還沒設定 LINE 金鑰（${st.has_secret ? '已有' : '缺少'} Channel secret、${st.has_token ? '已有' : '缺少'} Channel access token）。請照下方步驟設定。</div>`
-      : !st.valid ? '<div class="msg err">LINE 金鑰無效（' + esc(st.error) + '）。請重新發行 Channel access token 並更新。</div>'
+      : !st.configured ? `<div class="msg warn">還沒設定 LINE 金鑰（${st.has_secret ? '已有' : '缺少'} Channel secret、${st.has_channel_id ? '已有' : '缺少'} Channel ID）。請照下方步驟設定。</div>`
+      : !st.valid ? '<div class="msg err">' + (st.error === 'token_exchange' ? '換發 LINE token 失敗，可能是 LINE 暫時故障，或 Supabase 的 LINE_CHANNEL_ID／LINE_CHANNEL_SECRET 和 LINE 後台不一致。' : 'LINE 金鑰無效（' + esc(st.error) + '）。請確認 Supabase 的 LINE_CHANNEL_ID 與 LINE_CHANNEL_SECRET 和 LINE 後台一致。') + '</div>'
       : `<div class="msg ok">已連線：${esc(st.name)}（${esc(st.basic_id)}）${st.quota != null ? '　本月已用 ' + st.used + ' / ' + st.quota + ' 則' : st.quota_type === 'none' ? '　本月已用 ' + st.used + ' 則（無上限）' : ''}</div>`;
     body = `${conn}
       <div class="stats"><div class="card stat"><div class="k">已綁定人數</div><div class="v">${ov.linked} / ${ov.people}</div></div>
@@ -1667,10 +1667,9 @@ async function viewSettings(tab) {
           <div id="tm" style="margin-top:12px">${lineOff ? '<div class="msg warn">LINE 金鑰設定好後才能傳送測試訊息。</div>' : ''}</div><button class="btn ghost block" ${lineOff ? 'disabled' : ''}>傳送</button></form>
         <div class="card pad" style="margin-top:16px"><b>首次設定步驟</b>
           <ol class="sub" style="padding-left:18px;margin:8px 0 0;line-height:1.9">
-            <li>LINE Official Account Manager → 設定 → 回應設定：關閉「自動回應訊息」，開啟「Webhook」。</li>
-            <li>LINE Developers → 你的 Messaging API channel → Messaging API 分頁 → Webhook URL 填入下方網址，按 Verify，再開啟 Use webhook。</li>
-            <li>同一頁最下方發行 Channel access token（long-lived）；Basic settings 分頁有 Channel secret。</li>
-            <li>到 Supabase 後台 → Edge Functions → Secrets，新增 <code>LINE_CHANNEL_SECRET</code> 與 <code>LINE_CHANNEL_ACCESS_TOKEN</code>。</li>
+            <li>LINE Official Account Manager → 選「沃克思活動團隊」→ 設定 → Messaging API：Webhook 網址填下方網址並儲存，並確認 Webhook 為啟用（設定 › 回應設定）。歡迎訊息與自動回應不用改，聊天、歡迎訊息與自動回應照常；系統只處理工讀生傳來的 6 位數綁定碼，其他訊息不回覆。</li>
+            <li>同一頁有 Channel ID 與 Channel secret（按「複製」）。</li>
+            <li>Supabase 後台 → Edge Functions → Secrets，新增 <code>LINE_CHANNEL_ID</code> 與 <code>LINE_CHANNEL_SECRET</code>。系統會用這兩個自動換發通知用的 token，不需要到 LINE Developers 發長期 token。</li>
             <li>回到這裡填官方帳號 ID 並儲存，頂端顯示「已連線」即完成。</li></ol>
           <label for="hk">Webhook URL</label><div class="row" style="align-items:center"><input id="hk" type="text" readonly value="${esc(hook)}" class="grow" style="width:auto;min-width:160px"><button type="button" class="btn ghost sm" id="hkc">複製</button></div></div>
       </div></div>`;

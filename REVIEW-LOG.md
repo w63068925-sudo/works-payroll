@@ -179,3 +179,5 @@
   - Codex 審查（gpt-6-luna，medium）：已修 LINE 狀態載入前可確認發布。未改：名冊超過 5000 筆時截斷邊界排序（既有行為，超量時已停用匯出）；錄取後才綁 LINE 的人不補送錄取通知（接受）。
 - 2026-11-26 寄信設定：後台「設定 › 公司資料 › 新人建檔驗證信」填 Apps Script 網址與共用密鑰（admin_mail_settings，密鑰只寫不讀、先驗證全部欄位才寫入、稽核不記值）。Apps Script 專案「沃克思薪資-建檔驗證信」已由 w63068925 部署（執行身分：我、存取：所有人），MAIL_KEY 由使用者貼入指令碼屬性；網址已寫入 app_settings。regression 第 36 組。
   - Codex 安全審查（gpt-6-luna，xhigh，Zook Waifdance，預設帳號額度不足）：已修部分寫入（網址對、密鑰錯時網址仍被存）、明確 revoke public.setting(text)（實際 ACL 本來就不開放 anon，巡檢另以 anon 角色驗證 12 個用到 setting() 的函式都是 definer 不受影響）、密鑰欄位改為不被瀏覽器當密碼保存。
+- 2026-11-26 LINE 通知上線（使用者要求代為設定）：改用主官方帳號「沃克思活動團隊」（@ss168899／@733toutk，2,209 位好友，輕用量每月 200 則）。使用者決定 Webhook 改接薪資系統（原 Make 網址另存 seed/line-webhook-before.txt）；回應設定維持原樣（原說明要關自動回應是錯的，已改）。使用者的 LINE 登入沒有該頻道的 Developers 權限，改用 LINE_CHANNEL_ID＋LINE_CHANNEL_SECRET 換 15 分鐘無狀態 token（使用者自行貼入 Supabase Secrets）。函式：加好友與一般聊天不回覆，只處理整則為 6 位數的綁定碼。後台已顯示「已連線」。
+  - Codex 安全審查（gpt-6-luna，xhigh）：已修換 token 失敗時通知被標永久失敗（改回 503 走重試）、並行換 token 只換一次、狀態欄位分開 Channel ID 與長期 token、設定說明加「確認 Webhook 為啟用」。未改：綁定成功但回覆失敗不重送（網站上看得到已綁定）；原 Make 整合中斷（使用者決定）；line_bind 既有 too_many 限制。
