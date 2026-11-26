@@ -205,14 +205,15 @@ begin
   if not exists (select 1 from public.audit_log where actor = 'regression-admin' and action = 'export_insurance_roster') then fails := fails || ' [18i export not logged]'; end if;
 
   -- 19. 簽到退提示：提早到從表定時間起算、遲到照實際分鐘、超過表定下班要主管核准才計薪
-  insert into public.events(employer_id, name, start_date, end_date) values (emp, '提示測試早', v_today, v_today) returning id into ev4;
-  insert into public.events(employer_id, name, start_date, end_date) values (emp, '提示測試遲', v_today, v_today) returning id into ev5;
+  -- 班次日期跟著「開始時間」走，半夜 00:00–00:15 或 23:30 後跑也不會跨日誤判
+  insert into public.events(employer_id, name, start_date, end_date) values (emp, '提示測試早', v_today - 1, v_today + 1) returning id into ev4;
+  insert into public.events(employer_id, name, start_date, end_date) values (emp, '提示測試遲', v_today - 1, v_today + 1) returning id into ev5;
   insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values
-    (ev4, v_today, ((now() at time zone 'Asia/Taipei') + interval '30 minutes')::time(0), ((now() at time zone 'Asia/Taipei') + interval '4 hours 30 minutes')::time(0), 2) returning id into s1;
+    (ev4, ((now() at time zone 'Asia/Taipei') + interval '30 minutes')::date, ((now() at time zone 'Asia/Taipei') + interval '30 minutes')::time(0), ((now() at time zone 'Asia/Taipei') + interval '4 hours 30 minutes')::time(0), 2) returning id into s1;
   insert into public.applications(event_id, person_id, status) values (ev4, p1, 'active') returning id into a1;
   insert into public.application_shifts(application_id, shift_id, status) values (a1, s1, 'accepted');
   insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values
-    (ev5, v_today, ((now() at time zone 'Asia/Taipei') - interval '15 minutes')::time(0), ((now() at time zone 'Asia/Taipei') + interval '3 hours')::time(0), 2) returning id into s2;
+    (ev5, ((now() at time zone 'Asia/Taipei') - interval '15 minutes')::date, ((now() at time zone 'Asia/Taipei') - interval '15 minutes')::time(0), ((now() at time zone 'Asia/Taipei') + interval '3 hours')::time(0), 2) returning id into s2;
   insert into public.applications(event_id, person_id, status) values (ev5, p2, 'active') returning id into a2;
   insert into public.application_shifts(application_id, shift_id, status) values (a2, s2, 'accepted');
   insert into public.checkin_tickets(ticket_hash, event_id, expires_at) values
