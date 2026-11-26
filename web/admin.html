@@ -168,7 +168,7 @@ const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
 const root = document.getElementById('root'), overlay = document.getElementById('overlay');
 const S = { token: null, user: null, ov: null, flash: null, cache: {}, sel: new Set(), filter: {}, detail: null, confirm: null, timers: [] };
 try { S.token = sessionStorage.getItem('payroll_admin_token'); } catch (e) {}
-function saveToken(t) { S.token = t; try { t ? sessionStorage.setItem('payroll_admin_token', t) : sessionStorage.removeItem('payroll_admin_token'); } catch (e) {} }
+function saveToken(t) { S.token = t; if (!t) S.imp = null; try { t ? sessionStorage.setItem('payroll_admin_token', t) : sessionStorage.removeItem('payroll_admin_token'); } catch (e) {} }
 
 const NO_TOKEN = ['admin_setup', 'admin_login'];
 // 和資料庫一樣以字元（而非 UTF-16 碼元）計算長度
@@ -230,7 +230,7 @@ function viewAuth(mode, message) {
 }
 
 /* ---------- 外框與路由 ---------- */
-const NAV = [['today', '今日現場'], ['events', '活動'], ['calendar', '班表'], ['people', '人員'], ['roster', '加保名冊'], ['payouts', '薪資發放'], ['settings', '設定']];
+const NAV = [['today', '今日現場'], ['events', '活動'], ['import', 'AI 匯入'], ['calendar', '班表'], ['people', '人員'], ['roster', '加保名冊'], ['payouts', '薪資發放'], ['settings', '設定']];
 function activeEvents() { const t = today(); return (S.ov ? S.ov.events : []).filter(e => e.start_date && e.start_date <= t && (e.end_date || e.start_date) >= addDays(t, -1)); }
 function addDays(s, n) { const x = new Date(s + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
 function shell(section, html) {
@@ -250,6 +250,9 @@ async function loadOverview() { const r = await rpc('admin_overview'); r.allEven
 
 async function route() {
   clearTimers(); overlay.innerHTML = '';
+  // 匯入台「匯入到後台」帶來的資料：先收起來，立刻從網址與瀏覽紀錄拿掉（含個資）
+  const imp = location.hash.match(/^#\/import\/(WKS1\.[A-Za-z0-9_-]+)$/);
+  if (imp) { S.pendingImport = imp[1]; history.replaceState(null, '', location.pathname + location.search + '#/import'); }
   if (!S.token) return viewAuth('login');
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
   const sec = parts[0] || 'events';
@@ -260,6 +263,7 @@ async function route() {
     if (sec === 'events') return viewEvents();
     if (sec === 'calendar') return viewCalendar(parts[1], parts[2]);
     if (sec === 'roster') return viewRoster();
+    if (sec === 'import') return viewImport();
     if (sec === 'people') return viewPeople(parts[1]);
     if (sec === 'doc') return viewDocLink(parts[1], parts[2]);
     if (sec === 'payouts') return viewPayouts();
@@ -1162,6 +1166,102 @@ async function viewDocLink(personId, kind) {
       + (j.drive_url ? `<p class="sub" style="margin-top:10px">${j.url ? '這是縮圖。' : ''}<a href="${esc(j.drive_url)}" target="_blank" rel="noopener noreferrer">開啟雲端原檔</a>（需用有分享權限的 Google 帳號）</p>` : '');
   shell('people', `<div class="crumb"><a href="#/people/${esc(personId)}">人員資料</a> / ${esc(label)}</div>
     <div class="head"><div><h1>${esc(label)}</h1><p class="sub">這次開啟已留下調閱紀錄。圖片連結 2 分鐘後失效，需要時重新整理這頁。</p></div></div>${body}`);
+}
+
+/* ---------- AI 匯入：在 claude.ai 匯入台整理好，貼回匯入碼，先檢查再寫入 ---------- */
+const AI_IMPORT_URL = 'https://claude.ai/artifact/JhfKZP16HrELZhCcn1LWgM';
+async function decodeImportCode(text) {
+  const t = String(text || '').trim();
+  if (!t) throw new Error('請先貼上匯入碼。');
+  if (t.length > 300000) throw new Error('匯入碼太長，請分批匯入。');
+  const m = t.match(/^WKS1\.([A-Za-z0-9_-]+)$/);
+  if (!m) throw new Error('看不懂這段匯入碼，請從匯入台按「複製匯入碼」再貼一次。');
+  const b = atob(m[1].replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((m[1].length + 3) % 4));
+  const bytes = Uint8Array.from(b, c => c.charCodeAt(0));
+  // 解壓後最多 3MB，避免異常的匯入碼佔滿記憶體
+  const rd = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader(), parts = []; let size = 0;
+  for (;;) { const { done, value } = await rd.read(); if (done) break; size += value.length; if (size > 3e6) { rd.cancel(); throw new Error('匯入碼內容太大，請分批匯入。'); } parts.push(value); }
+  const v = JSON.parse(await new Blob(parts).text());
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new SyntaxError('bad');
+  return v;
+}
+async function viewImport() {
+  if (S.pendingImport) { S.imp = { code: S.pendingImport, target: '', payload: null, preview: null, view: 'all', auto: true, seq: 0 }; S.pendingImport = null; }
+  const I = S.imp = S.imp || { code: '', target: '', payload: null, preview: null, view: 'all', seq: 0 };
+  // 銀行欄給管理員核對：代碼＋帳號末 4 碼（取自匯入碼）
+  const bankOf = row => { const x = ((I.preview && I.preview.payloadRef && I.preview.payloadRef.people) || []).find(q => String(q.row) === String(row)) || {};
+    const acct = String(x.bank_account || '').replace(/\D/g, ''); return acct ? ((String(x.bank_code || '').match(/\d{3}/) || [''])[0] + ' •••' + acct.slice(-4)) : '—'; };
+  const evOpts = S.ov.events.slice().sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || '')));
+  const p = I.preview, people = p ? p.people : [], shifts = p ? p.shifts : [];
+  const cnt = k => people.filter(x => x.status === k).length;
+  const list = I.view === 'all' ? people : people.filter(x => x.status === I.view);
+  const ok = people.filter(x => x.status !== 'error').length, okShifts = shifts.filter(x => !x.errors.length).length;
+  const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
+  const ev = p && p.event;
+  shell('import', `
+    <div class="head"><div><h1>AI 匯入</h1><p class="sub">在匯入台跟 AI 對話：貼上表單回覆試算表、截圖或活動需求，AI 整理成活動、班別與人員名單。整理好按「匯入到後台」會自動帶到這裡並檢查，確認後才寫入。也可以把匯入碼貼在下面。</p></div>
+      <a class="btn" href="${esc(AI_IMPORT_URL)}" target="_blank" rel="noopener noreferrer">開啟 AI 匯入台 ↗</a></div>
+    <div class="card pad" style="margin-bottom:14px">
+      <label for="icode">匯入碼</label>
+      <textarea id="icode" rows="3" placeholder="貼上匯入台產生的匯入碼（WKS1. 開頭）" style="width:100%;font-family:var(--num);font-size:12.5px">${esc(I.code)}</textarea>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:2;min-width:240px"><label for="itarget">匯入到</label><select id="itarget"><option value="">建立新活動（用匯入碼裡的活動資料）</option>${evOpts.map(e => `<option value="${esc(e.id)}" ${e.id === I.target ? 'selected' : ''}>加到既有活動：${esc(e.name)}</option>`).join('')}</select></div>
+        <button class="btn" id="icheck">檢查</button>
+      </div>
+    </div>
+    ${p ? `
+    <div class="card pad" style="margin-bottom:14px"><div class="kv">
+      <span class="dim">活動</span><span>${esc(ev.name || '')}${ev.existing ? ' <span class="badge">既有活動</span>' : ' <span class="badge ok">新活動</span>'}</span>
+      <span class="dim">日期</span><span style="font-family:var(--num)">${esc(ev.start_date || '')}${ev.end_date && ev.end_date !== ev.start_date ? ' – ' + esc(ev.end_date) : ''}</span>
+      <span class="dim">發薪日</span><span style="font-family:var(--num)">${esc(ev.pay_date || '未設定')}</span>
+      ${ev.location ? `<span class="dim">地點</span><span>${esc(ev.location)}</span>` : ''}
+    </div></div>
+    ${shifts.length ? `<div class="card tablebox" style="margin-bottom:14px"><table><thead><tr><th>班別日期</th><th>時間</th><th>職務</th><th class="r">人數</th><th class="r">時薪</th><th>檢查</th></tr></thead><tbody>
+      ${shifts.map(s => `<tr><td style="font-family:var(--num)">${esc(s.work_date)}</td><td style="font-family:var(--num)">${esc(s.start_time || '')}–${esc(s.end_time || '')}</td><td>${esc(s.role || '—')}</td><td class="r">${esc(s.headcount || '')}</td><td class="r">${esc(s.rate || '—')}</td>
+        <td>${s.errors.length ? s.errors.map(x => `<span class="badge error">${esc(x)}</span>`).join(' ') : '<span class="badge ok">可匯入</span>'}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    ${people.length ? `<div class="stats">
+      ${[['all', '全部', people.length, '名單人數'], ['new', '新建', cnt('new'), '系統裡還沒有'], ['existing', '既有', cnt('existing'), '只補空白欄位'], ['error', '有錯', cnt('error'), '這些列不會匯入']].map(([k, t, n, d]) =>
+        `<button class="card stat ${I.view === k ? 'sel' : ''}" data-v="${k}" aria-pressed="${I.view === k}"><div class="k">${t}</div><div class="v" style="${k === 'error' && n ? 'color:var(--danger)' : ''}">${n}</div><div class="dim">${d}</div></button>`).join('')}
+    </div>
+    <div class="card tablebox">${list.length ? `<table><thead><tr><th class="r">列</th><th>姓名</th><th>身分證字號</th><th>狀態</th><th>職務</th><th>工作日期</th><th>匯款帳戶</th><th class="r">應發</th><th class="r">勞保</th><th class="r">實發</th><th>檢查</th></tr></thead><tbody>
+      ${list.map(x => `<tr><td class="r">${esc(x.row)}</td><td>${esc(x.name || '—')}</td><td style="font-family:var(--num)">${esc(x.national_id || '—')}</td>
+        <td>${x.status === 'new' ? '<span class="badge ok">新建</span>' : x.status === 'existing' ? '<span class="badge">既有</span>' : '<span class="badge error">有錯</span>'}${x.fills && x.fills.length ? '<div class="dim">補 ' + x.fills.length + ' 欄</div>' : ''}</td>
+        <td>${esc(x.role || '—')}</td><td style="font-family:var(--num)">${(x.dates || []).map(d => esc(String(d).replace(/-/g, '/'))).join('、') || '—'}</td><td style="font-family:var(--num)">${esc(bankOf(x.row))}</td>
+        <td class="r">${money(x.gross)}</td><td class="r">${x.gross == null ? '—' : money(x.labor_ins)}</td><td class="r">${money(x.net)}</td>
+        <td>${[...x.errors.map(m => `<span class="badge error">${esc(m)}</span>`), ...x.warnings.map(m => `<span class="badge warn">${esc(m)}</span>`)].join(' ') || '<span class="badge ok">完整</span>'}</td></tr>`).join('')}
+      </tbody></table>` : '<p class="empty">沒有符合條件的人。</p>'}</div>` : ''}
+    <div class="bulk"><span class="grow">${ev.existing ? '加到「' + esc(ev.name) + '」' : '建立新活動'}：${ok} 人${okShifts ? '、' + okShifts + ' 個班別' : ''}${cnt('error') ? '，' + cnt('error') + ' 列有錯會略過' : ''}。有金額的人建薪資單草稿，發布前請在「核對」確認。</span>
+      <button class="btn" id="icommit" ${ok || okShifts || (!ev.existing && !people.length) ? '' : 'disabled'}>確認匯入</button></div>` : ''}`);
+  const ERR = { bad_payload: '匯入碼格式不對或版本太舊，請在匯入台重新產生。', bad_name: '活動名稱太短。', bad_date: '活動日期不對。', pay_before_end: '發薪日早於活動結束日。',
+    duplicate_source: '這份試算表已經匯入過了。要補人請選「加到既有活動」。', not_found: '找不到這場活動。', too_many: '名單超過 500 人，請分批匯入。', all_rows_invalid: '每一列都有錯，沒有可匯入的資料。' };
+  // 匯入碼或目標一改，舊預覽立刻作廢；確認匯入只送「預覽當時」的資料與目標
+  $('icode').oninput = () => { I.code = $('icode').value; I.seq++; if (I.preview) { I.preview = null; viewImport().then(() => { const x = $('icode'); x.focus(); x.setSelectionRange(x.value.length, x.value.length); }); } };
+  $('itarget').onchange = () => { I.target = $('itarget').value; I.seq++; I.preview = null; viewImport(); };
+  $('icheck').onclick = async () => {
+    const b = $('icheck'); b.disabled = true; b.textContent = '檢查中…';
+    const seq = ++I.seq, target = I.target || null;
+    try {
+      I.code = $('icode').value; const payload = await decodeImportCode(I.code);
+      const r = await rpc('admin_ai_import', { p_payload: payload, p_event: target, p_commit: false });
+      if (seq !== I.seq || S.imp !== I) { if (S.imp === I && location.hash === '#/import') viewImport(); return; }
+      if (!r.ok) { I.preview = null; flash('err', ERR[r.error] || '檢查失敗，請再試一次。'); if (r.error === 'duplicate_source' && r.event) I.target = r.event; }
+      else { r.payloadRef = payload; r.target = target; I.preview = r; I.view = 'all'; }
+    } catch (err) { if (err.message === 'session') return; if (seq !== I.seq) { if (S.imp === I && location.hash === '#/import') viewImport(); return; } I.preview = null; flash('err', err instanceof SyntaxError ? '匯入碼不完整，請重新複製。' : err.message); }
+    viewImport();
+  };
+  document.querySelectorAll('.stat[data-v]').forEach(b => b.onclick = () => { I.view = b.dataset.v; viewImport(); });
+  if (I.auto) { I.auto = false; $('icheck').click(); }
+  if ($('icommit')) $('icommit').onclick = async () => {
+    const b = $('icommit'); b.disabled = true; b.textContent = '匯入中…';
+    try {
+      const pv = I.preview; if (!pv) return viewImport();
+      const r = await rpc('admin_ai_import', { p_payload: pv.payloadRef, p_event: pv.target, p_commit: true });
+      if (!r.ok) { flash('err', ERR[r.error] || '匯入失敗，請再試一次。'); return viewImport(); }
+      S.imp = null; S.ov = null;
+      flash('ok', `已匯入：新建 ${r.new_people} 人、補資料 ${r.filled} 人、出勤 ${r.attendance} 天、薪資單草稿 ${r.payslips} 張${r.shifts ? '、班別 ' + r.shifts + ' 個' : ''}${r.skipped ? '；' + r.skipped + ' 列有錯已略過' : ''}。`);
+      go('#/events/' + r.event);
+    } catch (err) { if (err.message !== 'session') { flash('err', err.message); viewImport(); } }
+  };
 }
 
 /* ---------- 加保名冊 ---------- */

@@ -1,0 +1,576 @@
+<title>沃克思活動匯入台</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* layout: one-screen workbench of three panes, like 沃克思報價台 — recent sign-up sheets, the assistant, the event detail.
+   On a phone the panes become tabs. Same ivory / clay palette as 報價台 so the two tools read as one family. */
+:root{--bg:#f5f4ee;--panel:#ffffff;--soft:#f0eee6;--sunk:#faf9f5;--fg:#1a1915;--muted:#6f6d66;--faint:#a3a094;--line:#e2dfd4;--accent:#d97757;--accent-hi:#c6613f;--accent-fg:#ffffff;--ok:#2f7d4f;--warn:#96690f;--bad:#b3261e;--shadow:0 1px 2px rgba(40,35,20,.05),0 4px 16px rgba(40,35,20,.04);
+ --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif;--num:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1f1e1c;--panel:#2a2927;--soft:#383734;--sunk:#242321;--fg:#f3f1ea;--muted:#a8a59c;--faint:#77756d;--line:#403f3b;--accent:#d97757;--accent-hi:#e58d70;--accent-fg:#ffffff;--ok:#6fcf97;--warn:#e3b341;--bad:#ff8a80;--shadow:0 1px 2px rgba(0,0,0,.3);color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#1f1e1c;--panel:#2a2927;--soft:#383734;--sunk:#242321;--fg:#f3f1ea;--muted:#a8a59c;--faint:#77756d;--line:#403f3b;--accent:#d97757;--accent-hi:#e58d70;--accent-fg:#ffffff;--ok:#6fcf97;--warn:#e3b341;--bad:#ff8a80;--shadow:0 1px 2px rgba(0,0,0,.3);color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14.5px;line-height:1.6;padding-block:12px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:12px;margin:0}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.top{display:flex;align-items:center;gap:10px;flex:none;flex-wrap:wrap}
+.top h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.02em}
+.top .sp{flex:1}
+.chip{font-size:12px;padding:1px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.chip::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--faint)}
+.chip.ok::before{background:var(--ok)}.chip.busy::before{background:var(--warn)}.chip.bad::before{background:var(--bad)}
+.tool{height:30px;padding:0 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--fg);cursor:pointer;font-size:13px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.tool:hover{border-color:var(--faint)}
+.cols{flex:1;min-height:0;display:grid;grid-template-columns:minmax(200px,250px) minmax(320px,1fr) minmax(360px,1.25fr);gap:12px}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.pane>header{flex:none;display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);min-height:50px}
+.pane>header h2{font-size:14px;font-weight:650;margin:0;white-space:nowrap}
+.pane>header .sp{flex:1}
+.count{font-size:12px;color:var(--muted);font-weight:400}
+/* recent sheets */
+.search{padding:10px 12px 6px;flex:none}
+.search input{width:100%;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--sunk);padding:0 10px}
+#sheet-msg{padding:0 14px;font-size:12px;color:var(--muted);margin:0}
+#sheets{flex:1;overflow-y:auto;padding:4px 8px 10px;display:flex;flex-direction:column;gap:1px}
+.sheet{text-align:left;background:none;border:0;border-bottom:2px solid transparent;border-radius:8px 8px 3px 3px;padding:7px 8px;cursor:pointer;display:flex;flex-direction:column;min-width:0}
+.sheet b{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sheet span{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.sheet:hover{background:var(--soft)}
+.sheet[aria-current="true"]{background:var(--soft);border-bottom-color:var(--fg)}
+/* assistant */
+#chat{flex:1;display:flex;flex-direction:column;gap:14px;overflow-y:auto;padding:16px 16px 8px}
+.msg{white-space:pre-wrap;word-break:break-word;max-width:100%}
+.msg.user{align-self:flex-end;background:var(--soft);border-radius:14px 14px 4px 14px;padding:8px 14px;max-width:86%}
+.msg.bot{align-self:stretch;position:relative;padding-left:26px}
+.msg.bot::before{content:"✻";position:absolute;left:1px;top:-1px;color:var(--accent);font-size:15px}
+.msg.bot.thinking{color:var(--muted)}
+@media (prefers-reduced-motion:no-preference){.msg.bot.thinking::before{animation:spin 2.4s linear infinite}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.msg.note{align-self:center;color:var(--muted);font-size:13px;text-align:center}
+.msg.err{align-self:stretch;border:1px solid var(--bad);border-radius:10px;padding:8px 12px;color:var(--bad);font-size:13px}
+.sugg{display:flex;flex-direction:column;gap:6px;padding-left:26px}
+.sugg button{text-align:left;background:var(--sunk);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer;display:flex;flex-direction:column}
+.sugg button:hover{border-color:var(--accent)}
+.sugg b{font-weight:600;font-size:13.5px}.sugg span{font-size:12.5px;color:var(--muted)}
+.dock{flex:none;padding:8px 12px 12px}
+.composer{background:var(--sunk);border:1px solid var(--line);border-radius:16px;padding:10px 12px 8px}
+.composer:focus-within{border-color:var(--faint)}
+.composer.drop{border-color:var(--accent);border-style:dashed}
+.composer textarea{display:block;width:100%;border:0;outline:0;resize:none;background:none;min-height:44px;max-height:180px;padding:2px}
+.files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.file{display:inline-flex;align-items:center;gap:6px;font-size:12px;border:1px solid var(--line);border-radius:8px;padding:2px 8px;background:var(--panel);color:var(--muted)}
+.file img{width:22px;height:22px;object-fit:cover;border-radius:4px}
+.file button{border:0;background:none;color:var(--muted);cursor:pointer;padding:0 2px}
+.bar{display:flex;align-items:center;gap:6px;margin-top:4px}
+.bar .grow{flex:1;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.icon{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
+.icon:hover{color:var(--fg);border-color:var(--faint)}
+.icon.go{border-radius:999px;background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.icon.go:hover{background:var(--accent-hi);border-color:var(--accent-hi)}
+.icon svg{width:16px;height:16px}
+/* event detail */
+.body{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
+.blank{margin:auto;max-width:340px;text-align:center;color:var(--muted);padding:32px 16px;display:flex;flex-direction:column;gap:8px;align-items:center}
+.blank i{font-style:normal;font-size:28px;color:var(--faint)}
+.blank b{color:var(--fg);font-size:15px}
+.sec{padding:14px 16px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--line)}
+.sec h3{margin:0;font-size:13px;font-weight:650;display:flex;align-items:center;gap:8px}
+.sec h3 .sp{flex:1}
+form.ev{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 12px}
+form.ev label{font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:3px;min-width:0}
+form.ev input{height:32px;border-radius:8px;border:1px solid var(--line);background:var(--sunk);padding:0 10px;width:100%;min-width:0}
+form.ev .wide{grid-column:1/-1}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.stat{background:var(--sunk);border:1px solid var(--line);border-bottom-width:2px;border-radius:10px;padding:6px 10px;text-align:left;cursor:pointer;min-width:0}
+.stat span{display:block;font-size:12px;color:var(--muted)}
+.stat b{font-size:17px;font-weight:650;font-variant-numeric:tabular-nums}
+.stat[aria-pressed="true"]{border-bottom-color:var(--fg);background:var(--soft)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:500;background:var(--sunk)}
+tr:last-child td{border-bottom:0}
+td.r,th.r{text-align:right;font-variant-numeric:tabular-nums}
+td.n{font-family:var(--num);font-size:12.5px}
+.badge{font-size:11.5px;border-radius:999px;padding:0 8px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;display:inline-block;margin:1px 2px 1px 0}
+.badge.ok{color:var(--ok);border-color:var(--ok)}.badge.warn{color:var(--warn);border-color:var(--warn)}.badge.bad{color:var(--bad);border-color:var(--bad)}
+.x{border:0;background:none;color:var(--faint);cursor:pointer;padding:0 4px;font-size:15px;line-height:1}
+.x:hover{color:var(--bad)}
+.foot{flex:none;border-top:1px solid var(--line);padding:10px 14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.foot .grow{flex:1;min-width:160px;font-size:12.5px;color:var(--muted)}
+.primary,.ghost{border-radius:8px;height:34px;padding:0 14px;cursor:pointer;font-weight:600;white-space:nowrap;display:inline-flex;align-items:center;text-decoration:none;font-size:14px}
+.primary{background:var(--accent);color:var(--accent-fg);border:1px solid var(--accent)}
+.primary:hover{background:var(--accent-hi);border-color:var(--accent-hi)}
+.ghost{background:var(--panel);color:var(--fg);border:1px solid var(--line);font-weight:500}
+.ghost:hover{border-color:var(--faint)}
+a.primary[aria-disabled="true"]{opacity:.5;pointer-events:none}
+button:disabled{opacity:.5;cursor:not-allowed}
+#code-box{width:100%;font-family:var(--num);font-size:11.5px;border:1px solid var(--line);border-radius:8px;background:var(--sunk);padding:6px 8px;resize:none}
+.mtabs{display:none}
+@media (max-width:980px){
+  body{height:auto;min-height:100%}
+  .cols{display:flex;flex-direction:column}
+  .cols .pane{display:none;min-height:70vh}
+  .cols[data-v="list"] .p-list,.cols[data-v="chat"] .p-chat,.cols[data-v="event"] .p-event{display:flex}
+  .mtabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;flex:none}
+  .mtabs button{height:42px;border-radius:12px;border:1px solid var(--line);border-bottom-width:2px;background:var(--panel);color:var(--muted);cursor:pointer}
+  .mtabs button[aria-current="true"]{color:var(--fg);font-weight:650;border-bottom-color:var(--fg)}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+</style>
+
+<div class="top">
+  <h1>沃克思活動匯入台</h1>
+  <span class="chip" id="c-ai">助理：待命</span>
+  <span class="chip" id="c-drive">雲端：尚未連線</span>
+  <span class="sp"></span>
+  <a class="tool" href="https://w63068925-sudo.github.io/works-payroll/admin.html#/import" target="_blank" rel="noopener noreferrer">開啟後台 ↗</a>
+</div>
+
+<nav class="mtabs" aria-label="切換區塊"><button type="button" data-mv="list">最近的報名表</button><button type="button" data-mv="chat" aria-current="true">匯入小助手</button><button type="button" data-mv="event">活動明細</button></nav>
+
+<div class="cols" id="cols" data-v="chat">
+  <aside class="pane p-list" aria-label="最近的報名表">
+    <header><h2>最近的報名表 <span class="count" id="sheet-n"></span></h2><span class="sp"></span>
+      <button class="tool" id="sheet-reload" type="button" title="重新讀取">重新整理</button></header>
+    <div class="search"><input id="sheet-q" type="search" placeholder="搜尋表單名稱" aria-label="搜尋表單名稱" autocomplete="off"></div>
+    <p id="sheet-msg">讀取「薪資 &amp; 人資」資料夾裡最近更新的表單回覆。</p>
+    <div id="sheets"></div>
+  </aside>
+
+  <section class="pane p-chat" aria-label="匯入小助手">
+    <header><h2>匯入小助手</h2><span class="sp"></span><button class="tool" id="reset" type="button">重新開始</button></header>
+    <div id="chat" aria-live="polite">
+      <div class="msg bot">告訴我要匯入什麼，我會整理到右邊的活動明細：
+・左邊點一份報名表，或貼上試算表連結：整理成工讀生名單、工作日期與每日薪資
+・直接描述新活動，例如「12/20–12/21 羅技快閃，信義區，PG 10:00–18:00 每天 4 人，時薪 200」：建立活動與班別
+・也可以貼上需求截圖
+
+表單裡的身分證、帳號、地址等個資不會傳給 AI，只在這個頁面裡整理；你在對話框打的文字和附的截圖會交給 Claude。</div>
+      <div class="sugg" id="sugg">
+        <button type="button" data-latest="1"><b>匯入最新的報名表</b><span>左邊清單最上面那一份</span></button>
+        <button type="button" data-t="新增活動：12/20–12/21 羅技快閃，台北信義區，PG 每天 10:00–18:00 需要 4 人，時薪 200，1/15 發薪"><b>建立新活動與班別</b><span>用一句話描述活動需求</span></button>
+      </div>
+    </div>
+    <div class="dock">
+      <div class="composer" id="composer">
+        <div class="files" id="staged" hidden></div>
+        <textarea id="box" rows="2" placeholder="輸入需求或貼上試算表連結…（Enter 送出，Shift+Enter 換行）" aria-label="訊息"></textarea>
+        <div class="bar">
+          <button class="icon" id="attach" type="button" title="加入截圖" aria-label="加入截圖"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg></button>
+          <span class="grow" id="bar-msg"></span>
+          <button class="icon" id="stop" type="button" title="停止" aria-label="停止" hidden><svg viewBox="0 0 16 16" fill="currentColor"><rect x="4.5" y="4.5" width="7" height="7" rx="1.2"/></svg></button>
+          <button class="icon go" id="send" type="button" title="送出" aria-label="送出"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></button>
+        </div>
+        <input id="file" type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif">
+      </div>
+    </div>
+  </section>
+
+  <section class="pane p-event" aria-label="活動明細">
+    <header><h2>活動明細</h2><span class="sp"></span><span class="count" id="src-name"></span></header>
+    <div class="body" id="detail">
+      <div class="blank" id="empty"><i>▤</i><b>還沒有活動資料</b><span>在中間跟小助手說要匯入哪份表單或建立什麼活動，整理好的活動、班別與人員名單會顯示在這裡。</span></div>
+      <div id="filled" hidden>
+        <div class="sec">
+          <h3>活動</h3>
+          <form class="ev" id="evform">
+            <label class="wide">活動名稱<input id="ev-name" autocomplete="off"></label>
+            <label>開始日<input id="ev-start" type="date"></label>
+            <label>結束日<input id="ev-end" type="date"></label>
+            <label>發薪日<input id="ev-pay" type="date"></label>
+            <label>地點<input id="ev-loc" autocomplete="off"></label>
+          </form>
+        </div>
+        <div class="sec" id="shift-sec" hidden>
+          <h3>班別 <span class="count" id="shift-n"></span></h3>
+          <div class="tbl"><table><thead><tr><th>日期</th><th>時間</th><th>職務</th><th class="r">人數</th><th class="r">時薪</th><th></th></tr></thead><tbody id="shift-rows"></tbody></table></div>
+        </div>
+        <div class="sec" id="people-sec" hidden>
+          <h3>人員</h3>
+          <div class="stats" id="stats"></div>
+          <div class="tbl"><table><thead><tr><th class="r">列</th><th>姓名</th><th>身分證</th><th>職務</th><th>工作日期</th><th class="r">應發</th><th class="r">勞保</th><th class="r">撥款</th><th>檢查</th><th></th></tr></thead><tbody id="people-rows"></tbody></table></div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">
+      <span class="grow" id="foot-msg">整理好後按「匯入到後台」，後台會自動檢查，確認後才寫入。</span>
+      <button class="ghost" id="copy" type="button" disabled>複製匯入碼</button>
+      <a class="primary" id="go" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true">匯入到後台 ↗</a>
+      <textarea id="code-box" rows="2" readonly hidden aria-label="匯入碼"></textarea>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const FOLDER = '18YMg_0INusMi4Jyo7n0nA3tbyHjTmfk5';
+const SHEETS = 'Google Sheets', DRIVE = 'Google Drive';
+const ST = { event: null, shifts: [], people: [], source: null, view: 'all', table: null };
+let mcp = null, sample = null, history = [], busy = null, staged = [];
+const allowed = new Set();   // AI 只能讀使用者自己貼上或點選的試算表
+
+/* ---------- 小工具 ---------- */
+const pad = n => String(n).padStart(2, '0');
+const iso = (y, m, d) => { const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d ? `${y}-${pad(m)}-${pad(d)}` : null; };
+const md = s => s ? Number(s.slice(5, 7)) + '/' + Number(s.slice(8, 10)) : '';
+const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
+function colIdx(c) { c = String(c || '').toUpperCase().replace(/[^A-Z]/g, ''); if (!c) return -1; let n = 0; for (const ch of c) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; }
+function colName(i) { let s = ''; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
+function validTwId(id) {
+  if (!/^[A-Z][1289]\d{8}$/.test(id)) return false;
+  const n = 'ABCDEFGHJKLMNPQRSTUVXYWZIO'.indexOf(id[0]) + 10;
+  let s = Math.floor(n / 10) + (n % 10) * 9;
+  for (let i = 1; i < 9; i++) s += Number(id[i]) * (9 - i);
+  return (s + Number(id[9])) % 10 === 0;
+}
+function sheetId(text) { const m = String(text || '').match(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,80})/) || String(text || '').match(/^([A-Za-z0-9_-]{30,80})$/); return m ? m[1] : null; }
+function driveId(v) { const m = String(v || '').match(/[?&]id=([A-Za-z0-9_-]{20,80})/) || String(v || '').match(/\/d\/([A-Za-z0-9_-]{20,80})/); return m ? m[1] : null; }
+function num(v) { const t = String(v == null ? '' : v).replace(/[,\s元$NT]/g, ''); if (!/^-?\d+(\.\d+)?$/.test(t)) return null; return Math.round(Number(t)); }
+// 遮蔽個資：只給 AI 看格式，不給真實內容
+// 給 AI 看的樣本只留「格式」：預設全部遮蔽，只放行不含個資的格式（月/日清單、填表時間、小金額、雲端連結標記）
+function mask(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  if (/drive\.google\.com|docs\.google\.com/.test(s)) return '(雲端檔案連結)';
+  if (/^\d{4}\/\d{1,2}\/\d{1,2}\s*(上午|下午)?\s*\d{1,2}:\d{2}(:\d{2})?$/.test(s)) return s;
+  if (s.length <= 40 && /^[\d\/,\s、\-~～:：()（）週一二三四五六日上下午]+$/.test(s) && /\d{1,2}\/\d{1,2}/.test(s) && !/\d{1,4}\/\d{1,2}\/\d{1,2}/.test(s) && !/\d{4}/.test(s)) return s;
+  if (/^\d{1,5}(\.\d+)?$/.test(s)) return s;
+  return s.slice(0, 24).replace(/[㐀-鿿]/g, '○').replace(/[A-Za-z]/g, 'x').replace(/\d/g, '#') + (s.length > 24 ? '…' : '');
+}
+function birth(v) {
+  const s = String(v == null ? '' : v).trim().replace(/\s/g, '');
+  let m;
+  if ((m = s.match(/^(\d{4})[\/.\-年](\d{1,2})[\/.\-月](\d{1,2})日?$/))) return iso(+m[1], +m[2], +m[3]);
+  if ((m = s.match(/^(?:民國)?(\d{2,3})[\/.\-年](\d{1,2})[\/.\-月](\d{1,2})日?$/))) return iso(+m[1] + 1911, +m[2], +m[3]);
+  if ((m = s.match(/^(\d{4})(\d{2})(\d{2})$/)) && +m[1] > 1930) return iso(+m[1], +m[2], +m[3]);
+  if ((m = s.match(/^(\d{2,3})(\d{2})(\d{2})$/))) return iso(+m[1] + 1911, +m[2], +m[3]);
+  return null;
+}
+// 工作日期文字：7/18, 7/19、7/18-7/20、7/18-20、2026/7/18；不合法或範圍超過 62 天記為 bad
+function workDates(text, year) {
+  const out = new Set(), s = String(text || '').replace(/[～~〜至到]/g, '-').replace(/[－–—]/g, '-');
+  const re = /(?<!\d)(?:(\d{4})\/)?(\d{1,2})\/(\d{1,2})(?:\s*-\s*(?:(\d{1,2})\/)?(\d{1,2})(?!\s*:))?/g; let m, bad = false, hit = false;
+  while ((m = re.exec(s))) {
+    hit = true;
+    const y = m[1] ? +m[1] : year, mo = +m[2], d1 = +m[3], start = iso(y, mo, d1);
+    if (!start) { bad = true; continue; }
+    if (m[5]) {
+      const mo2 = m[4] ? +m[4] : mo, end = iso(mo2 < mo ? y + 1 : y, mo2, +m[5]);
+      if (!end || end < start) { bad = true; continue; }
+      const span = [];
+      for (let t = new Date(start + 'T00:00:00Z'); t.toISOString().slice(0, 10) <= end && span.length <= 62; t = new Date(t.getTime() + 864e5)) span.push(t.toISOString().slice(0, 10));
+      if (span.length > 62) bad = true; else span.forEach(d => out.add(d));
+    } else out.add(start);
+  }
+  if (!hit && s.trim()) bad = true;
+  return { dates: [...out].sort(), bad };
+}
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ---------- 連接器 ---------- */
+function payloadOf(res) { const p = res && (res.payload !== undefined ? res.payload : res.structuredContent); return p && p.content && !Array.isArray(p.content) ? p.content : p; }
+async function call(server, tool, input) {
+  if (!mcp) throw new Error('這個畫面沒有連接 Google 雲端，請在 Claude 裡開啟並允許 Google Sheets／Google Drive。');
+  try { return payloadOf(await mcp.callTool(server, tool, input)); }
+  catch (e) {
+    const c = e && e.code;
+    if (c === 'not_granted' || c === 'server_not_connected') throw new Error(`需要允許 ${server}，請在頁面權限裡打開後再試。`);
+    throw new Error((e && e.message) || `${server} 讀取失敗`);
+  }
+}
+async function readSheet(id, range) { const p = await call(SHEETS, 'get_values', { spreadsheetId: id, range }); return (p && p.values) || []; }
+async function sheetMeta(id) {
+  const p = await call(SHEETS, 'get_spreadsheet', { spreadsheetId: id, fields: ['properties.title', 'sheets.properties.title', 'sheets.properties.gridProperties'] });
+  return { title: p && p.properties && p.properties.title || '', sheets: ((p && p.sheets) || []).map(s => ({ title: s.properties.title, rows: s.properties.gridProperties && s.properties.gridProperties.rowCount })) };
+}
+
+/* ---------- 左欄：最近的報名表 ---------- */
+let sheetList = [];
+async function loadSheets() {
+  $('sheet-msg').textContent = '讀取中…';
+  try {
+    const p = await call(DRIVE, 'search_files', { query: `'${FOLDER}' in ancestors and mimeType = 'application/vnd.google-apps.spreadsheet'`, orderBy: 'modifiedTime desc', pageSize: 40, excludeContentSnippets: true });
+    sheetList = ((p && p.files) || []).map(f => ({ id: f.id, title: f.title || f.name || '', modified: f.modifiedTime || '' }));
+    $('c-drive').className = 'chip ok'; $('c-drive').textContent = '雲端：已連線';
+    $('sheet-msg').textContent = sheetList.length ? '' : '資料夾裡沒有找到表單。';
+  } catch (e) { $('c-drive').className = 'chip bad'; $('c-drive').textContent = '雲端：未連線'; $('sheet-msg').textContent = e.message; sheetList = []; }
+  renderSheets();
+}
+function renderSheets() {
+  const q = $('sheet-q').value.trim();
+  const list = sheetList.filter(f => !q || f.title.includes(q));
+  $('sheet-n').textContent = sheetList.length ? list.length : '';
+  $('sheets').innerHTML = list.map(f => `<button type="button" class="sheet" data-id="${esc(f.id)}" aria-current="${ST.source && ST.source.file_id === f.id}"><b>${esc(f.title)}</b><span>${esc(f.modified.slice(0, 10))}</span></button>`).join('');
+  $('sheets').querySelectorAll('.sheet').forEach(b => b.onclick = () => {
+    const f = sheetList.find(x => x.id === b.dataset.id); if (!f || busy) return;
+    $('cols').dataset.v = 'chat'; setTab('chat');
+    send(`幫我匯入這份表單：「${f.title}」 https://docs.google.com/spreadsheets/d/${f.id}/edit`);
+  });
+}
+$('sheet-q').oninput = renderSheets;
+$('sheet-reload').onclick = loadSheets;
+
+/* ---------- 右欄：活動明細 ---------- */
+function peopleChecks(p) {
+  const errs = [], warns = [];
+  if (!validTwId(p.national_id)) errs.push('身分證字號不對');
+  if (!p.name || p.name.length < 2) errs.push('沒有姓名');
+  (p.bad || []).forEach(x => errs.push(x));
+  if (p.gross != null && p.gross + (p.allowances || 0) - (p.labor_ins || 0) < 0) errs.push('實發是負數');
+  if (ST.event && p.work_dates.some(d => (ST.event.start_date && d < ST.event.start_date) || (ST.event.end_date && d > ST.event.end_date))) errs.push('日期不在活動期間');
+  if (!p.birth_date) warns.push('生日無法判讀');
+  if (!p.work_dates.length) warns.push('沒有工作日期');
+  if (!p.bank_account) warns.push('沒有帳號');
+  if (p.bank_account_name && p.bank_account_name !== p.name) warns.push('戶名不是本人');
+  if (p.gross != null && p.net != null && p.net !== p.gross + (p.allowances || 0) - (p.labor_ins || 0)) warns.push('撥款與計算不符');
+  if (p.dup) warns.push('重複填寫，取最後一筆');
+  if (p.gross == null && p.net != null) warns.push('只有撥款、沒有應發，不建薪資單');
+  if (p.net != null && p.net < 0) errs.push('實發是負數');
+  if (p.work_dates.length > 62) errs.push('工作日期超過 62 天');
+  return { errs, warns };
+}
+function render() {
+  const has = ST.event || ST.shifts.length || ST.people.length;
+  $('empty').hidden = !!has; $('filled').hidden = !has;
+  $('src-name').textContent = ST.source ? ST.source.title : '';
+  const e = ST.event || {};
+  for (const [id, k] of [['ev-name', 'name'], ['ev-start', 'start_date'], ['ev-end', 'end_date'], ['ev-pay', 'pay_date'], ['ev-loc', 'location']]) if (document.activeElement !== $(id)) $(id).value = e[k] || '';
+  $('shift-sec').hidden = !ST.shifts.length; $('shift-n').textContent = ST.shifts.length ? ST.shifts.length + ' 個' : '';
+  $('shift-rows').innerHTML = ST.shifts.map((s, i) => `<tr><td class="n">${esc(s.work_date)}</td><td class="n">${esc(s.start_time)}–${esc(s.end_time)}</td><td>${esc(s.role || '—')}</td><td class="r">${esc(s.headcount)}</td><td class="r">${s.rate ? esc(s.rate) : '—'}</td><td><button class="x" type="button" data-rs="${i}" aria-label="移除這個班別">×</button></td></tr>`).join('');
+  $('people-sec').hidden = !ST.people.length;
+  const rows = ST.people.map(p => ({ p, c: peopleChecks(p) }));
+  const cnt = { all: rows.length, ok: rows.filter(r => !r.c.errs.length && !r.c.warns.length).length, warn: rows.filter(r => !r.c.errs.length && r.c.warns.length).length, bad: rows.filter(r => r.c.errs.length).length };
+  $('stats').innerHTML = [['all', '全部'], ['ok', '完整'], ['warn', '要留意'], ['bad', '有錯']].map(([k, t]) => `<button type="button" class="stat" data-v="${k}" aria-pressed="${ST.view === k}"><span>${t}</span><b style="${k === 'bad' && cnt.bad ? 'color:var(--bad)' : ''}">${cnt[k]}</b></button>`).join('');
+  const shown = rows.filter(r => ST.view === 'all' || (ST.view === 'ok' && !r.c.errs.length && !r.c.warns.length) || (ST.view === 'warn' && !r.c.errs.length && r.c.warns.length) || (ST.view === 'bad' && r.c.errs.length));
+  $('people-rows').innerHTML = shown.map(({ p, c }) => `<tr><td class="r">${esc(p.row)}</td><td>${esc(p.name)}</td><td class="n">${esc(p.national_id ? p.national_id.slice(0, 3) + '•••••' + p.national_id.slice(-2) : '—')}</td><td>${esc(p.role || '—')}</td>
+    <td class="n">${esc(p.work_dates.map(md).join('、') || '—')}</td><td class="r">${money(p.gross)}</td><td class="r">${p.labor_ins ? money(p.labor_ins) : '—'}</td><td class="r">${money(p.gross == null ? p.net : p.gross + (p.allowances || 0) - (p.labor_ins || 0))}</td>
+    <td>${c.errs.map(x => `<span class="badge bad">${esc(x)}</span>`).join('')}${c.warns.map(x => `<span class="badge warn">${esc(x)}</span>`).join('')}${!c.errs.length && !c.warns.length ? '<span class="badge ok">完整</span>' : ''}</td>
+    <td><button class="x" type="button" data-rp="${esc(p.row)}" aria-label="移除 ${esc(p.name)}">×</button></td></tr>`).join('') || `<tr><td colspan="10" style="color:var(--muted);text-align:center;padding:16px">沒有符合的人。</td></tr>`;
+  $('stats').querySelectorAll('.stat').forEach(b => b.onclick = () => { ST.view = b.dataset.v; render(); });
+  $('shift-rows').querySelectorAll('[data-rs]').forEach(b => b.onclick = () => { ST.shifts.splice(+b.dataset.rs, 1); invalidate(); render(); });
+  $('people-rows').querySelectorAll('[data-rp]').forEach(b => b.onclick = () => { ST.people = ST.people.filter(p => String(p.row) !== b.dataset.rp); invalidate(); render(); });
+  const ready = (ST.event && ST.event.name && ST.event.start_date) && (ST.people.length || ST.shifts.length || true);
+  $('copy').disabled = !ready;
+  updateGo(ready);
+  $('foot-msg').textContent = !ST.event || !ST.event.name ? '還缺活動名稱與日期。' : !ST.event.start_date ? '還缺活動開始日。'
+    : `${ST.people.length ? ST.people.length + ' 人' : ''}${ST.people.length && ST.shifts.length ? '、' : ''}${ST.shifts.length ? ST.shifts.length + ' 個班別' : ''}${cnt.bad ? '（' + cnt.bad + ' 人有錯，後台會略過）' : ''}。按「匯入到後台」確認。`;
+  if (window.innerWidth <= 980 && has) document.querySelector('.mtabs [data-mv="event"]').textContent = '活動明細 •';
+}
+function invalidate() { $('code-box').hidden = true; $('code-box').value = ''; }
+[['ev-name', 'name'], ['ev-start', 'start_date'], ['ev-end', 'end_date'], ['ev-pay', 'pay_date'], ['ev-loc', 'location']].forEach(([id, k]) => {
+  $(id).addEventListener('input', () => { ST.event = ST.event || {}; ST.event[k] = $(id).value.trim(); invalidate(); render(); });
+});
+$('evform').addEventListener('submit', ev => ev.preventDefault());
+
+/* ---------- 匯入碼 ---------- */
+async function makeCode() {
+  const payload = { v: 1, source: ST.source ? { file_id: ST.source.file_id, title: ST.source.title } : {},
+    event: { name: ST.event.name, start_date: ST.event.start_date, end_date: ST.event.end_date || ST.event.start_date, pay_date: ST.event.pay_date || null, location: ST.event.location || null, description: ST.event.description || null },
+    shifts: ST.shifts, people: ST.people.filter(p => !(p.bad || []).length).map(p => { const o = Object.assign({}, p); delete o.dup; delete o.bad; return o; }) };
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const z = new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer());
+  let b = ''; for (let i = 0; i < z.length; i += 0x8000) b += String.fromCharCode.apply(null, z.subarray(i, i + 0x8000));
+  return 'WKS1.' + btoa(b).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+// 「匯入到後台」：資料放在網址 # 後面（不會送到任何伺服器），後台讀到後立刻從網址拿掉
+const ADMIN = 'https://w63068925-sudo.github.io/works-payroll/admin.html';
+let goSeq = 0;
+async function updateGo(ready) {
+  const a = $('go'), seq = ++goSeq;
+  a.setAttribute('aria-disabled', 'true'); a.href = '#';
+  if (!ready) return;
+  const code = await makeCode();
+  if (seq !== goSeq) return;
+  if (code.length > 60000) { a.title = '資料太多，請改用「複製匯入碼」'; $('foot-msg').textContent = '名單較大，請改按「複製匯入碼」到後台貼上。'; return; }
+  a.href = ADMIN + '#/import/' + code; a.title = ''; a.setAttribute('aria-disabled', 'false');
+}
+$('copy').onclick = async () => {
+  const code = await makeCode(); const box = $('code-box');
+  if (code.length > 300000) { $('foot-msg').textContent = '資料太多，後台收不下。請把名單分成兩份（例如分兩次讀表）再匯入。'; return; }
+  box.value = code; box.hidden = false;
+  try { await navigator.clipboard.writeText(code); $('foot-msg').textContent = '已複製（含個資，請勿轉傳）。到後台「AI 匯入」貼上，按「檢查」確認後再匯入。'; }
+  catch (e) { box.focus(); box.select(); $('foot-msg').textContent = '無法自動複製，匯入碼已選取，請按 ⌘C／Ctrl+C 複製。'; }
+};
+
+/* ---------- AI 工具 ---------- */
+const TOOLS = [
+  { name: 'read_sheet', description: '讀一份 Google 試算表的分頁、第 1 列標題與前 4 列樣本（個資已遮蔽）。回傳 file_id、title、sheets、headers（欄位字母與標題）、samples、row_count。匯入報名表前一定先呼叫。',
+    inputSchema: { type: 'object', properties: { url: { type: 'string', description: '試算表連結或 ID' }, sheet: { type: 'string', description: '分頁名稱，不填用第一個' }, header_row: { type: 'integer', description: '標題列，預設 1' } }, required: ['url'] },
+    async execute(i) {
+      const id = sheetId(i.url); if (!id) throw new Error('看不懂這個試算表連結');
+      if (!allowed.has(id)) throw new Error('只能讀使用者在對話裡貼上或從左邊點選的試算表');
+      setStatus('讀取試算表…');
+      const meta = await sheetMeta(id); const sh = String(i.sheet || (meta.sheets[0] && meta.sheets[0].title) || '');
+      const hr = Math.min(10, Math.max(1, Number(i.header_row) || 1));
+      const vals = await readSheet(id, `'${sh.replace(/'/g, "''")}'!A1:CZ3000`);
+      if (vals.length >= 3000) throw new Error('這個分頁超過 3000 列，請先拆成較小的表');
+      const head = vals[hr - 1] || [];
+      // 標題列只能是標題：看起來像資料（身分證、長串數字）就拒絕，避免把個資當標題送出
+      if (head.some(c => /[A-Za-z][1289]\d{8}/.test(String(c)) || /\d{7,}/.test(String(c).replace(/[\s-]/g, '')) && !/EX|例|範例/i.test(String(c)))) throw new Error('第 ' + hr + ' 列看起來是資料不是標題，請換一列');
+      // 換了另一份表：清掉上一份的活動、班別與名單，避免混用
+      if (ST.source && ST.source.file_id !== id || ST.table && ST.table.id !== id) { ST.event = null; ST.shifts = []; ST.people = []; ST.source = null; ST.view = 'all'; render(); }
+      ST.table = { id, title: meta.title, sheet: sh, vals };
+      const body = vals.slice(hr).filter(r => r.some(c => String(c).trim()));
+      return { file_id: id, title: meta.title, sheets: meta.sheets.map(s => s.title), sheet: sh,
+        headers: head.map((h, c) => ({ col: colName(c), header: String(h).slice(0, 80) })).filter(h => h.header),
+        samples: body.slice(0, 4).map(r => Object.fromEntries(head.map((h, c) => [colName(c), mask(r[c])]).filter(([, v]) => v))), row_count: body.length };
+    } },
+  { name: 'apply_mapping', description: '把 read_sheet 讀到的表依欄位對應整理成人員名單，結果顯示在右邊。columns 的值是欄位字母。day_columns 是「7/18薪」這類每日薪資欄（要給完整日期）。year 是工作日期的西元年。回傳人數、日期範圍、金額合計與有問題的列號（不含個資）。',
+    inputSchema: { type: 'object', properties: {
+      header_row: { type: 'integer' }, year: { type: 'integer', description: '工作日期所在的西元年' },
+      columns: { type: 'object', description: '欄位字母。可用鍵：name, nickname, phone, address, birth, national_id, role, work_dates, bank_code, bank_branch, bank_account_name, bank_account, id_front, id_back, bankbook, labor_ins, allowances, gross, net', additionalProperties: { type: 'string' } },
+      day_columns: { type: 'array', items: { type: 'object', properties: { col: { type: 'string' }, date: { type: 'string', description: 'YYYY-MM-DD' }, label: { type: 'string', description: '例如「進場」，一般日薪可不填' } }, required: ['col', 'date'] } }
+    }, required: ['columns', 'year'] },
+    async execute(i) {
+      if (!ST.table) throw new Error('請先呼叫 read_sheet');
+      const C = i.columns || {}, hr = Math.max(1, Number(i.header_row) || 1), year = Number(i.year);
+      if (!(year > 2000 && year < 2100)) throw new Error('year 不對');
+      const used = [...Object.values(C).map(colIdx), ...(i.day_columns || []).map(d => colIdx(d.col))].filter(c => c >= 0);
+      if (new Set(used).size !== used.length) throw new Error('同一欄被對應到兩個欄位，請重新對應');
+      const get = (r, k) => { const c = colIdx(C[k]); return c >= 0 ? String(r[c] == null ? '' : r[c]).trim() : ''; };
+      const days = (i.day_columns || []).map(d => ({ c: colIdx(d.col), date: /^\d{4}-\d{2}-\d{2}$/.test(String(d.date)) ? String(d.date) : null, label: String(d.label || '').slice(0, 30) })).filter(d => d.c >= 0 && d.date);
+      const byId = new Map(); let blank = 0;
+      ST.table.vals.slice(hr).forEach((r, k) => {
+        const row = hr + k + 1, name = get(r, 'name'), nid = get(r, 'national_id').toUpperCase().replace(/\s/g, '');
+        if (!name && !nid) { blank++; return; }
+        const bad = [];
+        // 空白＝沒有；有填但看不懂＝錯誤（不當成 0）
+        const amt = (raw, label) => { const t = String(raw == null ? '' : raw).trim(); if (!t) return null; const n = num(t); if (n == null || n < 0) { bad.push(label + '金額看不懂'); return null; } return n; };
+        const dd = days.map(d => ({ date: d.date, amount: amt(r[d.c], d.date.slice(5).replace('-', '/') + ' '), label: d.label ? `${get(r, 'role') || ''} ${d.label}`.trim() : '' })).filter(d => d.amount);
+        const wdp = workDates(get(r, 'work_dates'), year);
+        const wd = new Set([...wdp.dates, ...dd.map(d => d.date)]);
+        if (wdp.bad && !dd.length) bad.push('工作日期看不懂');
+        const gross = dd.length ? dd.reduce((a, d) => a + d.amount, 0) : amt(get(r, 'gross'), '應發');
+        const p = { row, name, national_id: nid, nickname: get(r, 'nickname') || undefined, phone: get(r, 'phone') || undefined, address: get(r, 'address') || undefined,
+          birth_raw: get(r, 'birth') || undefined, birth_date: birth(get(r, 'birth')), role: get(r, 'role') || undefined,
+          scheduled_text: get(r, 'work_dates') || undefined, work_dates: [...wd].sort(), days: dd, gross,
+          labor_ins: amt(get(r, 'labor_ins'), '勞保') || 0, allowances: amt(get(r, 'allowances'), '津貼') || 0, net: amt(get(r, 'net'), '撥款'), bad,
+          bank_code: get(r, 'bank_code') || undefined, bank_branch: get(r, 'bank_branch') || undefined, bank_account_name: get(r, 'bank_account_name') || undefined,
+          bank_account: get(r, 'bank_account').replace(/\D/g, '') || undefined,
+          docs: Object.fromEntries(['id_front', 'id_back', 'bankbook'].map(k => [k, driveId(get(r, k))]).filter(([, v]) => v)) };
+        const key = nid || 'row' + row;
+        if (byId.has(key)) p.dup = true;
+        byId.set(key, p);
+      });
+      ST.people = [...byId.values()].sort((a, b) => a.row - b.row);
+      ST.source = { file_id: ST.table.id, title: ST.table.title };
+      const all = ST.people.flatMap(p => p.work_dates).sort();
+      ST.event = ST.event || {};
+      if (!ST.event.name) ST.event.name = ST.table.title.replace(/\s*\(回覆\)|\s*的副本/g, '').trim();
+      if (all.length) { if (!ST.event.start_date) ST.event.start_date = all[0]; if (!ST.event.end_date) ST.event.end_date = all[all.length - 1]; }
+      ST.view = 'all'; invalidate(); render(); renderSheets();
+      const probs = ST.people.map(p => ({ row: p.row, ...peopleChecks(p) })).filter(x => x.errs.length || x.warns.length).slice(0, 40).map(x => ({ row: x.row, issues: [...x.errs, ...x.warns] }));
+      return { people: ST.people.length, blank_rows_skipped: blank, date_range: all.length ? [all[0], all[all.length - 1]] : null,
+        with_daily_pay: ST.people.filter(p => p.days.length).length, gross_total: ST.people.reduce((a, p) => a + (p.gross || 0), 0),
+        labor_ins_total: ST.people.reduce((a, p) => a + (p.labor_ins || 0), 0), event: ST.event, problems: probs };
+    } },
+  { name: 'set_event', description: '設定或修改右邊的活動資料（只改有給的欄位）。日期用 YYYY-MM-DD。回傳目前的活動資料。',
+    inputSchema: { type: 'object', properties: { name: { type: 'string' }, start_date: { type: 'string' }, end_date: { type: 'string' }, pay_date: { type: 'string' }, location: { type: 'string' }, description: { type: 'string' } } },
+    execute(i) {
+      ST.event = ST.event || {};
+      for (const k of ['name', 'start_date', 'end_date', 'pay_date', 'location', 'description']) if (i[k] != null && i[k] !== '') {
+        const v = String(i[k]).trim(); if (/_date$/.test(k) && !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error(k + ' 要用 YYYY-MM-DD'); ST.event[k] = v.slice(0, k === 'description' ? 2000 : 200);
+      }
+      invalidate(); render(); return ST.event;
+    } },
+  { name: 'set_shifts', description: '用整份清單取代右邊的班別（招募用）。每個班別：work_date YYYY-MM-DD、start_time HH:MM、end_time HH:MM、role、headcount、rate（時薪，可不填）。回傳班別數。',
+    inputSchema: { type: 'object', properties: { shifts: { type: 'array', items: { type: 'object', properties: { work_date: { type: 'string' }, start_time: { type: 'string' }, end_time: { type: 'string' }, role: { type: 'string' }, headcount: { type: 'integer' }, rate: { type: 'number' } }, required: ['work_date', 'start_time', 'end_time', 'headcount'] } } }, required: ['shifts'] },
+    execute(i) {
+      const out = [];
+      for (const s of i.shifts || []) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.work_date)) || !/^\d{1,2}:\d{2}$/.test(String(s.start_time)) || !/^\d{1,2}:\d{2}$/.test(String(s.end_time))) throw new Error('班別日期或時間格式不對');
+        out.push({ work_date: String(s.work_date), start_time: String(s.start_time).padStart(5, '0'), end_time: String(s.end_time).padStart(5, '0'), role: String(s.role || '').slice(0, 40), headcount: (() => { const h = Number(s.headcount); if (!Number.isInteger(h) || h < 1 || h > 500) throw new Error('班別人數缺少或不對，請先問使用者'); return h; })(), rate: s.rate ? Number(s.rate) : null });
+      }
+      if (out.length > 200) throw new Error('班別超過 200 個，請分批');
+      ST.shifts = out; invalidate(); render(); return { shifts: ST.shifts.length };
+    } },
+  { name: 'get_state', description: '讀右邊目前的活動、班別數與人員檢查統計（不含個資）。', execute() {
+      const c = ST.people.map(peopleChecks);
+      return { event: ST.event, shifts: ST.shifts, people: ST.people.length, with_errors: c.filter(x => x.errs.length).length, with_warnings: c.filter(x => !x.errs.length && x.warns.length).length };
+    } }
+];
+const RULES = `你是「沃克思」薪資系統的活動匯入助手，用繁體中文、簡短直接地回答。
+工作：把使用者的工讀生報名表（Google 表單回覆試算表）或活動需求，整理成右邊的「活動明細」，讓使用者複製匯入碼到後台。
+做法：
+1. 使用者給試算表連結或從左邊點表單：先呼叫 read_sheet，看標題與樣本判斷每個欄位的意思，再呼叫 apply_mapping。
+   - 常見欄位：全名→name、LINE暱稱→nickname、電話→phone、戶籍地址→address、生日(民國)→birth、身分證字號→national_id、崗位/職務→role、工作日期/時段→work_dates、銀行代碼→bank_code、分行→bank_branch、戶名→bank_account_name、帳號→bank_account、存摺封面→bankbook、身分證正面→id_front、身分證反面→id_back、勞保→labor_ins、撥款/實發→net、薪資總額→gross、車資/餐費→allowances。
+   - 「7/18薪」「進場薪」這類每日薪資欄放 day_columns，給完整日期；「進場薪」若看不出日期就問使用者是哪一天。「清冊金額」不是撥款。
+   - 年份：依表名、填表時間戳記判斷；不確定就問。
+   - 「8/25撥款」這種欄位名稱代表發薪日 8/25：用 set_event 設 pay_date。
+2. 使用者描述新活動或貼截圖：用 set_event 設活動，用 set_shifts 設班別。缺日期、時間、人數時先問，一次只問一件事。
+3. 完成後用兩三句話說明整理結果與要留意的列號，提醒按右下「匯入到後台」，在後台確認後才會寫入。
+規則：個資（身分證、帳號、地址、電話）不會給你看，不要要求使用者提供，也不要猜。不要編造資料。不能直接寫入系統，寫入一律在後台確認。`;
+
+/* ---------- 對話 ---------- */
+function bubble(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; $('chat').appendChild(d); $('chat').scrollTop = $('chat').scrollHeight; return d; }
+function setStatus(t) { $('bar-msg').textContent = t || ''; }
+function setBusy(on) { $('send').hidden = on; $('stop').hidden = !on; $('c-ai').className = 'chip ' + (on ? 'busy' : 'ok'); $('c-ai').textContent = on ? '助理：處理中' : '助理：待命'; if (!on) setStatus(''); }
+async function send(text) {
+  text = String(text || '').trim();
+  if ((!text && !staged.length) || busy) return;
+  if (!sample) { bubble('err', '這個畫面無法使用 Claude。請在 claude.ai 開啟本頁並允許使用 Claude。'); return; }
+  $('sugg') && $('sugg').remove();
+  const imgs = staged.map(s => s.file); staged = []; renderStaged();
+  bubble('user', text + (imgs.length ? `\n（附 ${imgs.length} 張圖）` : ''));
+  for (const m of text.matchAll(/\/spreadsheets\/d\/([A-Za-z0-9_-]{20,80})/g)) allowed.add(m[1]);
+  const state = { event: ST.event, shifts: ST.shifts.length, people: ST.people.length };
+  history.push({ role: 'user', content: text || '請看附圖' });
+  const msgs = history.map((m, i) => i === 0 ? { role: 'user', content: RULES + '\n\n使用者：' + m.content } : m);
+  msgs[msgs.length - 1] = { role: 'user', content: msgs[msgs.length - 1].content + `\n\n（目前右邊：${JSON.stringify(state)}；今天 ${new Date().toISOString().slice(0, 10)}）` };
+  const b = bubble('bot thinking', '思考中…'); busy = new AbortController(); setBusy(true);
+  try {
+    const opts = { tools: TOOLS, signal: busy.signal, cache: false, onText: ({ text }) => { b.classList.remove('thinking'); b.textContent = text; $('chat').scrollTop = $('chat').scrollHeight; } };
+    if (imgs.length) opts.images = imgs;
+    const r = await sample(msgs, opts);
+    b.classList.remove('thinking'); b.textContent = r.text || '（沒有回覆）';
+    history.push({ role: 'assistant', content: r.text || '好。' });
+  } catch (e) {
+    b.remove(); history.pop();
+    const c = e && e.code;
+    bubble('err', c === 'rate_limited' ? '用量暫時到上限，請稍後再試。' : c === 'not_granted' ? '需要允許這個頁面使用 Claude。' : c === 'aborted' || (e && e.name === 'AbortError') ? '已停止。' : '處理失敗：' + ((e && e.message) || '請再試一次'));
+  } finally { busy = null; setBusy(false); }
+}
+$('send').onclick = () => { const t = $('box').value; $('box').value = ''; send(t); };
+$('stop').onclick = () => busy && busy.abort();
+$('box').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('send').click(); } });
+$('box').addEventListener('input', () => { $('box').style.height = 'auto'; $('box').style.height = Math.min(180, $('box').scrollHeight) + 'px'; });
+$('chat').addEventListener('click', e => {
+  const b = e.target.closest('.sugg button'); if (!b) return;
+  if (b.dataset.latest) { const f = sheetList[0]; if (!f) { bubble('note', '左邊還沒有讀到報名表，可以直接貼試算表連結。'); return; } return send(`幫我匯入這份表單：「${f.title}」 https://docs.google.com/spreadsheets/d/${f.id}/edit`); }
+  send(b.dataset.t);
+});
+$('reset').onclick = () => { if (busy) return; history = []; Object.assign(ST, { event: null, shifts: [], people: [], source: null, view: 'all', table: null }); $('chat').querySelectorAll('.msg:not(:first-child)').forEach(n => n.remove()); invalidate(); render(); renderSheets(); };
+
+/* 截圖 */
+function renderStaged() {
+  $('staged').hidden = !staged.length;
+  $('staged').innerHTML = staged.map((s, i) => `<span class="file"><img src="${s.url}" alt=""><span>${esc(s.file.name || '截圖')}</span><button type="button" data-i="${i}" aria-label="移除">×</button></span>`).join('');
+  $('staged').querySelectorAll('button').forEach(b => b.onclick = () => { URL.revokeObjectURL(staged[+b.dataset.i].url); staged.splice(+b.dataset.i, 1); renderStaged(); });
+}
+function stage(files) { for (const f of files) if (/^image\//.test(f.type) && staged.length < 5) staged.push({ file: f, url: URL.createObjectURL(f) }); renderStaged(); }
+$('attach').onclick = () => $('file').click();
+$('file').onchange = () => { stage($('file').files); $('file').value = ''; };
+$('box').addEventListener('paste', e => { const f = [...(e.clipboardData && e.clipboardData.files || [])]; if (f.length) { e.preventDefault(); stage(f); } });
+const comp = $('composer');
+comp.addEventListener('dragover', e => { e.preventDefault(); comp.classList.add('drop'); });
+comp.addEventListener('dragleave', () => comp.classList.remove('drop'));
+comp.addEventListener('drop', e => { e.preventDefault(); comp.classList.remove('drop'); stage(e.dataTransfer.files); });
+
+/* 手機分頁 */
+function setTab(v) { $('cols').dataset.v = v; document.querySelectorAll('.mtabs button').forEach(b => b.setAttribute('aria-current', String(b.dataset.mv === v))); }
+document.querySelectorAll('.mtabs button').forEach(b => b.onclick = () => setTab(b.dataset.mv));
+
+/* 啟動 */
+render();
+(async () => {
+  if (!window.claude || !window.claude.use) { $('c-ai').className = 'chip bad'; $('c-ai').textContent = '助理：無法使用'; $('sheet-msg').textContent = '請在 claude.ai 開啟這個頁面。'; return; }
+  const [m, s] = await Promise.all([window.claude.use('mcp'), window.claude.use('sample')]);
+  mcp = m; sample = s;
+  $('c-ai').className = 'chip ' + (sample ? 'ok' : 'bad'); $('c-ai').textContent = sample ? '助理：待命' : '助理：無法使用';
+  if (sample && sample.limits) { try { const l = await sample.limits(); if (!l.images) $('attach').hidden = true; } catch (e) {} }
+  if (mcp) loadSheets(); else { $('c-drive').className = 'chip bad'; $('c-drive').textContent = '雲端：無法使用'; $('sheet-msg').textContent = '這個畫面沒有連接 Google 雲端，可以直接在對話框貼試算表連結以外的活動需求。'; }
+})();
+})();
+</script>

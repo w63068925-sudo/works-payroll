@@ -290,5 +290,58 @@ begin
   if not exists (select 1 from jsonb_array_elements(r->'rows') x where (x->>'person_id')::uuid = p1) then fails := fails || ' [25c accepted person missing]'; end if;
   if not exists (select 1 from public.audit_log where actor = 'regression-admin' and action = 'export_event_people' and row_id = ev and detail->'people' @> to_jsonb(array[p1::text])) then fails := fails || ' [25d export not audited]'; end if;
 
-  if fails = '' then raise exception 'PASS 全部 25 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 26. AI 匯入：要登入、預覽不寫入、寫入建活動／人員／出勤／薪資草稿、錯的列略過、同一份表不能重複匯入、既有人只補空白
+  select x into txt from (select 'Y1' || lpad((floor(random() * 10000000))::int::text, 7, '0') b) q,
+    lateral (select q.b || d::text x from generate_series(0, 9) d where public.valid_tw_id(q.b || d::text)) z limit 1;
+  base := jsonb_build_object('v', 1, 'source', jsonb_build_object('file_id', 'regressionAiImportFile000001'),
+    'event', jsonb_build_object('name', '回歸 AI 匯入', 'start_date', v_today + 30, 'end_date', v_today + 31, 'pay_date', v_today + 60),
+    'shifts', jsonb_build_array(jsonb_build_object('work_date', v_today + 30, 'start_time', '10:00', 'end_time', '18:00', 'role', 'PG', 'headcount', 2, 'rate', 200)),
+    'people', jsonb_build_array(
+      jsonb_build_object('row', 2, 'national_id', txt, 'name', '匯入丙', 'birth_date', '2000-02-03', 'bank_code', '822 中信', 'bank_account', '1234-5678-9012', 'bank_account_name', '匯入丙',
+        'role', 'PG', 'days', jsonb_build_array(jsonb_build_object('date', v_today + 30, 'amount', 1800), jsonb_build_object('date', v_today + 31, 'amount', 1800)), 'labor_ins', 20, 'net', 3580,
+        'docs', jsonb_build_object('bankbook', 'regressionDriveDocument00001')),
+      jsonb_build_object('row', 3, 'national_id', 'A12345', 'name', '壞資料')));
+  if public.admin_ai_import('bad-token', base)->>'error' is distinct from 'session' then fails := fails || ' [26a no session]'; end if;
+  r := public.admin_ai_import(atok, base);
+  if not (r->>'preview')::boolean or r#>>'{people,0,status}' <> 'new' or r#>>'{people,1,status}' <> 'error'
+     or exists (select 1 from public.people where national_id = txt) then fails := fails || ' [26b preview wrong or wrote]'; end if;
+  r := public.admin_ai_import(atok, base, null, true);
+  if (r->>'new_people')::int <> 1 or (r->>'payslips')::int <> 1 or (r->>'skipped')::int <> 1 or (r->>'shifts')::int <> 1 or (r->>'attendance')::int <> 2 then fails := fails || ' [26c commit counts ' || r::text || ']'; end if;
+  nid := (r->>'event')::uuid;
+  if not exists (select 1 from public.payslips where event_id = nid and gross = 3600 and deductions = 20 and net = 3580 and basis = 'daily_total' and status = 'draft' and not generated and pay_account = '123456789012' and pay_bank_code = '822')
+    then fails := fails || ' [26d payslip wrong]'; end if;
+  if (select count(*) from public.payslip_items i join public.payslips p on p.id = i.payslip_id where p.event_id = nid and i.code = 'daily_wage') <> 2 then fails := fails || ' [26e day items]'; end if;
+  if not exists (select 1 from public.people_documents d join public.people p on p.id = d.person_id where p.national_id = txt and d.kind = 'bankbook' and d.drive_file_id = 'regressionDriveDocument00001')
+    then fails := fails || ' [26f doc link]'; end if;
+  if (select recruiting from public.events where id = nid) then fails := fails || ' [26g roster import opened recruiting]'; end if;
+  if not exists (select 1 from public.audit_log where actor = 'regression-admin' and action = 'ai_import' and row_id = nid) then fails := fails || ' [26h not audited]'; end if;
+  if public.admin_ai_import(atok, base, null, true)->>'error' is distinct from 'duplicate_source' then fails := fails || ' [26i duplicate import]'; end if;
+  -- 加到既有活動：既有人只補空白、不重複建薪資單、不改姓名
+  r := public.admin_ai_import(atok, jsonb_build_object('v', 1, 'people', jsonb_build_array(jsonb_build_object('national_id', txt, 'name', '匯入丙改', 'phone', '0912345678',
+    'bank_account', '999', 'days', jsonb_build_array(jsonb_build_object('date', v_today + 30, 'amount', 1)) ))), nid, true);
+  if (r->>'new_people')::int <> 0 or (r->>'payslips')::int <> 0 or (r->>'filled')::int <> 1 then fails := fails || ' [26j existing event counts ' || r::text || ']'; end if;
+  if not exists (select 1 from public.people where national_id = txt and name = '匯入丙' and phone = '0912345678' and bank_account = '123456789012') then fails := fails || ' [26k overwrote person]'; end if;
+  if not exists (select 1 from public.data_issues where event_id = nid and code = 'name_mismatch') then fails := fails || ' [26l name mismatch issue]'; end if;
+  if (select count(*) from public.payslips where event_id = nid) <> 1 then fails := fails || ' [26m second payslip]'; end if;
+  -- 只有活動與班別（沒有人員）：開放報名
+  r := public.admin_ai_import(atok, jsonb_build_object('v', 1, 'event', jsonb_build_object('name', '回歸 AI 新活動', 'start_date', v_today + 40),
+    'shifts', jsonb_build_array(jsonb_build_object('work_date', v_today + 40, 'start_time', '09:00', 'end_time', '17:00', 'headcount', 3),
+                                jsonb_build_object('work_date', v_today + 50, 'start_time', '09:00', 'end_time', '17:00', 'headcount', 3))), null, true);
+  if (r->>'shifts')::int <> 1 or not (select recruiting from public.events where id = (r->>'event')::uuid) then fails := fails || ' [26n event-only import ' || r::text || ']'; end if;
+
+  -- 審查補強：型別錯誤、負實發、重複班別、全部人員有錯但班別可匯入
+  if public.admin_ai_import(atok, '{"v":1,"people":{}}'::jsonb)->>'error' is distinct from 'bad_payload' then fails := fails || ' [26o bad payload type]'; end if;
+  r := public.admin_ai_import(atok, jsonb_build_object('v', 1, 'people', jsonb_build_array(jsonb_build_object('national_id', txt, 'name', '匯入丙', 'labor_ins', 20,
+    'days', jsonb_build_array(jsonb_build_object('date', v_today + 30, 'amount', 10))))), nid);
+  if r#>>'{people,0,status}' <> 'error' then fails := fails || ' [26p negative net allowed]'; end if;
+  r := public.admin_ai_import(atok, jsonb_build_object('v', 1, 'people', jsonb_build_array(jsonb_build_object('national_id', txt, 'name', '匯入丙', 'gross', 100, 'net', -1))), nid);
+  if r#>>'{people,0,status}' <> 'error' then fails := fails || ' [26p2 negative sheet net allowed]'; end if;
+  r := public.admin_ai_import(atok, jsonb_build_object('v', 1, 'shifts', base->'shifts'), nid, true);
+  if (r->>'shifts')::int <> 0 then fails := fails || ' [26q duplicate shift added]'; end if;
+  r := public.admin_ai_import(atok, jsonb_build_object('v', 1, 'event', jsonb_build_object('name', '回歸 AI 只有班別', 'start_date', v_today + 45),
+    'shifts', jsonb_build_array(jsonb_build_object('work_date', v_today + 45, 'start_time', '09:00', 'end_time', '17:00', 'headcount', 1)),
+    'people', jsonb_build_array(jsonb_build_object('national_id', 'bad', 'name', 'x'))), null, true);
+  if not coalesce((r->>'ok')::boolean, false) or (r->>'shifts')::int <> 1 then fails := fails || ' [26r shifts dropped when all people invalid ' || r::text || ']'; end if;
+
+  if fails = '' then raise exception 'PASS 全部 26 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

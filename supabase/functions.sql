@@ -2623,3 +2623,211 @@ end $function$
 ;
 revoke all on function public.admin_event_people_export(text, uuid) from public;
 grant execute on function public.admin_event_people_export(text, uuid) to anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_ai_import(p_token text, p_payload jsonb, p_event uuid DEFAULT NULL::uuid, p_commit boolean DEFAULT false)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- AI 匯入：claude.ai 匯入台整理好的活動、班別與人員名單。p_commit = false 只檢查並回傳預覽，true 才寫入（有錯的列略過）
+-- 新活動或指定既有活動；人員只補空白欄位不覆蓋；出勤為表單填寫的日期（非打卡）；有金額才建薪資單草稿（不會被「依出勤產生」覆蓋）
+declare v_actor text := public.admin_actor(p_token); e public.events; ev jsonb := coalesce(p_payload->'event', '{}'::jsonb);
+  v_s date; v_e date; v_pay date; v_file text := nullif(btrim(coalesce(p_payload#>>'{source,file_id}','')),'');
+  v_dup uuid; x jsonb; d jsonb; sh jsonb; v_rows jsonb := '[]'::jsonb; v_shifts jsonb := '[]'::jsonb;
+  v_nid text; v_name text; v_bd date; v_dates date[]; v_days jsonb; v_errs text[]; v_warns text[]; v_fill text[]; pr public.people;
+  v_gross numeric; v_ins numeric; v_allow numeric; v_net numeric; v_pid uuid; v_slip uuid; v_i int; v_seen text[] := '{}';
+  n_new int := 0; n_upd int := 0; n_att int := 0; n_slip int := 0; n_skip int := 0; n_shift int := 0; v_people jsonb := '[]'::jsonb;
+  v_acct_name text; v_acct text; v_cnt int; v_bank text; v_branch text; k text;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if jsonb_typeof(p_payload) is distinct from 'object' or coalesce((p_payload->>'v')::int, 0) <> 1 then return jsonb_build_object('ok', false, 'error', 'bad_payload'); end if;
+  if jsonb_typeof(coalesce(p_payload->'people','[]')) <> 'array' or jsonb_typeof(coalesce(p_payload->'shifts','[]')) <> 'array' or jsonb_typeof(coalesce(p_payload->'event','{}')) <> 'object' then return jsonb_build_object('ok', false, 'error', 'bad_payload'); end if;
+  if jsonb_array_length(coalesce(p_payload->'people','[]')) > 500 or jsonb_array_length(coalesce(p_payload->'shifts','[]')) > 200 then return jsonb_build_object('ok', false, 'error', 'too_many'); end if;
+  if v_file is not null and v_file !~ '^[A-Za-z0-9_-]{20,80}$' then v_file := null; end if;
+
+  -- 活動
+  if p_event is not null then
+    select * into e from public.events where id = p_event for update;
+    if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+    v_s := e.start_date; v_e := coalesce(e.end_date, e.start_date); v_pay := coalesce(e.pay_date, v_e + e.pay_within_days);
+  else
+    if length(btrim(coalesce(ev->>'name',''))) < 2 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
+    begin
+      v_s := (ev->>'start_date')::date; v_e := coalesce(nullif(ev->>'end_date','')::date, v_s); v_pay := nullif(ev->>'pay_date','')::date;
+    exception when others then return jsonb_build_object('ok', false, 'error', 'bad_date'); end;
+    if v_s is null or v_e < v_s then return jsonb_build_object('ok', false, 'error', 'bad_date'); end if;
+    if v_pay is not null and v_pay < v_e then return jsonb_build_object('ok', false, 'error', 'pay_before_end'); end if;
+    if v_file is not null then
+      select id into v_dup from public.events where source_key = 'g:' || v_file;
+      if v_dup is not null then return jsonb_build_object('ok', false, 'error', 'duplicate_source', 'event', v_dup); end if;
+    end if;
+  end if;
+
+  -- 班別
+  for sh in select * from jsonb_array_elements(coalesce(p_payload->'shifts','[]')) loop
+    v_errs := '{}';
+    begin
+      if (sh->>'work_date')::date not between v_s and v_e then v_errs := v_errs || '日期不在活動期間'::text; end if;
+      if nullif(sh->>'start_time','')::time is null or nullif(sh->>'end_time','')::time is null then v_errs := v_errs || '缺上下班時間'::text; end if;
+      if coalesce(nullif(sh->>'headcount','')::int, 0) < 1 or (sh->>'headcount')::int > 500 then v_errs := v_errs || '人數不對'::text; end if;
+      if nullif(sh->>'rate','')::numeric is not null and ((sh->>'rate')::numeric < 0 or (sh->>'rate')::numeric > 100000) then v_errs := v_errs || '時薪不對'::text; end if;
+    exception when others then v_errs := v_errs || '格式不對'::text; end;
+    v_shifts := v_shifts || jsonb_build_object('work_date', sh->>'work_date', 'start_time', sh->>'start_time', 'end_time', sh->>'end_time',
+      'role', left(btrim(coalesce(sh->>'role','')), 40), 'headcount', sh->>'headcount', 'rate', sh->>'rate', 'errors', to_jsonb(v_errs));
+  end loop;
+
+  -- 人員
+  v_i := 0;
+  for x in select * from jsonb_array_elements(coalesce(p_payload->'people','[]')) loop
+    v_i := v_i + 1; v_errs := '{}'; v_warns := '{}'; v_fill := '{}'; v_dates := '{}'; v_days := '[]'; pr := null;
+    v_nid := upper(regexp_replace(coalesce(x->>'national_id',''), '\s', '', 'g'));
+    v_name := btrim(coalesce(x->>'name',''));
+    if not public.valid_tw_id(v_nid) then v_errs := v_errs || '身分證字號格式不對'::text; end if;
+    if length(v_name) < 2 or length(v_name) > 40 then v_errs := v_errs || '姓名不對'::text; end if;
+    if v_nid = any(v_seen) then v_errs := v_errs || '名單裡重複'::text; end if;
+    v_seen := v_seen || v_nid;
+    begin v_bd := nullif(x->>'birth_date','')::date; exception when others then v_bd := null; end;
+    if v_bd is not null and (v_bd < date '1930-01-01' or v_bd > current_date) then v_bd := null; end if;
+    if v_bd is null then v_warns := v_warns || '生日無法判讀（新建的人不會有登入密碼）'::text; end if;
+    begin
+      select coalesce(array_agg(distinct dd order by dd), '{}') into v_dates from (select (jsonb_array_elements_text(coalesce(x->'work_dates','[]')))::date dd) q;
+      for d in select * from jsonb_array_elements(coalesce(x->'days','[]')) loop
+        if (d->>'date')::date is null or (d->>'amount')::numeric < 0 or (d->>'amount')::numeric > 100000 then raise exception 'bad'; end if;
+        v_days := v_days || jsonb_build_object('date', (d->>'date')::date, 'amount', round((d->>'amount')::numeric), 'label', left(btrim(coalesce(d->>'label','')), 60));
+        v_dates := array(select distinct u from unnest(v_dates || (d->>'date')::date) u order by u);
+      end loop;
+      v_ins := coalesce(round(nullif(x->>'labor_ins','')::numeric), 0); v_allow := coalesce(round(nullif(x->>'allowances','')::numeric), 0);
+      v_gross := coalesce((select sum((j->>'amount')::numeric) from jsonb_array_elements(v_days) j), round(nullif(x->>'gross','')::numeric));
+      v_net := round(nullif(x->>'net','')::numeric);
+      if v_ins < 0 or v_allow < 0 or v_ins > 100000 or v_allow > 100000 or coalesce(v_gross,0) > 1000000 or coalesce(v_gross,0) < 0 then raise exception 'bad'; end if;
+    exception when others then v_errs := v_errs || '日期或金額格式不對'::text; v_gross := null; end;
+    if exists (select 1 from unnest(v_dates) u where u not between v_s and v_e) then v_errs := v_errs || '工作日期不在活動期間'::text; end if;
+    if cardinality(v_dates) = 0 then v_warns := v_warns || '沒有工作日期'::text; end if;
+    if v_gross is not null and v_gross + v_allow - v_ins < 0 or v_net < 0 then v_errs := v_errs || '實發是負數'::text; end if;
+    if cardinality(v_dates) > 62 then v_errs := v_errs || '工作日期超過 62 天'::text; end if;
+    if v_gross is null and v_net is not null then v_warns := v_warns || '只有撥款、沒有應發，不建薪資單'::text; end if;
+    if v_gross is not null and v_net is not null and v_net <> v_gross + v_allow - v_ins then
+      v_warns := v_warns || format('表上撥款 %s 與計算 %s 不同，以計算為準', v_net, v_gross + v_allow - v_ins);
+    end if;
+    v_acct := nullif(regexp_replace(coalesce(x->>'bank_account',''), '\D', '', 'g'), '');
+    if v_acct is not null and length(v_acct) not between 6 and 16 then v_warns := v_warns || '帳號格式不對，不匯入帳號'::text; v_acct := null; end if;
+    v_bank := nullif(substring(coalesce(x->>'bank_code','') from '\d{3}'), '');
+    if v_bank is null and btrim(coalesce(x->>'bank_code','')) <> '' then v_warns := v_warns || '銀行代碼看不懂'::text; end if;
+    v_branch := nullif(left(btrim(coalesce(x->>'bank_branch','')), 40), '');
+    v_acct_name := nullif(left(btrim(coalesce(x->>'bank_account_name','')), 40), '');
+    if v_acct_name is not null and v_acct_name <> v_name then v_warns := v_warns || '戶名不是本人'::text; end if;
+    if cardinality(v_errs) = 0 then
+      select * into pr from public.people where national_id = v_nid;
+      if pr.id is not null then
+        if pr.name <> v_name then v_warns := v_warns || format('系統姓名是「%s」', pr.name); end if;
+        foreach k in array array['phone','address','birth_date','bank_code','bank_branch','bank_account_name','bank_account'] loop
+          if (to_jsonb(pr)->>k) is null and nullif(case k when 'bank_account' then v_acct when 'bank_code' then v_bank when 'bank_branch' then v_branch
+               when 'bank_account_name' then v_acct_name when 'birth_date' then v_bd::text else btrim(coalesce(x->>k,'')) end, '') is not null then v_fill := v_fill || k; end if;
+        end loop;
+        if exists (select 1 from public.payslips where person_id = pr.id and event_id = p_event and status <> 'void') and v_gross is not null then
+          v_warns := v_warns || '這場活動已有薪資單，不再新增'::text;
+        end if;
+      end if;
+    end if;
+    v_rows := v_rows || jsonb_build_object('row', coalesce(nullif(x->>'row','')::int, v_i), 'name', v_name, 'national_id', v_nid,
+      'status', case when cardinality(v_errs) > 0 then 'error' when pr.id is not null then 'existing' else 'new' end,
+      'role', left(btrim(coalesce(x->>'role','')), 40), 'dates', to_jsonb(v_dates), 'gross', v_gross, 'labor_ins', v_ins, 'allowances', v_allow,
+      'net', case when v_gross is not null then v_gross + v_allow - v_ins end, 'fills', to_jsonb(v_fill), 'errors', to_jsonb(v_errs), 'warnings', to_jsonb(v_warns));
+
+    if p_commit and cardinality(v_errs) = 0 then
+      if e.id is null then
+        insert into public.events(employer_id, name, start_date, end_date, pay_date, location, description, recruiting, source_key, source_file_id)
+        select id, left(btrim(ev->>'name'), 120), v_s, v_e, v_pay, nullif(left(btrim(coalesce(ev->>'location','')), 200), ''), nullif(left(btrim(coalesce(ev->>'description','')), 2000), ''),
+          false, 'g:' || v_file, v_file
+        from public.employers order by created_at limit 1 returning * into e;
+      end if;
+      if pr.id is null then
+        insert into public.people(national_id, name, nickname, phone, birth_date, birth_raw, address, bank_code, bank_branch, bank_account_name, bank_account, password_hash, profile_source)
+        values (v_nid, v_name, nullif(left(btrim(coalesce(x->>'nickname','')), 40), ''), nullif(left(btrim(coalesce(x->>'phone','')), 30), ''), v_bd,
+          nullif(left(btrim(coalesce(x->>'birth_raw','')), 40), ''), nullif(left(btrim(coalesce(x->>'address','')), 200), ''), v_bank, v_branch, v_acct_name, v_acct,
+          case when v_bd is not null then extensions.crypt(lpad((extract(year from v_bd)::int - 1911)::text, 3, '0') || to_char(v_bd, 'MMDD'), extensions.gen_salt('bf', 10)) end, 'legacy')
+        returning id into v_pid;
+        n_new := n_new + 1;
+        if v_bd is null then insert into public.data_issues(event_id, person_id, severity, code, detail) values (e.id, v_pid, 'warn', 'birth_unparsed', 'AI 匯入：生日無法判讀，沒有登入密碼'); end if;
+      else
+        v_pid := pr.id;
+        update public.people set phone = coalesce(phone, nullif(left(btrim(coalesce(x->>'phone','')), 30), '')),
+          address = coalesce(address, nullif(left(btrim(coalesce(x->>'address','')), 200), '')),
+          birth_date = coalesce(birth_date, v_bd), bank_code = coalesce(bank_code, v_bank), bank_branch = coalesce(bank_branch, v_branch),
+          bank_account_name = coalesce(bank_account_name, v_acct_name), bank_account = coalesce(bank_account, v_acct), updated_at = now()
+        where id = v_pid;
+        if cardinality(v_fill) > 0 then n_upd := n_upd + 1; end if;
+        if pr.bank_account is null and v_acct is not null then insert into public.data_issues(event_id, person_id, severity, code, detail) values (e.id, v_pid, 'warn', 'bank_changed', 'AI 匯入補上匯款帳戶，請核對存摺影本'); end if;
+        if pr.name <> v_name then insert into public.data_issues(event_id, person_id, severity, code, detail) values (e.id, v_pid, 'warn', 'name_mismatch', format('AI 匯入表上姓名「%s」與系統「%s」不同', v_name, pr.name)); end if;
+      end if;
+      foreach k in array array['id_front','id_back','bankbook'] loop
+        if coalesce(x#>>array['docs',k],'') ~ '^[A-Za-z0-9_-]{20,80}$' then
+          insert into public.people_documents(person_id, kind, drive_file_id) values (v_pid, k, x#>>array['docs',k]) on conflict (person_id, kind) do nothing;
+        end if;
+      end loop;
+      insert into public.attendance(person_id, event_id, work_date, scheduled_text, source, note)
+      select v_pid, e.id, u, nullif(left(btrim(coalesce(x->>'scheduled_text','')), 200), ''), 'legacy', 'AI 匯入（表單填寫的日期，非打卡紀錄）' from unnest(v_dates) u
+      on conflict (person_id, event_id, work_date) do nothing;
+      get diagnostics v_cnt = row_count; n_att := n_att + v_cnt;
+      if v_gross is not null and not exists (select 1 from public.payslips where person_id = v_pid and event_id = e.id and status <> 'void') then
+        insert into public.payslips(person_id, event_id, relation, role, work_dates_text, period_start, period_end, pay_date, basis, gross, allowances, deductions, net,
+          status, generated, note, pay_bank_code, pay_bank_branch, pay_account_name, pay_account, source_row)
+        select v_pid, e.id, 'employment', nullif(left(btrim(coalesce(x->>'role','')), 40), ''), nullif(left(btrim(coalesce(x->>'scheduled_text','')), 200), ''),
+          v_dates[1], v_dates[cardinality(v_dates)], v_pay, 'daily_total', v_gross, v_allow, v_ins, v_gross + v_allow - v_ins, 'draft', false, 'AI 匯入',
+          coalesce(v_bank, p.bank_code), coalesce(v_branch, p.bank_branch), coalesce(v_acct_name, p.bank_account_name), coalesce(v_acct, p.bank_account), nullif(x->>'row','')::int
+        from public.people p where p.id = v_pid returning id into v_slip;
+        insert into public.payslip_items(payslip_id, kind, code, label, work_date, amount, sort)
+        select v_slip, 'earning', 'daily_wage', coalesce(nullif(j->>'label',''), coalesce(nullif(btrim(coalesce(x->>'role','')),''), '當日') || ' 日薪'), (j->>'date')::date, (j->>'amount')::numeric, 10 + o::int
+        from jsonb_array_elements(v_days) with ordinality t(j, o);
+        if jsonb_array_length(v_days) = 0 then
+          insert into public.payslip_items(payslip_id, kind, code, label, amount, sort) values (v_slip, 'earning', 'wage_total', '工資（表上僅列總額）', v_gross, 10);
+        end if;
+        if v_allow > 0 then insert into public.payslip_items(payslip_id, kind, code, label, amount, sort) values (v_slip, 'allowance', 'other', '津貼', v_allow, 20); end if;
+        if v_ins > 0 then insert into public.payslip_items(payslip_id, kind, code, label, amount, sort) values (v_slip, 'deduction', 'labor_ins', '勞保自付額', v_ins, 30); end if;
+        if v_net is not null and v_net <> v_gross + v_allow - v_ins then
+          insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (e.id, v_slip, v_pid, 'warn', 'net_mismatch', format('AI 匯入：表上撥款 %s，計算 %s', v_net, v_gross + v_allow - v_ins));
+        end if;
+        if v_acct_name is not null and v_acct_name <> v_name then
+          insert into public.data_issues(event_id, payslip_id, person_id, severity, code, detail) values (e.id, v_slip, v_pid, 'warn', 'payee_not_self', format('戶名「%s」不是本人', v_acct_name));
+        end if;
+        n_slip := n_slip + 1;
+      end if;
+      v_people := v_people || to_jsonb(v_pid::text);
+    elsif cardinality(v_errs) > 0 then n_skip := n_skip + 1;
+    end if;
+  end loop;
+
+  if p_commit then
+    if e.id is null then
+      if jsonb_array_length(coalesce(p_payload->'people','[]')) > 0 and n_skip = jsonb_array_length(p_payload->'people')
+         and not exists (select 1 from jsonb_array_elements(v_shifts) s where jsonb_array_length(s->'errors') = 0) then
+        return jsonb_build_object('ok', false, 'error', 'all_rows_invalid');
+      end if;
+      insert into public.events(employer_id, name, start_date, end_date, pay_date, location, description, recruiting, source_key, source_file_id)
+      select id, left(btrim(ev->>'name'), 120), v_s, v_e, v_pay, nullif(left(btrim(coalesce(ev->>'location','')), 200), ''), nullif(left(btrim(coalesce(ev->>'description','')), 2000), ''),
+        jsonb_array_length(coalesce(p_payload->'people','[]')) = 0, 'g:' || v_file, v_file
+      from public.employers order by created_at limit 1 returning * into e;
+    end if;
+    for sh in select * from jsonb_array_elements(v_shifts) loop
+      if jsonb_array_length(sh->'errors') = 0 then
+        insert into public.shifts(event_id, work_date, start_time, end_time, role, headcount, rate)
+        select e.id, (sh->>'work_date')::date, (sh->>'start_time')::time, (sh->>'end_time')::time, nullif(sh->>'role',''), (sh->>'headcount')::int, nullif(sh->>'rate','')::numeric
+        where not exists (select 1 from public.shifts z where z.event_id = e.id and z.work_date = (sh->>'work_date')::date and z.start_time = (sh->>'start_time')::time
+          and z.end_time = (sh->>'end_time')::time and coalesce(z.role,'') = coalesce(nullif(sh->>'role',''),''));
+        get diagnostics v_cnt = row_count; n_shift := n_shift + v_cnt;
+      end if;
+    end loop;
+    insert into public.audit_log(actor, action, table_name, row_id, detail)
+    values (v_actor, 'ai_import', 'events', e.id, jsonb_build_object('new_event', p_event is null, 'source', v_file, 'people', v_people,
+      'new_people', n_new, 'filled', n_upd, 'attendance', n_att, 'payslips', n_slip, 'shifts', n_shift, 'skipped', n_skip));
+    return jsonb_build_object('ok', true, 'event', e.id, 'new_people', n_new, 'filled', n_upd, 'attendance', n_att, 'payslips', n_slip, 'shifts', n_shift, 'skipped', n_skip);
+  end if;
+  return jsonb_build_object('ok', true, 'preview', true,
+    'event', case when p_event is not null then jsonb_build_object('id', e.id, 'name', e.name, 'start_date', v_s, 'end_date', v_e, 'pay_date', v_pay, 'existing', true)
+      else jsonb_build_object('name', btrim(ev->>'name'), 'start_date', v_s, 'end_date', v_e, 'pay_date', v_pay, 'location', ev->>'location', 'existing', false) end,
+    'shifts', v_shifts, 'people', v_rows);
+end $function$
+;
+revoke all on function public.admin_ai_import(text, jsonb, uuid, boolean) from public;
+grant execute on function public.admin_ai_import(text, jsonb, uuid, boolean) to anon, authenticated;
