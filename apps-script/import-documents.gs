@@ -258,7 +258,7 @@ function importHdThumbs() {
           else stat.noThumb++;
         });
         const groups = [];
-        for (let k = 0; k < items.length; k += 3) groups.push(items.slice(k, k + 3));
+        for (let k = 0; k < items.length; k += 1) groups.push(items.slice(k, k + 1));   // 一次一張，避免 Edge Function 資源上限
         UrlFetchApp.fetchAll(groups.map(g => req_({ action: 'legacy_hd', import_key: key, items: g }))).forEach((res, gi) => {
           if (res.getResponseCode() === 401) throw new Error('IMPORT_KEY 不正確或已過期');
           let o = {};

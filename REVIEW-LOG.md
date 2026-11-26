@@ -183,3 +183,4 @@
   - Codex 安全審查（gpt-6-luna，xhigh）：已修換 token 失敗時通知被標永久失敗（改回 503 走重試）、並行換 token 只換一次、狀態欄位分開 Channel ID 與長期 token、設定說明加「確認 Webhook 為啟用」。未改：綁定成功但回覆失敗不重送（網站上看得到已綁定）；原 Make 整合中斷（使用者決定）；line_bind 既有 too_many 限制。
 - 2026-11-26 證件畫質（使用者選：舊證件改存清楚版＋核對後不再縮小）：docs 函式「資料已核對」只記錄核對人與時間，不再縮成 500px 存證圖；新增 legacy_hd_todo／legacy_hd，Apps Script importHdThumbs 把 6,390 張 500px／8KB 舊縮圖換成 1200px 約 60KB（最多 120KB）並刪掉舊縮圖；本人重新上傳時一併清掉舊表縮圖與清楚版。後台按鈕條件與文字同步。
   - Codex 審查（gpt-6-luna，medium）：已修更新後重讀確認再刪檔（避免本人同時重新上傳留下孤兒檔）、刪不掉的檔案記進稽核 cleanup_needed、Apps Script 跑完 3 輪仍有換不到的照實回報、personId 完整 UUID 檢查、只有舊表證件的人也能按「資料已核對」。
+- 2026-11-27 舊證件清楚版：巡檢發現換圖期間 docs 函式約四成請求 546（Edge Function 資源上限）。改為 Google 給的 JPEG ≤70KB 直接存、否則只壓兩次（目標 70KB，最多 110KB），每次請求 1 張；失敗的會在後續輪次重試。

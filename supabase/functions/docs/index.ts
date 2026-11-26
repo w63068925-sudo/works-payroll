@@ -211,7 +211,7 @@ Deno.serve(async (req: Request) => {
     // 舊表證件換清楚版：Apps Script 送來 Google 雲端的 1200px 縮圖，壓到約 60KB（最多 120KB）後取代舊縮圖，並刪掉舊縮圖檔
     if (b.action === "legacy_hd") {
       if (!(await importKeyOk())) return json({ ok: false, error: "key" }, 401);
-      if (!Array.isArray(b.items) || b.items.length > 4) return json({ ok: false, error: "bad_items" });
+      if (!Array.isArray(b.items) || b.items.length > 2) return json({ ok: false, error: "bad_items" });
       const results: string[] = [];
       const orphans: string[] = [];   // 刪不掉或不確定的檔案：記進稽核紀錄，之後清理
       let stored = 0;
@@ -227,7 +227,10 @@ Deno.serve(async (req: Request) => {
             const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
             const dims = imageDims(raw);
             if (dims && dims[0] > 0 && dims[1] > 0 && dims[0] <= 2400 && dims[1] <= 2400) {
-              hd = await shrink(raw, 1200, 60 * 1024, 120 * 1024, [72, 62, 52, 44, 36], [1, 0.84]);
+              // 省運算（避免 Edge Function 資源上限 546）：Google 給的 JPEG 已經夠小就直接存，否則最多壓兩次
+              const isJpeg = raw[0] === 0xff && raw[1] === 0xd8;
+              if (isJpeg && raw.length <= 70 * 1024 && Math.max(dims[0], dims[1]) <= 1300) hd = raw;
+              else hd = await shrink(raw, 1200, 70 * 1024, 110 * 1024, [65, 50], [1]);
             }
           }
         } catch { hd = null; }
