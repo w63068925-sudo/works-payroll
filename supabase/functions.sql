@@ -1766,6 +1766,13 @@ begin
     insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'clock_in', 'events', e.id, case when v_kind is not null then jsonb_build_object('notice', v_kind, 'minutes', v_n) end);
   elsif p_action = 'out' then
     if v_open.id is null then return jsonb_build_object('ok', false, 'error', 'not_in', 'event', e.name) || public.checkin_state(v_pid, e.id); end if;
+    -- 剛簽到不到 30 分鐘就簽退：多半是重複掃碼，先請本人確認，避免上班馬上變下班、工時歸零
+    if v_now < v_open.clock_in + interval '30 minutes' and not coalesce(p_ack, false) then
+      v_n := floor(extract(epoch from v_now - v_open.clock_in) / 60);
+      return jsonb_build_object('ok', false, 'error', 'need_ack', 'event', e.name, 'notice', jsonb_build_object('kind', 'quick_out', 'minutes', v_n,
+        'text', format('你在 %s 才簽到（%s 分鐘前）。如果剛才只是又掃了一次 QR 碼，請按「先不要」；確定簽退的話，今天的工時會結算到現在。',
+          to_char(v_open.clock_in at time zone 'Asia/Taipei', 'HH24:MI'), v_n))) || public.checkin_state(v_pid, e.id);
+    end if;
     -- 超過表定下班：延長工時需主管核准才計薪
     if v_open.sched_out is not null and v_now >= v_open.sched_out + interval '1 minute' then
       v_kind := 'overtime'; v_n := floor(extract(epoch from v_now - v_open.sched_out) / 60);

@@ -902,7 +902,7 @@ async function viewCheckin(action, ack) {
   if (!r.error && r.block && (r.state || 'none') === 'none') r.error = r.block;
   // 提早到、遲到、超過表定下班：先讓本人看清楚計薪方式並確認，才完成簽到退
   if (r.error === 'need_ack' && r.notice) {
-    const title = { early: '提早到場', late: '遲到', overtime: '超過表定下班' }[r.notice.kind] || '請確認';
+    const title = { early: '提早到場', late: '遲到', overtime: '超過表定下班', quick_out: '剛簽到不久，確定要簽退？' }[r.notice.kind] || '請確認';
     app.innerHTML = brand + `
       <p class="sub">${esc(r.event || '')}</p>
       <h1>${esc(title)}</h1>
@@ -939,9 +939,21 @@ async function viewCheckin(action, ack) {
     <p class="foot">簽到退時間以伺服器時間為準，記錄到分鐘，並依勞動基準法第 30 條保存 5 年。時間有誤請當場告訴現場負責人。</p>`;
   document.getElementById('tolist').addEventListener('click', viewList);
   const act = document.getElementById('act');
+  // 掃碼後先問清楚是「簽到」還是「簽退」，避免上班中的人又掃一次就變成下班
   if (act) act.addEventListener('click', () => {
-    if (act.dataset.a === 'out' && !act.dataset.sure) { act.dataset.sure = '1'; act.textContent = '確定要簽退？再按一次'; return; }
-    act.disabled = true; viewCheckin(act.dataset.a);
+    const out = act.dataset.a === 'out', word = out ? '簽退' : '簽到';
+    app.innerHTML = brand + `
+      <p class="sub">${esc(r.event || '')}</p>
+      <h1>確定要${word}嗎？</h1>
+      <div class="card hero" style="margin-top:18px">
+        <div class="label">現在時間</div>
+        <div class="clock">${esc(r.now || '--:--')}</div>
+        <p style="margin:14px 0 0;line-height:1.8;text-align:left">${out ? '你在 ' + esc(r.clock_in || '') + ' 簽到。簽退後今天的工時就結算到現在。<b>如果你還在上班、只是又掃了一次 QR 碼，請按「取消」。</b>' : '簽到後開始記錄今天的上班時間。下班時再掃一次 QR 碼簽退。'}</p>
+      </div>
+      <button class="btn big ${out ? 'out' : ''}" id="ok">確定${word}</button>
+      <button class="btn ghost" id="back">取消</button>`;
+    document.getElementById('ok').addEventListener('click', ev => { ev.target.disabled = true; viewCheckin(out ? 'out' : 'in'); });
+    document.getElementById('back').addEventListener('click', () => viewCheckin());
   });
 }
 

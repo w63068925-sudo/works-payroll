@@ -432,7 +432,7 @@ async function viewEvent(id, step) {
   shell('events', `
     <div class="crumb"><a href="#/events">活動</a> / ${esc(e.name)}</div>
     <div class="head"><div><h1>${esc(e.name)}</h1><p class="sub">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(d(e.end_date)) : ''}　${st}${e.archived_at ? '　<span class="badge">已封存</span>' : ''}</p></div>
-      <div class="row"><button class="btn ghost" id="editev">編輯活動</button><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : (e.total - e.void - e.published > 0 || (payDateOf(e) && payDateOf(e) > today()) ? '還有薪資沒發完，仍要封存？' : '確定封存？')) : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xpack">下載人員資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到 QR 碼</button></div></div>
+      <div class="row"><button class="btn ghost" id="editev">編輯活動</button><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : (e.total - e.void - e.published > 0 || (payDateOf(e) && payDateOf(e) > today()) ? '還有薪資沒發完，仍要封存？' : '確定封存？')) : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xpack">下載人員資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到/簽退 QR 碼</button></div></div>
     <div class="steps" role="tablist" aria-label="流程">
       ${STEPS.map(([k, t], i) => `<button class="step ${info[k].done ? 'done' : ''}" role="tab" aria-selected="${k === step}" data-s="${k}">
         <span class="n"><i>${info[k].done ? '✓' : i + 1}</i>${['一', '二', '三', '四', '五'][i]}</span><b>${t}</b><span class="s ${info[k].attn ? 'attn' : ''}">${esc(info[k].s)}</span></button>`).join('')}
@@ -738,7 +738,7 @@ const stepAtt = {
         <tbody>${c.att.map(r => `<tr data-k="${esc(r.id)}" class="${S.detail && S.detail.key === r.id ? 'on' : ''}"><td>${esc(r.name)}</td><td>${esc(md(r.work_date))}${r.holiday ? ' <span class="badge ok">' + esc(r.holiday) + '</span>' : ''}</td>
           <td class="dim">${r.sched_in ? esc(hm(r.sched_in)) + '–' + esc(hm(r.sched_out)) : '—'}</td>
           <td>${esc(hm(r.clock_in))}${attBadge(r, 'in')}</td><td>${r.clock_in && !r.clock_out ? '<span class="badge warn">未簽退</span>' : esc(hm(r.clock_out)) + attBadge(r, 'out')}</td>
-          <td class="r">${r.clock_in ? esc(r.break_minutes) + '分' : ''}</td><td class="r">${esc(dur(r.minutes))}</td><td>${esc(SRC[r.source] || r.source)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">還沒有出勤紀錄。活動當天到「今日現場」顯示簽到 QR 碼。</td></tr>'}</tbody>
+          <td class="r">${r.clock_in ? esc(r.break_minutes) + '分' : ''}</td><td class="r">${esc(dur(r.minutes))}</td><td>${esc(SRC[r.source] || r.source)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">還沒有出勤紀錄。活動當天到「今日現場」顯示簽到/簽退 QR 碼。</td></tr>'}</tbody>
       </table></div>`)}`;
   },
   bind: e => {

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
-<title>現場打卡 QR｜沃克思</title>
+<title>簽到/簽退 QR 碼｜沃克思</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
 <style>
 :root{--paper:#f5f2ec;--card:#fffdf9;--ink:#1d1c1a;--muted:#6f6b63;--line:#e3ded3;--accent:#1f5c4a;--warn:#8a5a00;--warn-soft:#fbf1d9;--danger:#a3271f;--danger-soft:#fbe6e3}
@@ -62,7 +62,7 @@ async function tick() {
   fails = 0;
   if (!r.ok) return fatal(r.error === 'expired' ? '這個打卡連結已過期（活動已結束）。需要的話請向管理員索取新的連結。' : '這個打卡連結已停用或無效。請向管理員索取新的連結。');
   if (!built) {
-    built = true; document.title = r.event + '｜現場打卡 QR';
+    built = true; document.title = r.event + '｜簽到/簽退 QR 碼';
     app.innerHTML = `<h1>${esc(r.event)}</h1><p class="sub">${esc(fmt(r.start_date))}${r.end_date !== r.start_date ? '–' + esc(fmt(r.end_date)) : ''}　掃描簽到／簽退</p>
       <div class="qr" id="qr"></div><div class="bar"><i id="bar"></i></div>
       <div class="msg warn" id="net" hidden>網路不穩，QR 碼可能已過期，自動重試中…</div>
