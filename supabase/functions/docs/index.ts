@@ -325,6 +325,36 @@ Deno.serve(async (req: Request) => {
       await sb.from("audit_log").insert({ actor, action: "receipt_uploaded", table_name: "payout_receipts", row_id: eventId, detail: { path } });
       return json({ ok: true });
     }
+    // 永久刪除人員（沒有薪資與出勤紀錄的才行）：資料庫刪完再清掉這個人的所有證件與照片檔
+    if (b.action === "delete_person") {
+      const personId = String(b.person_id ?? "");
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(personId)) return json({ ok: false, error: "bad_person" });
+      const { data: res, error } = await sb.rpc("admin_delete_person", { p_token: String(b.admin_token ?? ""), p_id: personId, p_confirm: String(b.confirm ?? "") });
+      if (error || !res) return json({ ok: false, error: "db" });
+      if (!res.ok) return json(res);
+      // 列出這個人資料夾裡的所有檔案（分頁），連同資料庫記錄的路徑一起刪；有刪不掉或列不出的，記進稽核並回報待清理
+      const listed: string[] = [];
+      let listFailed = false;
+      for (let offset = 0; offset < 20000; offset += 1000) {
+        const { data: files, error: lsErr } = await sb.storage.from("documents").list(personId, { limit: 1000, offset });
+        if (lsErr) { listFailed = true; break; }
+        listed.push(...(files ?? []).map((f) => `${personId}/${f.name}`));
+        if (!files || files.length < 1000) break;
+      }
+      const paths = [...new Set([...(res.paths ?? []), ...listed])].filter((x) => x.startsWith(`${personId}/`));
+      let left: string[] = [];
+      for (let i = 0; i < paths.length; i += 100) {
+        const part = paths.slice(i, i + 100);
+        const { error: rmErr } = await sb.storage.from("documents").remove(part);
+        if (rmErr) left = left.concat(part);
+      }
+      const pending = left.length > 0 || listFailed;
+      if (pending) {
+        const { error: aErr } = await sb.from("audit_log").insert({ actor: "system", action: "person_files_cleanup_needed", table_name: "people", row_id: personId, detail: { paths: left, list_failed: listFailed } });
+        if (aErr) return json({ ok: true, files_removed: paths.length - left.length, cleanup_pending: true, cleanup_logged: false });
+      }
+      return json({ ok: true, files_removed: paths.length - left.length, cleanup_pending: pending });
+    }
     if (b.action === "view_url") {
       const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
       if (!actor) return json({ ok: false, error: "session" });

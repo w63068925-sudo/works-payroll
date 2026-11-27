@@ -568,5 +568,41 @@ begin
     if public.admin_payout_receipts('bad-token', e37)->>'error' is distinct from 'session' or has_table_privilege('anon', 'public.payout_receipts', 'select') then fails := fails || ' [37j receipts access]'; end if;
   end;
 
-  if fails = '' then raise exception 'PASS 全部 37 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 38. 刪除／停用人員：有薪資或出勤不能刪；要輸入完整身分證；沒紀錄的可刪（報名一併刪）；停用後不能登入、名單預設不顯示；匿名不能呼叫刪除
+  declare p38 uuid; e38 uuid; p38r uuid; n38r text;
+  begin
+    insert into public.people(national_id, name, profile_source, password_hash) values ('Z999990038', '測試辛', 'test', extensions.crypt('0890101', extensions.gen_salt('bf', 4))) returning id into p38;
+    select id into e38 from public.events where name = '回歸27甲';
+    insert into public.applications(event_id, person_id, status) values (e38, p38, 'active');
+    if public.admin_delete_person('bad-token', p38, 'Z999990038')->>'error' is distinct from 'session' then fails := fails || ' [38a no session]'; end if;
+    if public.admin_delete_person(atok, p38, 'Z999990039')->>'error' is distinct from 'confirm' then fails := fails || ' [38b confirm]'; end if;
+    select s.person_id, p.national_id into p38r, n38r from public.payslips s join public.people p on p.id = s.person_id limit 1;
+    if public.admin_delete_person(atok, p38r, n38r)->>'error' is distinct from 'has_records' then fails := fails || ' [38c has records]'; end if;
+    -- 停用
+    perform public.admin_set_person_disabled(atok, p38, true);
+    if public.payroll_login('Z999990038', '0890101')->>'ok' = 'true' then fails := fails || ' [38d disabled login]'; end if;
+    if exists (select 1 from jsonb_array_elements(public.admin_people(atok)->'people') x where (x->>'id')::uuid = p38) then fails := fails || ' [38e disabled in default list]'; end if;
+    if not exists (select 1 from jsonb_array_elements(public.admin_people(atok, 'Z999990038')->'people') x where (x->>'id')::uuid = p38 and (x->>'disabled')::boolean) then fails := fails || ' [38f search disabled]'; end if;
+    -- 停用後：既有 session 失效、停用前的 LINE 綁定碼失效
+    perform public.admin_set_person_disabled(atok, p38, false);
+    insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest('regress-s38', 'sha256'), 'hex'), p38, now() + interval '1 hour');
+    insert into public.line_link_codes(code, person_id, expires_at) values ('938038', p38, now() + interval '10 minutes');
+    update public.people set disabled_at = now() where id = p38;
+    if public.payroll_session_person('regress-s38') is not null then fails := fails || ' [38j disabled session]'; end if;
+    if (public.line_bind('938038', 'Uregress38')->>'ok')::boolean then fails := fails || ' [38k disabled line bind]'; end if;
+    perform public.admin_set_person_disabled(atok, p38, false);
+    if (public.payroll_login('Z999990038', '0890101')->>'ok')::boolean is not true then fails := fails || ' [38g enabled login]'; end if;
+    -- 刪除（證件紀錄、登入、綁定碼要一併刪掉；回傳的檔案路徑交給 docs 函式刪）
+    insert into public.people_documents(person_id, kind, path) values (p38, 'id_front', p38 || '/id_front-1700000000000.jpg');
+    insert into public.line_link_codes(code, person_id, expires_at) values ('938039', p38, now() + interval '10 minutes');
+    r := public.admin_delete_person(atok, p38, ' z999990038 ');
+    if not (r->'paths') ? (p38 || '/id_front-1700000000000.jpg') then fails := fails || ' [38m paths returned]'; end if;
+    if (r->>'ok')::boolean is not true or exists (select 1 from public.people where id = p38) or exists (select 1 from public.applications where person_id = p38) then fails := fails || ' [38h delete ' || coalesce(r::text, '') || ']'; end if;
+    if has_function_privilege('anon', 'public.admin_delete_person(text,uuid,text)', 'execute') or has_function_privilege('authenticated', 'public.admin_delete_person(text,uuid,text)', 'execute')
+       or not has_function_privilege('service_role', 'public.admin_delete_person(text,uuid,text)', 'execute') then fails := fails || ' [38i delete privileges]'; end if;
+    if exists (select 1 from public.sessions where person_id = p38) or exists (select 1 from public.line_link_codes where person_id = p38)
+       or exists (select 1 from public.people_documents where person_id = p38) then fails := fails || ' [38l cascade]'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 38 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

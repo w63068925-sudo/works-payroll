@@ -1561,7 +1561,7 @@ async function viewPeople(id) {
   shell('people', `<div class="head"><div><h1>人員</h1><p class="sub">共 ${r.total} 人${q ? '，符合 ' + r.people.length + ' 人' : '，顯示最近建立的 ' + r.people.length + ' 人'}</p></div>
       <form id="pf" class="row" style="align-items:center"><input id="pq" type="search" value="${esc(q)}" placeholder="姓名、身分證字號或電話" aria-label="搜尋人員" style="width:260px"><button class="btn ghost">搜尋</button></form></div>
     ${splitWrap(`<div class="card tablebox plist"><table><thead><tr><th>姓名</th><th class="ph">電話</th><th class="r">證件</th><th class="r">待確認</th></tr></thead>
-      <tbody>${r.people.map(p => `<tr data-k="${esc(p.id)}" class="${p.id === id ? 'on' : ''}"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge ok">自行登錄</span>' : ''}${p.source === 'self' && p.docs < 3 ? ' <span class="badge warn" title="已登錄基本資料，但證件還沒傳齊，不能報名">證件未齊</span>' : ''}${p.source === 'self' && !p.apps ? ' <span class="badge" title="已登錄，還沒報名任何班次">未報名</span>' : ''}<div class="dim">${esc(p.national_id)}</div></td>
+      <tbody>${r.people.map(p => `<tr data-k="${esc(p.id)}" class="${p.id === id ? 'on' : ''}"><td>${esc(p.name)}${p.disabled ? ' <span class="badge">已停用</span>' : ''}${p.source === 'self' ? ' <span class="badge ok">自行登錄</span>' : ''}${p.source === 'self' && p.docs < 3 ? ' <span class="badge warn" title="已登錄基本資料，但證件還沒傳齊，不能報名">證件未齊</span>' : ''}${p.source === 'self' && !p.apps ? ' <span class="badge" title="已登錄，還沒報名任何班次">未報名</span>' : ''}<div class="dim">${esc(p.national_id)}</div></td>
         <td class="ph">${esc(p.phone || '—')}</td><td class="r">${p.docs}/3</td><td class="r">${p.open_issues ? '<span class="badge warn">' + p.open_issues + '</span>' : '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">找不到符合的人</td></tr>'}</tbody></table></div>`)}`);
   $('pf').onsubmit = ev => { ev.preventDefault(); S.filter.peopleQ = $('pq').value; viewPeople(); };
   on('tbody tr[data-k]', 'click', (ev, tr) => { history.replaceState(null, '', '#/people/' + tr.dataset.k); openPerson(tr.dataset.k); });
@@ -1588,7 +1588,13 @@ async function openPerson(id) {
     ${(p.history || []).length ? '<h2>參加過的活動（' + p.history.length + '）</h2><table>' + p.history.map(x => `<tr><td><a href="#/events/${esc(x.event_id)}">${esc(x.event)}</a>${x.archived ? ' <span class="badge">已封存</span>' : ''}<div class="dim">${esc(d(x.start_date))}${x.end_date && x.end_date !== x.start_date ? ' – ' + esc(md(x.end_date)) : ''}${x.slip && x.slip.role ? '　' + esc(x.slip.role) : ''}　${x.accepted ? '已錄取' : x.applied ? '已報名' : ''}${x.days ? (x.accepted || x.applied ? '・' : '') + '出勤 ' + x.days + ' 天' : ''}</div></td>
       <td class="r">${x.slip ? money(x.slip.net) + ' <span class="badge ' + esc(x.slip.status) + '">' + STATUS[x.slip.status] + '</span>' : '<span class="dim">沒有薪資單</span>'}</td></tr>`).join('') + '</table>' : '<h2>參加過的活動</h2><p class="sub">還沒有參加紀錄。</p>'}
     <h2>帳號</h2><p class="sub">${p.has_password ? (p.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
-    <div id="dm" style="margin-top:10px"></div><button class="btn ghost" id="reset" ${p.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button>`;
+    <div id="dm" style="margin-top:10px"></div><button class="btn ghost" id="reset" ${p.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button>
+    <h2>刪除或停用</h2>
+    ${p.disabled_at ? `<div class="msg warn">已於 ${esc(d(p.disabled_at))} 由 ${esc(p.disabled_by || '')} 停用：不能登入，人員名單預設不顯示（搜尋得到）。</div><button class="btn ghost" id="enable">恢復這個人</button>` : ''}
+    ${p.can_delete ? `<p class="sub">這個人沒有薪資單也沒有出勤紀錄，可以永久刪除：基本資料、報名、證件與照片會一起刪掉，無法復原。</p>
+      <div class="row" style="align-items:center"><input id="delconfirm" type="text" maxlength="10" autocapitalize="characters" placeholder="輸入完整身分證字號確認" style="width:220px" autocomplete="off"><button class="btn ghost" id="delperson" style="color:var(--danger)">永久刪除</button></div>`
+      : !p.disabled_at ? `<p class="sub">這個人有薪資單或出勤紀錄，依勞基法要保存 5 年，不能刪除；可以停用（不能登入、名單預設不顯示，紀錄保留，可隨時恢復）。</p><button class="btn ghost" id="disable" style="color:var(--danger)">停用這個人</button>` : ''}
+    <div id="delmsg" style="margin-top:10px"></div>`;
   box.querySelectorAll('[data-issue]').forEach(b => b.onclick = async () => { await rpc('admin_resolve_issue', { p_issue: Number(b.dataset.issue), p_resolved: b.dataset.to === 'true' }); openPerson(id); });
   // 顯示證件：舊表證件顯示系統裡的縮圖（陸續換成 1200px 清楚版），點了開雲端原檔；本人上傳的顯示上傳的圖
   if ($('showdocs')) $('showdocs').onclick = async () => {
@@ -1623,6 +1629,22 @@ async function openPerson(id) {
     } catch (err) { b2.disabled = false; b2.textContent = '資料已核對'; $('dm').innerHTML = '<div class="msg err">處理失敗，請再試一次。</div>'; }
   };
   toDetail();
+  const dis = async v => { const r2 = await rpc('admin_set_person_disabled', { p_id: id, p_disabled: v }); if (!r2.ok) { $('delmsg').innerHTML = '<div class="msg err">操作失敗。</div>'; return; } flash('ok', v ? '已停用，這個人不能再登入。' : '已恢復。'); viewPeople(id); };
+  if ($('disable')) $('disable').onclick = () => { const b2 = $('disable'); if (!b2.dataset.sure) { b2.dataset.sure = '1'; b2.textContent = '確定停用？再按一次'; return; } dis(true); };
+  if ($('enable')) $('enable').onclick = () => dis(false);
+  if ($('delperson')) $('delperson').onclick = async () => {
+    const b2 = $('delperson'), m2 = $('delmsg');
+    if ($('delconfirm').value.trim().toUpperCase() !== String(p.national_id)) { m2.innerHTML = '<div class="msg err">身分證字號不一致，沒有刪除。</div>'; return; }
+    if (!b2.dataset.sure) { b2.dataset.sure = '1'; b2.textContent = '確定永久刪除？再按一次'; return; }
+    b2.disabled = true; b2.textContent = '刪除中…';
+    try {
+      const res = await fetch(FN, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: KEY }, body: JSON.stringify({ action: 'delete_person', admin_token: S.token, person_id: id, confirm: $('delconfirm').value }) });
+      const j = await res.json().catch(() => ({}));
+      if (j.error === 'session') { saveToken(null); return viewAuth('login', '登入已逾時，請重新登入。'); }
+      if (!j.ok) { m2.innerHTML = '<div class="msg err">' + ({ has_records: '這個人已經有薪資或出勤紀錄，不能刪除，請改用停用。', confirm: '身分證字號不一致，沒有刪除。', not_found: '找不到這個人，可能已經刪除。' }[j.error] || '刪除失敗，請再試一次。') + '</div>'; b2.disabled = false; b2.textContent = '永久刪除'; delete b2.dataset.sure; return; }
+      flash(j.cleanup_pending ? 'warn' : 'ok', '已永久刪除這個人與 ' + (j.files_removed || 0) + ' 個證件檔。' + (j.cleanup_pending ? '有部分檔案還沒刪乾淨，已記錄待清理，請通知系統管理者處理。' : '')); history.replaceState(null, '', '#/people'); viewPeople();
+    } catch (err) { m2.innerHTML = '<div class="msg err">刪除失敗，請再試一次。</div>'; b2.disabled = false; b2.textContent = '永久刪除'; }
+  };
   $('reset').onclick = async () => { const r2 = await rpc('admin_reset_password', { p_person: id }); $('dm').innerHTML = r2.ok ? '<div class="msg ok">已重設為生日 7 碼並解除鎖定。</div>' : '<div class="msg err">重設失敗。</div>'; };
 }
 

@@ -666,12 +666,12 @@ begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true, 'total', (select count(*) from public.people),
     'people', coalesce((select jsonb_agg(x) from (
-      select jsonb_build_object('id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone, 'source', p.profile_source, 'created_at', p.created_at,
+      select jsonb_build_object('id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone, 'source', p.profile_source, 'created_at', p.created_at, 'disabled', p.disabled_at is not null,
         'docs', (select count(*) from public.people_documents d where d.person_id = p.id and d.kind in ('id_front','id_back','bankbook')),
         'apps', (select count(*) from public.applications a where a.person_id = p.id),
         'open_issues', (select count(*) from public.data_issues i where i.person_id = p.id and i.payslip_id is null and not i.resolved and i.severity <> 'info')) x
       from public.people p
-      where v_q = '' or p.name ilike '%' || v_q || '%' or p.national_id ilike v_q || '%' or p.phone like '%' || v_q || '%'
+      where (v_q = '' and p.disabled_at is null) or v_q <> '' and (p.name ilike '%' || v_q || '%' or p.national_id ilike v_q || '%' or p.phone like '%' || v_q || '%')
       order by p.created_at desc, p.name limit 60) t), '[]'::jsonb));
 end $function$
 ;
@@ -688,6 +688,8 @@ begin
   select jsonb_build_object('id', p.id, 'name', p.name, 'nickname', p.nickname, 'admin_note', p.admin_note, 'national_id', p.national_id, 'birth_date', p.birth_date, 'birth_raw', p.birth_raw,
     'phone', p.phone, 'email', p.email, 'address', p.address, 'bank_code', p.bank_code, 'bank_branch', p.bank_branch, 'bank_account_name', p.bank_account_name,
     'bank_account', p.bank_account, 'source', p.profile_source, 'created_at', p.created_at, 'consent_at', p.consent_at,
+    'disabled_at', p.disabled_at, 'disabled_by', p.disabled_by,
+    'can_delete', not exists (select 1 from public.payslips x where x.person_id = p.id) and not exists (select 1 from public.attendance x where x.person_id = p.id),
     'has_password', p.password_hash is not null, 'password_changed', p.password_changed_at is not null, 'locked', p.locked_until is not null and p.locked_until > now(),
     'documents', coalesce((select jsonb_object_agg(d.kind, d.uploaded_at) from public.people_documents d where d.person_id = p.id), '{}'::jsonb),
       'doc_meta', coalesce((select jsonb_object_agg(d.kind, jsonb_build_object('link_only', d.path is null, 'drive', d.drive_file_id is not null, 'proof', d.downgraded_at is not null)) from public.people_documents d where d.person_id = p.id), '{}'::jsonb),
@@ -1275,7 +1277,8 @@ begin
      or (select count(*) from public.line_bind_failures where at > now() - interval '10 minutes') >= 60 then
     return jsonb_build_object('ok', false, 'error', 'too_many');
   end if;
-  delete from public.line_link_codes where code = p_code and expires_at > now() returning person_id into v_pid;
+  delete from public.line_link_codes c where c.code = p_code and c.expires_at > now()
+    and exists (select 1 from public.people p where p.id = c.person_id and p.disabled_at is null) returning c.person_id into v_pid;
   if v_pid is null then
     insert into public.line_bind_failures(line_user_id) values (p_user);
     return jsonb_build_object('ok', false, 'error', 'invalid');
@@ -2135,7 +2138,7 @@ begin
   if length(v_name) < 2 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
 
   select * into v from public.people where national_id = v_id for update;
-  if found and v.password_hash is null and v.birth_date is null and not (v.locked_until is not null and v.locked_until > now()) then
+  if found and v.disabled_at is null and v.password_hash is null and v.birth_date is null and not (v.locked_until is not null and v.locked_until > now()) then
     v_bank := regexp_replace(coalesce(v.bank_account,''), '\D', '', 'g');
     v_phone := regexp_replace(coalesce(v.phone,''), '\D', '', 'g');
     if v_phone ~ '^8869\d{8}$' then v_phone := '0' || substr(v_phone, 4); end if;
@@ -2211,7 +2214,7 @@ declare
 begin
   select * into v from public.people where national_id = v_id for update;
   -- 失敗一律回同樣的 invalid，不透露帳號是否存在或被鎖；每條路徑都做一次同成本雜湊
-  if not found or v.password_hash is null then
+  if not found or v.password_hash is null or v.disabled_at is not null then
     perform extensions.crypt(v_pw, extensions.gen_salt('bf', 10));
     return jsonb_build_object('ok', false, 'error', 'invalid');
   end if;
@@ -2441,7 +2444,8 @@ CREATE OR REPLACE FUNCTION public.payroll_session_person(p_token text)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-  select s.person_id from public.sessions s
+  -- 停用的人即使還有 session 也一律視為未登入
+  select s.person_id from public.sessions s join public.people p on p.id = s.person_id and p.disabled_at is null
   where s.token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') and s.expires_at > now();
 $function$
 ;
@@ -3270,3 +3274,60 @@ end $function$
 ;
 revoke all on function public.admin_payout_receipts(text, uuid) from public;
 grant execute on function public.admin_payout_receipts(text, uuid) to anon, authenticated;
+
+-- 刪除／停用人員（使用者決定 2026-11-27）：沒有薪資單、沒有出勤的人可以永久刪除（含證件檔，檔案由 docs 函式刪）；
+-- 有薪資或出勤紀錄的依勞基法要保存，只能「停用」：不能登入、預設不出現在人員名單，紀錄保留，可恢復
+alter table public.people add column if not exists disabled_at timestamptz;
+alter table public.people add column if not exists disabled_by text;
+
+CREATE OR REPLACE FUNCTION public.admin_delete_person(p_token text, p_id uuid, p_confirm text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 永久刪除：要輸入完整身分證字號確認；有薪資單或出勤就拒絕。回傳要刪的儲存檔路徑給 docs 函式清掉
+declare v_actor text := public.admin_actor(p_token); p public.people; v_paths text[];
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into p from public.people where id = p_id for update;
+  if p.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if upper(btrim(coalesce(p_confirm, ''))) <> p.national_id then return jsonb_build_object('ok', false, 'error', 'confirm'); end if;
+  if exists (select 1 from public.payslips where person_id = p.id) or exists (select 1 from public.attendance where person_id = p.id) then
+    return jsonb_build_object('ok', false, 'error', 'has_records');
+  end if;
+  select coalesce(array_agg(path), '{}') into v_paths from public.people_documents where person_id = p.id and path is not null;
+  delete from public.data_issues where person_id = p.id;
+  delete from public.people where id = p.id;
+  insert into public.audit_log(actor, action, table_name, row_id, detail)
+  values (v_actor, 'person_deleted', 'people', p.id, jsonb_build_object('national_id', public.payroll_mask_id(p.national_id), 'files', coalesce(array_length(v_paths, 1), 0)));
+  return jsonb_build_object('ok', true, 'paths', to_jsonb(v_paths));
+end $function$
+;
+revoke all on function public.admin_delete_person(text, uuid, text) from public, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_set_person_disabled(p_token text, p_id uuid, p_disabled boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 停用：不能登入（踢掉現有登入）、預設不出現在人員名單；紀錄全部保留。恢復則清掉停用
+declare v_actor text := public.admin_actor(p_token); v_n int;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_disabled is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+  update public.people set disabled_at = case when p_disabled then now() end, disabled_by = case when p_disabled then v_actor end
+   where id = p_id and (disabled_at is not null) <> p_disabled;
+  get diagnostics v_n = row_count;
+  if p_disabled then delete from public.sessions where person_id = p_id; delete from public.line_link_codes where person_id = p_id; end if;
+  if v_n > 0 then
+    insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, case when p_disabled then 'person_disabled' else 'person_enabled' end, 'people', p_id);
+  end if;
+  return jsonb_build_object('ok', true, 'updated', v_n);
+end $function$
+;
+revoke all on function public.admin_set_person_disabled(text, uuid, boolean) from public;
+grant execute on function public.admin_set_person_disabled(text, uuid, boolean) to anon, authenticated;
+
+grant execute on function public.admin_delete_person(text, uuid, text) to service_role;
