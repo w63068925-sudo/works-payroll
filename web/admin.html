@@ -1213,6 +1213,8 @@ function showQr(e) {
   let timer = null;
   overlay.innerHTML = `<div class="qrscreen"><p class="sub">掃描簽到／簽退</p><h1 style="margin:4px 0 18px">${esc(e.name)}</h1>
     <div class="qrbox" id="bigqr"><p class="sub">產生中…</p></div><p class="sub" style="margin-top:14px">每分鐘自動更換，請工讀生用手機相機掃描後登入。</p>
+    <a class="btn" id="selfck" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;margin-top:12px;opacity:.45;pointer-events:none" target="_blank" rel="noopener">我自己簽到／簽退（用這支手機）</a>
+    <p class="sub" style="margin-top:6px;font-size:12.5px">會開新分頁，用工讀生帳號登入後簽到或簽退；這個 QR 畫面會繼續開著。</p>
     <div id="qrshare" style="max-width:460px;margin:18px auto 0;text-align:left"></div>
     <button class="btn ghost" id="qrclose" style="margin-top:18px">關閉</button></div>`;
   const stop = () => { clearTimeout(timer); overlay.innerHTML = ''; };
@@ -1225,6 +1227,7 @@ function showQr(e) {
       const url = new URL('./', location.href).href + '?k=' + r.code;
       const q = qrcode(0, 'M'); q.addData(url); q.make();
       $('bigqr').innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+      const me = $('selfck'); if (me) { me.href = url; me.style.opacity = ''; me.style.pointerEvents = ''; }
       timer = setTimeout(tick, (Number(r.refresh_in) + 1) * 1000);
     } catch (err) { if (err.message === 'session') return stop(); timer = setTimeout(tick, 5000); }
   };

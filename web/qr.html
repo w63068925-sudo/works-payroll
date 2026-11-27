@@ -26,6 +26,8 @@ h1{font-size:22px;margin:6px 0 4px;line-height:1.35;max-width:560px}
 /* 2026-11-28 風格 A「溫暖好客」 */
 :root{--paper:#ffffff;--card:#ffffff;--ink:#222222;--muted:#6a6a6a;--line:#ebebeb;--danger:#c13515;--danger-soft:#fff0ed}
 body{font-family:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
+.selfbtn{display:inline-flex;align-items:center;justify-content:center;height:48px;padding:0 22px;margin:16px auto 0;border-radius:999px;background:#ff385c;color:#fff;font-weight:600;text-decoration:none;font-size:15px}
+.selfbtn[aria-disabled=true]{opacity:.45;pointer-events:none}
 </style>
 </head>
 <body>
@@ -65,12 +67,15 @@ async function tick() {
     built = true; document.title = r.event + '｜簽到/簽退 QR 碼';
     app.innerHTML = `<h1>${esc(r.event)}</h1><p class="sub">${esc(fmt(r.start_date))}${r.end_date !== r.start_date ? '–' + esc(fmt(r.end_date)) : ''}　掃描簽到／簽退</p>
       <div class="qr" id="qr"></div><div class="bar"><i id="bar"></i></div>
+      <a class="selfbtn" id="self" aria-disabled="true" target="_blank" rel="noopener">我自己簽到／簽退（用這支手機）</a>
       <div class="msg warn" id="net" hidden>網路不穩，QR 碼可能已過期，自動重試中…</div>
       <p class="foot">請工讀生用手機相機掃描，登入後完成簽到或簽退。QR 碼每分鐘自動更換，截圖或轉傳都會失效。<br>這個頁面請只在活動現場開給工讀生掃，不要轉傳。連結到 ${esc(tpe(r.expires_at))} 失效。</p>`;
   }
   document.getElementById('net').hidden = true;
   const url = new URL('./', location.href).href + '?k=' + r.code;
   const q = qrcode(0, 'M'); q.addData(url); q.make();
+  // 拿著這支手機的人自己也要簽到退：開新分頁走同一個簽到流程（這個 QR 頁繼續開著給大家掃）
+  const me = document.getElementById('self'); me.href = url; me.removeAttribute('aria-disabled');
   document.getElementById('qr').innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
   const left = Number(r.refresh_in) || 60, bar = document.getElementById('bar');
   bar.style.transition = 'none'; bar.style.width = (left / 60 * 100) + '%'; void bar.offsetWidth;
