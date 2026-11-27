@@ -1622,9 +1622,8 @@ begin
     insert into public.application_shifts(application_id, shift_id, status) select v_app, i, 'applied' from unnest(v_ids) i on conflict do nothing;
   end if;
   update public.applications set nda_accepted_at = now(), nda_hash = md5(public.payroll_nda_text()),
-    apply_contract_text = case when v_kind = 'pool' then apply_contract_text else v_ctext end,
-    apply_contract_hash = case when v_kind = 'pool' then apply_contract_hash else md5(v_ctext) end,
-    apply_contract_at = case when v_kind = 'pool' then apply_contract_at when v_ctext is not null then now() end
+    apply_contract_text = v_ctext, apply_contract_hash = md5(v_ctext),
+    apply_contract_at = case when v_ctext is not null then now() end
   where id = v_app;
   perform public.contract_recheck_app(v_app);
   insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'applied', 'applications', v_app,

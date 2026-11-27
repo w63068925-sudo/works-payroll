@@ -738,6 +738,15 @@ begin
     update public.events set location = '新地點' where id = e40;
     if (select contract_accepted_at from public.applications where id = a40) is not null then fails := fails || ' [40i material change kept]'; end if;
     if has_function_privilege('anon', 'public.payroll_contract_text_for(uuid,uuid,uuid[])', 'execute') then fails := fails || ' [40j text_for anon]'; end if;
+    -- 取消報名清掉同意；名單制報名沒有契約可同意，也會清掉之前的同意
+    perform public.admin_decide(atok, jsonb_build_array(jsonb_build_object('app', a40, 'shift', k1), jsonb_build_object('app', a40, 'shift', k2)), 'rejected');
+    perform public.payroll_withdraw(t40, 'regress-join-40');
+    if (select apply_contract_hash from public.applications where id = a40) is not null then fails := fails || ' [40l withdraw kept consent]'; end if;
+    perform pg_temp.tapply(t40, 'regress-join-40', jsonb_build_object('shift_ids', jsonb_build_array(k1, k2)));
+    if (select apply_contract_hash from public.applications where id = a40) is null then fails := fails || ' [40m reapply consent]'; end if;
+    perform public.admin_recruit_settings(atok, '{"mode":"pool"}');
+    perform pg_temp.tapply(t40, 'regress-join-40', '{}'::jsonb);
+    if (select apply_contract_hash from public.applications where id = a40) is not null then fails := fails || ' [40n pool kept consent]'; end if;
     update public.app_settings set value = coalesce(v_mode0, 'pick') where key = 'recruit_mode';
     update public.app_settings set value = coalesce(v_line0, 'false') where key = 'recruit_require_line';
   end;

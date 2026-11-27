@@ -806,9 +806,12 @@ async function viewRecruit(message) {
   let chash = null, cseq = 0;
   const loadC = async () => {
     if (!document.getElementById('ndatext')) return;
-    const my = ++cseq, pk0 = f.querySelector('input[name=plan]:checked');
-    let r; try { r = await rpc('payroll_contract_preview', { p_token: state.token, p_join: state.join, p_data: { shift_ids: [...f.querySelectorAll('input[name=sh]:checked')].map(x => x.value), plan_id: pk0 ? pk0.value : null } }); } catch (err) { return; }
-    if (my !== cseq || !r.ok) return;
+    const my = ++cseq, pk0 = f.querySelector('input[name=plan]:checked'), c0 = document.getElementById('cok');
+    // 先清掉上一次的契約與勾選，載入成功才換上新的內容
+    chash = null; if (c0) { c0.checked = false; c0.disabled = true; }
+    let r; try { r = await rpc('payroll_contract_preview', { p_token: state.token, p_join: state.join, p_data: { shift_ids: [...f.querySelectorAll('input[name=sh]:checked')].map(x => x.value), plan_id: pk0 ? pk0.value : null } }); } catch (err) { r = { ok: false }; }
+    if (my !== cseq) return;
+    if (!r.ok) { if (c0) document.getElementById('ctext').textContent = '契約內容載入失敗，請重新整理頁面。'; return; }
     document.getElementById('ndatext').textContent = r.nda_text;
     chash = r.hash || null;
     const c = document.getElementById('cok');
