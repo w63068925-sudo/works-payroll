@@ -200,6 +200,12 @@ Deno.serve(async (req: Request) => {
     // 舊表證件換清楚版：列出還是 500px 舊縮圖（-lthumb-）的雲端檔案 ID
     if (b.action === "legacy_hd_todo") {
       if (!(await importKeyOk())) return json({ ok: false, error: "key" }, 401);
+      // 優先名單：招募中、即將開始或 7 天內結束的活動裡的人（報名或出勤），先換這些人的證件
+      if (b.priority) {
+        const { data: pri, error: pErr } = await sb.rpc("legacy_hd_priority_ids", { p_limit: 200 });
+        if (pErr) return json({ ok: false, error: "db" });
+        return json({ ok: true, ids: [...new Set(((pri ?? []) as { drive_file_id: string }[]).map((r) => r.drive_file_id))] });
+      }
       const after = String(b.after ?? "");
       const limit = Math.min(200, Math.max(1, Number(b.limit) || 100));
       let q = sb.from("people_documents").select("drive_file_id").like("path", "%-lthumb-%").not("drive_file_id", "is", null).in("kind", ID_KINDS).order("drive_file_id").limit(limit);

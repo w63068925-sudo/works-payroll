@@ -3331,3 +3331,24 @@ revoke all on function public.admin_set_person_disabled(text, uuid, boolean) fro
 grant execute on function public.admin_set_person_disabled(text, uuid, boolean) to anon, authenticated;
 
 grant execute on function public.admin_delete_person(text, uuid, text) to service_role;
+
+CREATE OR REPLACE FUNCTION public.legacy_hd_priority_ids(p_limit integer)
+ RETURNS TABLE(drive_file_id text)
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  -- 舊證件換清楚版的優先名單：招募中、即將開始或 7 天內結束（未封存）的活動裡有報名或出勤的人，證件仍是 500px 舊縮圖
+  select distinct d.drive_file_id from public.people_documents d
+  where d.path like '%-lthumb-%' and d.drive_file_id is not null and d.kind in ('id_front','id_back','bankbook')
+    and d.person_id in (
+      select a.person_id from public.applications a join public.events e on e.id = a.event_id
+       where e.archived_at is null and (e.recruiting or coalesce(e.end_date, e.start_date) >= (now() at time zone 'Asia/Taipei')::date - 7)
+      union
+      select t.person_id from public.attendance t join public.events e on e.id = t.event_id
+       where e.archived_at is null and coalesce(e.end_date, e.start_date) >= (now() at time zone 'Asia/Taipei')::date - 7)
+  limit greatest(1, least(coalesce(p_limit, 200), 500));
+$function$
+;
+revoke all on function public.legacy_hd_priority_ids(integer) from public, anon, authenticated;
+grant execute on function public.legacy_hd_priority_ids(integer) to service_role;

@@ -241,6 +241,13 @@ function importHdThumbs() {
   try {
     const key = key_(), start = Date.now(), token = ScriptApp.getOAuthToken();
     continueLater_('importHdThumbs', 15);
+    // 先換優先名單（招募中、即將開始或剛結束的活動裡的人），最多每 3 小時一次，避免換不到的項目重複耗用額度；不動一般進度
+    if (Date.now() - Number(props.getProperty('hdPriAt') || 0) > 3 * 3600 * 1000) {
+      const pri = post_({ action: 'legacy_hd_todo', import_key: key, priority: true });
+      if (!pri.ok) Logger.log('優先名單取得失敗：' + pri.error + '，這輪先跑一般進度。');
+      else if (pri.ids.length) { hdBatch_(pri.ids, key, token, stat, start); Logger.log('優先名單 ' + pri.ids.length + ' 張已處理。'); }
+      props.setProperty('hdPriAt', String(Date.now()));
+    }
     while (true) {
       const todo = post_({ action: 'legacy_hd_todo', import_key: key, after: cursor, limit: 100 });
       if (!todo.ok) throw new Error('清單取得失敗：' + todo.error);
@@ -288,6 +295,24 @@ function importHdThumbs() {
   let left = 0;
   try { left = (post_({ action: 'legacy_hd_todo', import_key: key_(), after: '', limit: 200 }).ids || []).length; } catch (e) { left = -1; }
   hdLog_(stat, left === 0, left);
+}
+// 換一批指定的雲端檔案 ID（優先名單用）
+function hdBatch_(allIds, key, token, stat, start) {
+  for (let i = 0; i < allIds.length; i += 12) {
+    if (Date.now() - start > BUDGET_MS / 2) return;   // 留一半時間給一般進度
+    const ids = allIds.slice(i, i + 12), items = [];
+    UrlFetchApp.fetchAll(ids.map(id => hdReq_(id, token))).forEach((res, j) => {
+      if (isImage_(res) && res.getContent().length <= 1200 * 1024) items.push({ drive_file_id: ids[j], data: Utilities.base64Encode(res.getContent()) });
+      else stat.noThumb++;
+    });
+    UrlFetchApp.fetchAll(items.map(it => req_({ action: 'legacy_hd', import_key: key, items: [it] }))).forEach(res => {
+      if (res.getResponseCode() === 401) throw new Error('IMPORT_KEY 不正確或已過期');
+      let o = {};
+      try { o = JSON.parse(res.getContentText() || '{}'); } catch (e) { o = {}; }
+      if (!o.ok) { stat.failed++; return; }
+      o.results.forEach(r => { if (r === 'stored') stat.stored++; else stat.failed++; });
+    });
+  }
 }
 function hdLog_(stat, complete, left) {
   Logger.log((complete ? '清楚版全部換完。' : left > 0 ? '跑完 3 輪，還有 ' + (left >= 200 ? '200 張以上' : left + ' 張') + '換不到（雲端拿不到或格式不對），維持舊縮圖；要再試請重新執行 importHdThumbs。' : '還沒跑完，會自動接著跑。')

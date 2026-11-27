@@ -188,3 +188,5 @@
   - Codex 安全審查（gpt-6-luna，xhigh）：已修已發放的現金單重算會遺失發放紀錄（改為已發放不重算）、取消發放限已發布並拒絕 null、標已發放前須該活動已上傳簽收單、收據檢視先開視窗避免被擋、改回轉帳且無帳號時重開缺帳戶問題。未改：收據放在私有 documents bucket 的 receipts/ 路徑（審查以為要獨立 bucket，屬 brief 用語誤會）。
 - 2026-11-27 刪除／停用人員（使用者決定：沒薪資紀錄才能刪）：沒有薪資單與出勤的人可永久刪除（輸入完整身分證字號＋按兩次確認；admin_delete_person 只給 service_role，docs 函式 delete_person 刪資料後清掉該人資料夾所有檔案，稽核只存遮蔽身分證）；有紀錄的只能停用（admin_set_person_disabled：不能登入、刪 session 與 LINE 綁定碼、名單預設不顯示、可恢復）。regression 第 38 組。
   - Codex 安全審查（gpt-6-luna，xhigh）：已修停用者可經補生日開通取得 session（payroll_claim 與 payroll_session_person 都擋停用）、停用前的 LINE 綁定碼仍可用（停用時刪碼、line_bind 擋停用）、檔案刪除失敗仍報成功（分頁列檔、失敗回報待清理並記稽核）、補 cascade 與權限斷言（外鍵經查 sessions／event_staff／people_documents／applications／line_link_codes／notifications 皆 ON DELETE CASCADE，data_issues 先刪，payslips／attendance 有紀錄即拒絕）。
+- 2026-11-27 證件清楚版優先順序（使用者同意）：Google 每日抓圖額度用完後換圖暫停，改成每 3 小時先換「招募中、即將開始或 7 天內結束的活動」裡報名或出勤者的證件（legacy_hd_priority_ids，只給 service_role；docs 函式 legacy_hd_todo 加 priority），再跑一般進度。目前優先名單 101 張。
+  - Codex 審查（gpt-6-luna，medium）：已修優先名單取得失敗時只記錄後照跑一般進度、優先批次逐張送並檢查時間預算、優先名單每 3 小時最多抓一次（換不到的不會每輪重抓浪費額度）。未改：名單上限 200 筆無分頁（超過的由一般進度補上）；「即將開始」不設日期上限（所有未結束活動都算）。
