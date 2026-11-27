@@ -1330,10 +1330,24 @@ async function viewDocLink(personId, kind) {
   } catch (err) { j = { ok: false }; }
   if (j.error === 'session') { saveToken(null); return viewAuth('login', '登入已逾時，請重新登入。'); }
   const body = !j.ok ? '<div class="msg err">' + (j.error === 'missing' ? '這個人還沒有上傳' + esc(label) + '。' : '無法開啟證件，請稍後再試。') + '</div>'
-    : (j.url ? `<div class="card pad" style="text-align:center"><img src="${esc(j.url)}" alt="${esc(label)}" referrerpolicy="no-referrer" style="max-width:100%;max-height:75vh;border-radius:8px"></div>` : '')
+    : (j.url ? `<div class="row" style="align-items:center;margin-bottom:8px"><span class="dim">放大</span>${[100, 125, 150, 175, 200].map(z => `<button class="chip" data-zoom="${z}" aria-pressed="${z === 100}">${z}%</button>`).join('')}</div>
+        <div class="card pad" id="docbox" style="text-align:center;overflow:auto;max-height:80vh"><img id="docimg" src="${esc(j.url)}" alt="${esc(label)}" referrerpolicy="no-referrer" style="max-width:100%;max-height:75vh;border-radius:8px"></div>` : '')
       + (j.drive_url ? `<p class="sub" style="margin-top:10px">${j.url ? '這是縮圖。' : ''}<a href="${esc(j.drive_url)}" target="_blank" rel="noopener noreferrer">開啟雲端原檔</a>（需用有分享權限的 Google 帳號）</p>` : '');
   shell('people', `<div class="crumb"><a href="#/people/${esc(personId)}">人員資料</a> / ${esc(label)}</div>
     <div class="head"><div><h1>${esc(label)}</h1><p class="sub">這次開啟已留下調閱紀錄。圖片連結 2 分鐘後失效，需要時重新整理這頁。</p></div></div>${body}`);
+  // 放大：以「剛好放進畫面」的大小為 100%，放大後可在框內捲動查看
+  const img = $('docimg');
+  if (img) {
+    let base = 0;
+    const fit = () => { if (!base && img.clientWidth) base = img.clientWidth; };
+    img.addEventListener('load', fit); fit();
+    document.querySelectorAll('[data-zoom]').forEach(b => b.onclick = () => {
+      fit(); const z = Number(b.dataset.zoom);
+      document.querySelectorAll('[data-zoom]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      if (z === 100 || !base) { img.style.maxWidth = '100%'; img.style.maxHeight = '75vh'; img.style.width = ''; return; }
+      img.style.maxWidth = 'none'; img.style.maxHeight = 'none'; img.style.width = Math.round(base * z / 100) + 'px';
+    });
+  }
 }
 
 /* ---------- AI 匯入：在 claude.ai 匯入台整理好，貼回匯入碼，先檢查再寫入 ---------- */
