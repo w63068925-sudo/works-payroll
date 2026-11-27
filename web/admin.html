@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>薪資管理｜沃克思</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
 <style>
 :root{--paper:#f5f2ec;--card:#fffdf9;--ink:#1d1c1a;--muted:#6f6b63;--line:#e3ded3;--soft:#efebe3;--accent:#1f5c4a;--accent-soft:#e4efe9;--warn:#8a5a00;--warn-soft:#fbf1d9;--danger:#a3271f;--danger-soft:#fbe6e3;--num:"SF Mono","Roboto Mono",ui-monospace,Menlo,monospace}
 *{box-sizing:border-box}
@@ -162,6 +163,28 @@ th .xf.on{color:var(--accent);font-weight:700}
 .xpop .acts button{padding:5px 12px;border-radius:7px;border:1px solid var(--line);background:#fff;cursor:pointer}
 .xpop .acts button.ok{background:var(--ink);color:#fff;border-color:var(--ink)}
 .xnote{font-size:12.5px;color:var(--muted);padding:6px 12px}
+/* ===== 2026-11-28 風格 A「溫暖好客」：白與淺灰為底、#222 文字、珊瑚紅主要按鈕、膠囊按鈕、14px 圓角卡片 ===== */
+:root{--paper:#f7f7f7;--card:#ffffff;--ink:#222222;--muted:#6a6a6a;--line:#ebebeb;--soft:#f2f2f2;--brand:#ff385c;--brand-active:#e00b41;--danger:#c13515;--danger-soft:#fff0ed;--accent:#1d7a55;--accent-soft:#e7f5ee}
+body{font-family:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
+.card{border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.btn{border-radius:999px;background:var(--brand);transition:background-color .15s,border-color .15s}
+.btn:hover:not(:disabled){background:var(--brand-active)}
+.btn.ghost{background:#fff;color:var(--ink);border:1px solid #dddddd}
+.btn.ghost:hover:not(:disabled){background:#fff;border-color:var(--ink)}
+.bulk{border-radius:16px;box-shadow:0 6px 16px rgba(0,0,0,.12)}
+.bulk .btn,.bulk .btn:hover:not(:disabled){background:#fff;color:var(--ink)}
+.bulk .btn.ghost,.bulk .btn.ghost:hover:not(:disabled){background:none;color:#fff;border-color:rgba(255,255,255,.45)}
+.bulk input::placeholder{color:#929292}
+input[type=text],input[type=password],input[type=date],input[type=datetime-local],input[type=search],select,textarea{border-radius:10px;border-color:#dddddd}
+input:focus,select:focus,textarea:focus{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.nav{border-radius:12px}.nav.on{background:var(--soft);color:var(--ink);font-weight:700}
+th{background:transparent;color:var(--muted)}
+tbody tr[data-k]:hover{background:#fafafa}
+tbody tr.on{background:#fff1f3}
+.skeleton{background:linear-gradient(90deg,#ececec,#f6f6f6,#ececec);background-size:200% 100%}
+input[type=checkbox],input[type=radio]{accent-color:var(--ink)}
+.btn.ghost:hover{border-color:var(--ink)}
+.qrbox{border-radius:14px}
 </style>
 </head>
 <body>

@@ -6,6 +6,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
 <title>薪資查詢｜沃克思</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap">
 <style>
 :root{
   --paper:#f5f2ec; --card:#fffdf9; --ink:#1d1c1a; --muted:#6f6b63; --line:#e3ded3;
@@ -128,6 +129,18 @@ th{font-size:12px;color:var(--muted);letter-spacing:.06em}
   .card{border-color:#bbb;break-inside:avoid}
   .hero .net{font-size:32px}
 }
+/* ===== 2026-11-28 風格 A「溫暖好客」 ===== */
+:root{--paper:#ffffff;--card:#ffffff;--ink:#222222;--muted:#6a6a6a;--line:#ebebeb;--brand:#ff385c;--brand-active:#e00b41;--danger:#c13515;--danger-soft:#fff0ed;--accent:#1d7a55;--accent-soft:#e7f5ee}
+body{font-family:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
+.card{box-shadow:0 6px 16px rgba(0,0,0,.06)}
+.btn{border-radius:999px;background:var(--brand);transition:background-color .15s}
+.btn:hover:not(:disabled){background:var(--brand-active)}
+.btn.ghost,.btn.ghost:hover:not(:disabled){background:#fff;color:var(--ink);border:1px solid #dddddd}
+input[type=text],input[type=password]{border-radius:12px;border-color:#dddddd}
+input:focus{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.slip:hover{border-color:#c1c1c1}
+.skeleton{background:linear-gradient(90deg,#ececec,#f6f6f6,#ececec);background-size:200% 100%}
+input[type=checkbox],input[type=radio]{accent-color:var(--ink)}
 </style>
 </head>
 <body>
