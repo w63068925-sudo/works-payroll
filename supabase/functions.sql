@@ -1737,6 +1737,7 @@ begin
   if e.start_date is null or v_today < e.start_date or v_today > coalesce(e.end_date, e.start_date) + 1 then
     return jsonb_build_object('ok', false, 'error', 'not_event_day', 'event', e.name);
   end if;
+  perform pg_advisory_xact_lock(hashtext('payroll_clock:' || v_pid::text));
   select * into v_open from public.attendance a where a.person_id = v_pid and a.event_id = e.id
     and a.clock_in is not null and a.clock_out is null and a.clock_in > now() - interval '20 hours' order by a.clock_in desc limit 1;
   if p_action = 'in' then
