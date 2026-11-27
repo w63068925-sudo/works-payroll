@@ -193,6 +193,10 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&a
 const money = n => n == null ? '—' : Number(n).toLocaleString('zh-TW');
 const tpe = s => { s = String(s); return s.length > 10 && s.includes('T') ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date(s)) : s.slice(0, 10); };
 const d = s => s ? tpe(s).replace(/-/g, '/') : '—';
+// 班次時間下拉：每 30 分鐘一格；原本不在半點的時間也保留成選項
+const timeOpts = cur => { const t = []; for (let m = 0; m < 1440; m += 30) t.push(String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'));
+  if (cur && !t.includes(cur)) { t.push(cur); t.sort(); }
+  return '<option value="">選擇時間</option>' + t.map(v => `<option value="${v}" ${v === cur ? 'selected' : ''}>${v}</option>`).join(''); };
 const md = s => s ? String(s).slice(5, 10).replace('-', '/') : '—';
 const hm = t => t ? String(t).slice(11, 16) : '—';
 const dur = m => m == null ? '—' : Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0');
@@ -983,7 +987,7 @@ async function openDetail(kind, key, e, keepScroll) {
     box.innerHTML = `${close}<h1 style="font-size:19px">${x ? '修改班次' : '新增班次'}</h1>
       <label for="sd">${x ? '日期' : '日期（從）'}</label><input id="sd" type="date" value="${esc(x ? x.work_date : (e.start_date || ''))}">
       ${x ? '' : `<label for="su">到（同樣的班連續多天，單日可留空）</label><input id="su" type="date" value="${esc(e.end_date && e.end_date !== e.start_date ? e.end_date : '')}">`}
-      <div class="row" style="margin-top:14px"><div class="grow"><label for="ss">開始</label><input id="ss" type="text" inputmode="numeric" placeholder="10:00" value="${esc(x ? x.start : '')}"></div><div class="grow"><label for="se">結束</label><input id="se" type="text" inputmode="numeric" placeholder="18:30" value="${esc(x ? x.end : '')}"></div></div>
+      <div class="row" style="margin-top:14px"><div class="grow"><label for="ss">開始</label><select id="ss">${timeOpts(x ? x.start : '')}</select></div><div class="grow"><label for="se">結束</label><select id="se">${timeOpts(x ? x.end : '')}</select></div></div>
       <label for="sr">崗位</label><input id="sr" type="text" placeholder="PT" value="${esc(x ? x.role || '' : '')}">
       <div class="row" style="margin-top:14px"><div class="grow"><label for="sh">需要人數</label><input id="sh" type="text" inputmode="numeric" value="${esc(x ? x.headcount : '1')}"></div><div class="grow"><label for="sp">時薪（留空＝活動預設）</label><input id="sp" type="text" inputmode="decimal" value="${esc(x && x.rate != null ? Number(x.rate) : '')}"></div></div>
       <label for="sn">備註（工讀生看得到）</label><input id="sn" type="text" placeholder="需自備黑色長褲" value="${esc(x ? x.note || '' : '')}">
