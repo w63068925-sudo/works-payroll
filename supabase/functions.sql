@@ -1677,7 +1677,8 @@ declare v_phone text := regexp_replace(coalesce(p->>'phone',''), '\D', '', 'g');
 begin
   if v_phone !~ '^09\d{8}$' then return jsonb_build_object('error', 'bad_phone'); end if;
   if length(v_addr) < 8 then return jsonb_build_object('error', 'bad_address'); end if;
-  if v_email <> '' and v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then return jsonb_build_object('error', 'bad_email'); end if;
+  if v_email = '' then return jsonb_build_object('error', 'no_email'); end if;
+  if length(v_email) > 120 or v_email !~ '^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$' then return jsonb_build_object('error', 'bad_email'); end if;
   if v_code !~ '^\d{3}$' then return jsonb_build_object('error', 'bad_bank_code'); end if;
   if v_acct !~ '^\d{6,16}$' then return jsonb_build_object('error', 'bad_bank_account'); end if;
   if v_an <> btrim(p_name) then return jsonb_build_object('error', 'payee_not_self'); end if;

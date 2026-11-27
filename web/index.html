@@ -482,10 +482,10 @@ function viewPassword() {
   });
 }
 
-const PERR = { bad_phone: '手機號碼請填 09 開頭的 10 碼。', bad_address: '請填完整的戶籍地址（含鄰里）。', bad_email: 'Email 格式不正確。', bad_bank_code: '銀行代碼是 3 個數字，例如 822。', bad_bank_account: '銀行帳號請只填數字（6 到 16 碼）。', payee_not_self: '戶名必須和本人姓名相同，薪資依法只能匯入本人帳戶。', bad_national_id: '身分證字號不正確，請再檢查一次。', bad_name: '請填寫姓名。', bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', exists: '這個身分證字號已經有資料了，請直接登入。', no_consent: '請勾選同意聲明。', bad_join: '報名連結已失效，請向活動負責人索取新的連結。', bad_ticket: 'Email 驗證已過期，請重新取得驗證碼。', ticket_mismatch: '身分證字號要和驗證 Email 時填的一樣。' };
+const PERR = { bad_phone: '手機號碼請填 09 開頭的 10 碼。', bad_address: '請填完整的戶籍地址（含鄰里）。', bad_email: 'Email 格式不正確。', no_email: '請填寫 Email，錄取通知會寄到這裡。', bad_bank_code: '銀行代碼是 3 個數字，例如 822。', bad_bank_account: '銀行帳號請只填數字（6 到 16 碼）。', payee_not_self: '戶名必須和本人姓名相同，薪資依法只能匯入本人帳戶。', bad_national_id: '身分證字號不正確，請再檢查一次。', bad_name: '請填寫姓名。', bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', exists: '這個身分證字號已經有資料了，請直接登入。', no_consent: '請勾選同意聲明。', bad_join: '報名連結已失效，請向活動負責人索取新的連結。', bad_ticket: 'Email 驗證已過期，請重新取得驗證碼。', ticket_mismatch: '身分證字號要和驗證 Email 時填的一樣。' };
 const profileFields = (p, withName) => `
   <label for="ph">手機</label><input id="ph" type="tel" inputmode="numeric" maxlength="10" value="${esc(p.phone || '')}" placeholder="0912345678" required>
-  <label for="em">Email（選填）</label><input id="em" type="email" value="${esc(p.email || '')}">
+  <label for="em">Email（必填，錄取通知會寄到這裡）</label><input id="em" type="email" required autocomplete="email" value="${esc(p.email || '')}">
   <label for="ad">戶籍地址（需與身分證相同，含鄰里）</label><input id="ad" type="text" value="${esc(p.address || '')}" required>
   <h2>薪資匯款帳戶（須為本人帳戶）</h2>
   <label for="bk" style="margin-top:0">銀行</label><select id="bk"><option value="">選擇銀行（找不到就直接填下面的代碼）</option>${BANKS.map(([c, n]) => `<option value="${c}" ${c === p.bank_code ? 'selected' : ''}>${c} ${n}</option>`).join('')}</select>
