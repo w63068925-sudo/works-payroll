@@ -27,7 +27,8 @@ h1{font-size:22px;margin:6px 0 4px;line-height:1.35;max-width:560px}
 :root{--paper:#ffffff;--card:#ffffff;--ink:#222222;--muted:#6a6a6a;--line:#ebebeb;--danger:#c13515;--danger-soft:#fff0ed}
 body{font-family:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
 .selfbtn{display:inline-flex;align-items:center;justify-content:center;height:48px;padding:0 22px;margin:16px auto 0;border-radius:999px;background:#ff385c;color:#fff;font-weight:600;text-decoration:none;font-size:15px}
-.selfbtn[aria-disabled=true]{opacity:.45;pointer-events:none}
+.selfbtn{border:0;cursor:pointer;font:inherit}.selfbtn:disabled{opacity:.5}
+.msg.ok{background:#e7f5ee;color:#1d7a55}.msg a{color:inherit;font-weight:600}
 </style>
 </head>
 <body>
@@ -47,6 +48,52 @@ const share = (location.hash.match(/[#&]s=([0-9a-f]{48})/) || [])[1];
 let timer = null, lock = null, built = false, fails = 0;
 
 function fatal(text) { clearTimeout(timer); app.innerHTML = '<div class="msg err">' + esc(text) + '</div>'; }
+
+// 拿著 QR 畫面的人自己簽到／簽退：在這個畫面直接完成並顯示結果，QR 碼留在上方繼續給大家掃
+// 用這支手機上的工讀生登入（工讀生頁登入時存的憑證）；沒登入才開新分頁去登入
+function selfClockWidget(box, getUrl, getCode) {
+  const wTok = () => { try { return sessionStorage.getItem('payroll_token') || localStorage.getItem('payroll_token_keep'); } catch (e) { return null; } };
+  const wrpc = async (name, body) => { const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!res.ok) throw new Error('連線失敗'); return res.json(); };
+  const e2 = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  box.innerHTML = '<button type="button" class="selfbtn" id="selfgo">我自己簽到／簽退</button><div id="selfmsg"></div>';
+  const msg = (type, html) => { box.querySelector('#selfmsg').innerHTML = '<div class="msg ' + type + '" style="margin-top:12px;text-align:left">' + html + '</div>'; };
+  const go = box.querySelector('#selfgo');
+  let ticket = null, ticketCode = null;
+  const run = async (action, ack) => {
+    const tok = wTok();
+    if (!tok) { msg('warn', '這支手機還沒用工讀生帳號登入。<a href="' + e2(getUrl()) + '" target="_blank" rel="noopener">登入並簽到</a>（會開新分頁，登入時勾「保持登入」，之後就能在這裡直接簽）。'); return; }
+    go.disabled = true;
+    try {
+      const code = getCode();
+      if (!code) { msg('warn', 'QR 碼還在產生，請稍等再按。'); return; }
+      if (!ticket || ticketCode !== code) {
+        const t = await wrpc('payroll_checkin_ticket', { p_code: code });
+        if (!t.ok) { msg('warn', 'QR 碼剛好更新，請再按一次。'); ticket = null; return; }
+        ticket = t.ticket; ticketCode = code;
+      }
+      let st = await wrpc('payroll_clock', { p_token: tok, p_ticket: ticket, p_action: 'status' });
+      if (st.error === 'session') { msg('warn', '這支手機的工讀生登入已過期。<a href="' + e2(getUrl()) + '" target="_blank" rel="noopener">重新登入並簽到</a>'); return; }
+      if (st.error === 'ticket') { ticket = null; msg('warn', 'QR 碼剛好更新，請再按一次。'); return; }
+      const who = st.me ? e2(st.me) + '：' : '';
+      const state = st.state || 'none';
+      if (state === 'done') { msg('ok', who + '今天已完成簽到（' + e2(st.clock_in) + '）與簽退（' + e2(st.clock_out) + '）。'); return; }
+      if (state === 'none' && st.block) { msg('warn', who + (st.block === 'not_scheduled' ? '你今天沒有被排到這場活動的班，無法簽到。' : '今天不在這場活動的日期內，無法簽到。')); return; }
+      const act = action || (state === 'in' ? 'out' : 'in');
+      const r = await wrpc('payroll_clock', { p_token: tok, p_ticket: ticket, p_action: act, p_ack: !!ack });
+      if (r.error === 'need_ack' && r.notice) {
+        box.querySelector('#selfmsg').innerHTML = '<div class="msg warn" style="margin-top:12px;text-align:left">' + who + e2(r.notice.text) + '<div style="display:flex;gap:8px;margin-top:10px"><button type="button" class="selfbtn" id="selfok" style="margin:0;height:40px">確定' + (act === 'out' ? '簽退' : '簽到') + '</button><button type="button" class="selfbtn" id="selfno" style="margin:0;height:40px;background:#fff;color:#222;border:1px solid #ddd">先不要</button></div></div>';
+        box.querySelector('#selfok').onclick = () => run(act, true);
+        box.querySelector('#selfno').onclick = () => { box.querySelector('#selfmsg').innerHTML = ''; };
+        return;
+      }
+      if (r.ok) { msg('ok', who + (act === 'in' ? '已簽到，時間 ' + e2(r.clock_in) + '。' : '已簽退，時間 ' + e2(r.clock_out) + '。辛苦了。')); return; }
+      msg('warn', who + ({ not_scheduled: '你今天沒有被排到這場活動的班，無法簽到。', not_event_day: '今天不在這場活動的日期內。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '還沒簽到，無法簽退。' }[r.error] || '沒有完成，請再試一次。'));
+    } catch (err) { msg('warn', '網路連線失敗，請再按一次。'); }
+    finally { go.disabled = false; }
+  };
+  go.onclick = () => run();
+}
+let curUrl = '', curCode = '';
 async function rpc(name, body) {
   const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error('連線失敗（' + res.status + '）');
@@ -67,7 +114,7 @@ async function tick() {
     built = true; document.title = r.event + '｜簽到/簽退 QR 碼';
     app.innerHTML = `<h1>${esc(r.event)}</h1><p class="sub">${esc(fmt(r.start_date))}${r.end_date !== r.start_date ? '–' + esc(fmt(r.end_date)) : ''}　掃描簽到／簽退</p>
       <div class="qr" id="qr"></div><div class="bar"><i id="bar"></i></div>
-      <a class="selfbtn" id="self" aria-disabled="true" target="_blank" rel="noopener">我自己簽到／簽退（用這支手機）</a>
+      <div id="selfbox" style="max-width:440px;margin:0 auto"></div>
       <div class="msg warn" id="net" hidden>網路不穩，QR 碼可能已過期，自動重試中…</div>
       <p class="foot">請工讀生用手機相機掃描，登入後完成簽到或簽退。QR 碼每分鐘自動更換，截圖或轉傳都會失效。<br>這個頁面請只在活動現場開給工讀生掃，不要轉傳。連結到 ${esc(tpe(r.expires_at))} 失效。</p>`;
   }
@@ -75,7 +122,8 @@ async function tick() {
   const url = new URL('./', location.href).href + '?k=' + r.code;
   const q = qrcode(0, 'M'); q.addData(url); q.make();
   // 拿著這支手機的人自己也要簽到退：開新分頁走同一個簽到流程（這個 QR 頁繼續開著給大家掃）
-  const me = document.getElementById('self'); me.href = url; me.removeAttribute('aria-disabled');
+  curUrl = url; curCode = r.code;
+  if (!document.getElementById('selfgo')) selfClockWidget(document.getElementById('selfbox'), () => curUrl, () => curCode);
   document.getElementById('qr').innerHTML = q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
   const left = Number(r.refresh_in) || 60, bar = document.getElementById('bar');
   bar.style.transition = 'none'; bar.style.width = (left / 60 * 100) + '%'; void bar.offsetWidth;
