@@ -1767,7 +1767,8 @@ begin
   elsif p_action = 'out' then
     if v_open.id is null then return jsonb_build_object('ok', false, 'error', 'not_in', 'event', e.name) || public.checkin_state(v_pid, e.id); end if;
     -- 剛簽到不到 30 分鐘就簽退：多半是重複掃碼，先請本人確認，避免上班馬上變下班、工時歸零
-    if v_now < v_open.clock_in + interval '30 minutes' and not coalesce(p_ack, false) then
+    if v_now < v_open.clock_in + interval '30 minutes' and not coalesce(p_ack, false)
+       and not (v_open.sched_out is not null and v_now >= v_open.sched_out + interval '1 minute') then
       v_n := floor(extract(epoch from v_now - v_open.clock_in) / 60);
       return jsonb_build_object('ok', false, 'error', 'need_ack', 'event', e.name, 'notice', jsonb_build_object('kind', 'quick_out', 'minutes', v_n,
         'text', format('你在 %s 才簽到（%s 分鐘前）。如果剛才只是又掃了一次 QR 碼，請按「先不要」；確定簽退的話，今天的工時會結算到現在。',
@@ -1778,6 +1779,9 @@ begin
       v_kind := 'overtime'; v_n := floor(extract(epoch from v_now - v_open.sched_out) / 60);
       v_text := format('表定下班時間為 %s，現在已超過 %s 分鐘。延長工時須經現場主管核准才計薪，未核准的部分工資計算到 %s。如果是主管要求你留下工作，請告訴主管在系統核准。',
         to_char(v_open.sched_out at time zone 'Asia/Taipei', 'HH24:MI'), v_n, to_char(v_open.sched_out at time zone 'Asia/Taipei', 'HH24:MI'));
+      if v_now < v_open.clock_in + interval '30 minutes' then
+        v_text := format('你在 %s 才簽到，如果只是又掃了一次 QR 碼請按「先不要」。', to_char(v_open.clock_in at time zone 'Asia/Taipei', 'HH24:MI')) || v_text;
+      end if;
       if not coalesce(p_ack, false) then
         return jsonb_build_object('ok', false, 'error', 'need_ack', 'event', e.name, 'notice', jsonb_build_object('kind', v_kind, 'minutes', v_n, 'text', v_text)) || public.checkin_state(v_pid, e.id);
       end if;
@@ -3748,6 +3752,7 @@ begin
     if v_mode not in ('pool', 'plans', 'pick') then return jsonb_build_object('ok', false, 'error', 'bad_mode'); end if;
     v_line := coalesce(p_patch->>'require_line', coalesce(public.setting('recruit_require_line'), 'false'));
     if v_line not in ('true', 'false') then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+    if p_patch ? 'require_email' and coalesce(p_patch->>'require_email', '') not in ('true', 'false') then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
     if v_line = 'true' and not (nullif(btrim(coalesce(public.setting('line_basic_id'), '')), '') is not null and coalesce(public.setting('line_enabled'), 'true') = 'true') then
       return jsonb_build_object('ok', false, 'error', 'line_not_ready');
     end if;

@@ -767,8 +767,33 @@ begin
     if (public.payroll_profile(t41)->'profile'->>'require_line')::boolean is not true then fails := fails || ' [41e profile flag]'; end if;
     update public.people set line_user_id = 'Uregress41' where id = p41;
     if (public.payroll_update_profile(t41, b41 || '{"email":"r41@example.com"}')->>'ok')::boolean is not true then fails := fails || ' [41f linked save]'; end if;
+    -- 設定值有錯時整筆不寫入
+    perform public.admin_recruit_settings(atok, '{"mode":"pick"}');
+    perform public.admin_recruit_settings(atok, '{"mode":"pool","require_email":"x"}');
+    if public.recruit_mode() <> 'pick' then fails := fails || ' [41g partial settings]'; end if;
     perform public.admin_recruit_settings(atok, '{"require_line":"false","require_email":"true"}');
   end;
 
-  if fails = '' then raise exception 'PASS 全部 41 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 42. 剛簽到不到 30 分鐘就簽退要先確認；同時超過表定下班時只跳一次超時提醒（含剛簽到的說明），確認後記成 overtime
+  declare e42 uuid; s42 uuid; p42 uuid; a42 uuid; t42 text := encode(extensions.gen_random_bytes(16), 'hex'); d42 date := (now() at time zone 'Asia/Taipei')::date;
+  begin
+    insert into public.events(employer_id, name, start_date, end_date) values (emp, '回歸42', d42 - 1, d42 + 1) returning id into e42;
+    insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values (e42, d42, '00:00', '23:59', 2) returning id into s42;
+    insert into public.people(national_id, name, birth_date, profile_source) values ('Z999990420', '測試四二', '2000-01-01', 'test') returning id into p42;
+    insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(t42, 'sha256'), 'hex'), p42, now() + interval '1 hour');
+    insert into public.applications(event_id, person_id, status) values (e42, p42, 'active') returning id into a42;
+    insert into public.application_shifts(application_id, shift_id, status) values (a42, s42, 'accepted');
+    insert into public.checkin_tickets(ticket_hash, event_id, expires_at) values (encode(extensions.digest('regress-t42', 'sha256'), 'hex'), e42, now() + interval '10 minutes');
+    insert into public.attendance(person_id, event_id, work_date, clock_in, source, sched_in, sched_out) values (p42, e42, d42, now() - interval '5 minutes', 'qr', now() - interval '2 hours', now() + interval '3 hours');
+    r := public.payroll_clock(t42, 'regress-t42', 'out');
+    if r->'notice'->>'kind' is distinct from 'quick_out' or exists (select 1 from public.attendance where person_id = p42 and clock_out is not null) then fails := fails || ' [42a quick out ' || r::text || ']'; end if;
+    -- 剛簽到但已超過表定下班：只跳超時提醒，文字含剛簽到說明；確認後記 overtime
+    update public.attendance set sched_out = now() - interval '2 minutes' where person_id = p42;
+    r := public.payroll_clock(t42, 'regress-t42', 'out');
+    if r->'notice'->>'kind' is distinct from 'overtime' or r->'notice'->>'text' not like '%才簽到%' then fails := fails || ' [42b overtime first ' || r::text || ']'; end if;
+    r := public.payroll_clock(t42, 'regress-t42', 'out', true);
+    if (r->>'ok')::boolean is not true or (select out_notice from public.attendance where person_id = p42) is distinct from 'overtime' then fails := fails || ' [42c ack recorded ' || r::text || ']'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 42 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;
