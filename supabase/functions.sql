@@ -255,7 +255,7 @@ begin
         where x.shift_id = v_shift and x.status = 'accepted' and ax.status = 'active') >= s.headcount then
       full_list := full_list || to_jsonb(to_char(s.work_date, 'MM/DD') || ' ' || coalesce(s.role, '')); continue;
     end if;
-    if p_status = 'accepted' and exists (select 1 from public.application_shifts x2 join public.applications a2 on a2.id = x2.application_id join public.shifts s2 on s2.id = x2.shift_id
+    if p_status = 'accepted' and not (select is_test from public.people where id = a.person_id) and exists (select 1 from public.application_shifts x2 join public.applications a2 on a2.id = x2.application_id join public.shifts s2 on s2.id = x2.shift_id
         where a2.person_id = a.person_id and a2.status = 'active' and x2.status = 'accepted' and s2.id <> s.id and s2.work_date between s.work_date - 1 and s.work_date + 1
           and (s2.work_date + s2.start_time, s2.work_date + s2.end_time + case when s2.end_time <= s2.start_time then interval '1 day' else interval '0' end)
               overlaps (s.work_date + s.start_time, s.work_date + s.end_time + case when s.end_time <= s.start_time then interval '1 day' else interval '0' end)) then
@@ -694,7 +694,7 @@ begin
   select jsonb_build_object('id', p.id, 'name', p.name, 'nickname', p.nickname, 'admin_note', p.admin_note, 'national_id', p.national_id, 'birth_date', p.birth_date, 'birth_raw', p.birth_raw,
     'phone', p.phone, 'email', p.email, 'address', p.address, 'bank_code', p.bank_code, 'bank_branch', p.bank_branch, 'bank_account_name', p.bank_account_name,
     'bank_account', p.bank_account, 'source', p.profile_source, 'created_at', p.created_at, 'consent_at', p.consent_at,
-    'disabled_at', p.disabled_at, 'disabled_by', p.disabled_by,
+    'disabled_at', p.disabled_at, 'disabled_by', p.disabled_by, 'is_test', p.is_test,
     'can_delete', not exists (select 1 from public.payslips x where x.person_id = p.id) and not exists (select 1 from public.attendance x where x.person_id = p.id),
     'has_password', p.password_hash is not null, 'password_changed', p.password_changed_at is not null, 'locked', p.locked_until is not null and p.locked_until > now(),
     'documents', coalesce((select jsonb_object_agg(d.kind, d.uploaded_at) from public.people_documents d where d.person_id = p.id), '{}'::jsonb),
@@ -3682,7 +3682,7 @@ begin
                where y.shift_id = s.id and y.status = 'accepted' and ay.status = 'active') >= s.headcount) then
         full_list := full_list || to_jsonb(v_name); continue;
       end if;
-      if exists (select 1 from public.application_shifts x join public.shifts s on s.id = x.shift_id
+      if not (select is_test from public.people where id = a.person_id) and exists (select 1 from public.application_shifts x join public.shifts s on s.id = x.shift_id
           join public.application_shifts x2 on x2.status = 'accepted' join public.applications a2 on a2.id = x2.application_id and a2.status = 'active' and a2.person_id = a.person_id
           join public.shifts s2 on s2.id = x2.shift_id
           where x.application_id = a.id and x.status <> 'accepted' and s2.id <> s.id and s2.work_date between s.work_date - 1 and s.work_date + 1
@@ -3922,3 +3922,24 @@ AS $function$
 $function$
 ;
 revoke all on function public.require_email() from public, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_set_person_test(p_token text, p_id uuid, p_test boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 測試帳號：不受「同一時段只能錄取一班」限制，方便跨活動測試（2026-11-28 使用者要求）
+declare v_actor text := public.admin_actor(p_token);
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_test is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+  update public.people set is_test = p_test, updated_at = now() where id = p_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'person_test_flag', 'people', p_id, jsonb_build_object('is_test', p_test));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+-- people.is_test（2026-11-28）
+revoke all on function public.admin_set_person_test(text, uuid, boolean) from public;
+grant execute on function public.admin_set_person_test(text, uuid, boolean) to anon, authenticated, service_role;

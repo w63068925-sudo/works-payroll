@@ -1707,6 +1707,9 @@ async function openPerson(id) {
       <td class="r">${x.slip ? money(x.slip.net) + ' <span class="badge ' + esc(x.slip.status) + '">' + STATUS[x.slip.status] + '</span>' : '<span class="dim">沒有薪資單</span>'}</td></tr>`).join('') + '</table>' : '<h2>參加過的活動</h2><p class="sub">還沒有參加紀錄。</p>'}
     <h2>帳號</h2><p class="sub">${p.has_password ? (p.password_changed ? '已自行更改密碼。' : '使用預設密碼（生日）。') : '沒有生日資料，尚無法登入。'}${p.locked ? ' 目前因輸入錯誤被鎖定。' : ''}</p>
     <div id="dm" style="margin-top:10px"></div><button class="btn ghost" id="reset" ${p.birth_date ? '' : 'disabled'}>重設為預設密碼並解除鎖定</button>
+    <h2>測試帳號</h2>
+    <p class="sub">${p.is_test ? '這是測試帳號：不受「同一時段只能錄取一班」限制，可以在不同活動同時段錄取。' : '標成測試帳號後，不受「同一時段只能錄取一班」限制，方便跨活動測試。正式工讀生不要標。'}</p>
+    <button class="btn ghost" id="testflag">${p.is_test ? '取消測試帳號' : '標為測試帳號'}</button>
     <h2>刪除或停用</h2>
     ${p.disabled_at ? `<div class="msg warn">已於 ${esc(d(p.disabled_at))} 由 ${esc(p.disabled_by || '')} 停用：不能登入，人員名單預設不顯示（搜尋得到）。</div><button class="btn ghost" id="enable">恢復這個人</button>` : ''}
     ${p.can_delete ? `<p class="sub">這個人沒有薪資單也沒有出勤紀錄，可以永久刪除：基本資料、報名、證件與照片會一起刪掉，無法復原。</p>
@@ -1750,6 +1753,7 @@ async function openPerson(id) {
   const dis = async v => { const r2 = await rpc('admin_set_person_disabled', { p_id: id, p_disabled: v }); if (!r2.ok) { $('delmsg').innerHTML = '<div class="msg err">操作失敗。</div>'; return; } flash('ok', v ? '已停用，這個人不能再登入。' : '已恢復。'); viewPeople(id); };
   if ($('disable')) $('disable').onclick = () => { const b2 = $('disable'); if (!b2.dataset.sure) { b2.dataset.sure = '1'; b2.textContent = '確定停用？再按一次'; return; } dis(true); };
   if ($('enable')) $('enable').onclick = () => dis(false);
+  if ($('testflag')) $('testflag').onclick = async () => { const r3 = await rpc('admin_set_person_test', { p_id: id, p_test: !p.is_test }); if (!r3.ok) { $('delmsg').innerHTML = '<div class="msg err">操作失敗。</div>'; return; } flash('ok', !p.is_test ? '已標為測試帳號。' : '已取消測試帳號。'); viewPeople(id); };
   if ($('delperson')) $('delperson').onclick = async () => {
     const b2 = $('delperson'), m2 = $('delmsg');
     if ($('delconfirm').value.trim().toUpperCase() !== String(p.national_id)) { m2.innerHTML = '<div class="msg err">身分證字號不一致，沒有刪除。</div>'; return; }
