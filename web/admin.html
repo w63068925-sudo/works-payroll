@@ -991,6 +991,7 @@ async function openDetail(kind, key, e, keepScroll) {
     box.innerHTML = `${close}<h1 style="font-size:19px">${esc(a.name)}</h1><p class="sub" style="margin-top:4px">${esc(a.national_id)}　${esc(a.phone || '')}　${a.past_events ? '合作過 ' + a.past_events + ' 場' : '第一次合作'}</p>
       <div class="row" style="margin-top:10px">${a.has_photo ? '<button class="btn ghost sm" id="photo">看照片</button>' : ''}<button class="btn ghost sm" id="toperson">人員資料（證件 ${a.docs}/3）</button></div>
       ${qs.length || a.experience ? '<h2>報名內容</h2><dl class="kv">' + qs.map(q => '<dt>' + esc(q.label) + '</dt><dd>' + esc(a.answers[q.id] || '—') + '</dd>').join('') + (a.experience ? '<dt>相關經驗</dt><dd style="text-align:left;white-space:pre-wrap">' + esc(a.experience) + '</dd>' : '') + '</dl>' : ''}
+      ${S.detailMsg && S.detailMsg.key === key ? '<div class="msg ' + S.detailMsg.type + '" style="margin-top:14px">' + esc(S.detailMsg.text) + '</div>' : ''}
       <h2>報名的班次</h2>
       ${rc.shifts.filter(x => a.shifts[x.id]).map(x => `<div class="issue"><div>${esc(shiftLabel(x))}<div class="dim">${x.accepted}/${x.headcount} 已錄取　目前：${AST[a.shifts[x.id]][0]}</div></div>
         <div class="row" style="gap:6px">${['accepted', 'waitlist', 'rejected'].map(st => `<button class="btn ${a.shifts[x.id] === st ? '' : 'ghost'} sm" data-one="${esc(x.id)}" data-st="${st}">${AST[st][0]}</button>`).join('')}</div></div>`).join('')}
@@ -1002,8 +1003,11 @@ async function openDetail(kind, key, e, keepScroll) {
     if ($('photo')) $('photo').onclick = () => viewDoc(a.person_id, 'photo');
     const decide = async (items, st) => {
       const r = await rpc('admin_decide', { p_items: items, p_status: st });
-      const parts = []; if ((r.full || []).length) parts.push('名額已滿：' + r.full.join('、')); if ((r.clash || []).length) parts.push('與已錄取的班次時間重疊：' + r.clash.join('、'));
-      flash(parts.length ? 'warn' : 'ok', parts.length ? a.name + ' 部分未錄取。' + parts.join('；') + '。' : a.name + ' 已更新。'); S.detail = { kind: 'app', key }; refreshEvent(e, 'staff'); };
+      const parts = []; if ((r.full || []).length) parts.push('名額已滿：' + r.full.join('、'));
+      if ((r.clash || []).length) parts.push(r.clash.join('、') + ' 未錄取：他在同一時段已經錄取了其他班次（可能是另一場活動），同一個人不能同時上兩班。請先到那一班取消錄取');
+      if ((r.plan || []).length) parts.push('他是用方案報名的，要整組錄取，請點上方的方案處理');
+      const text = parts.length ? a.name + (r.updated ? ' 部分未錄取。' : ' 沒有錄取。') + parts.join('；') + '。' : a.name + ' 已更新。';
+      flash(parts.length ? 'warn' : 'ok', text); S.detailMsg = parts.length ? { key, type: 'warn', text } : null; S.detail = { kind: 'app', key }; refreshEvent(e, 'staff'); };
     box.querySelectorAll('[data-one]').forEach(b => b.onclick = () => decide([{ app: key, shift: b.dataset.one }], b.dataset.st));
     $('accall').onclick = () => decide(rc.shifts.filter(x => a.shifts[x.id] && a.shifts[x.id] !== 'accepted').map(x => ({ app: key, shift: x.id })), 'accepted');
     if ($('ctext')) $('ctext').onclick = async () => { const r = await rpc('admin_contract', { p_app: key }); $('ctbox').innerHTML = '<div class="card pad" style="white-space:pre-wrap;font-size:13px;line-height:1.7;margin-top:8px;background:#fff">' + esc(r.text || '') + '</div>'; };
