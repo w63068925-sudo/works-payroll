@@ -540,7 +540,7 @@ const recruitApps = {
     const pick = shift || plan;
     return `<div class="chips"><button class="chip" aria-pressed="${!shift && !plan}" data-rs="">全部${pool ? '報名者' : '班次'}</button>${rc.shifts.map(x => `<button class="chip" aria-pressed="${x.id === fs}" data-rs="${esc(x.id)}">${esc(shiftLabel(x))}　${x.accepted}/${x.headcount}${Number(x.accepted) >= Number(x.headcount) ? ' <span class="badge ok">已額滿</span>' : ''}</button>`).join('')}</div>
       ${!pool && plans.length ? `<div class="chips" style="margin-top:-4px"><span class="dim" style="align-self:center;margin-right:4px">方案</span>${plans.map(p => `<button class="chip" aria-pressed="${plan && plan.id === p.id}" data-rp="${esc(p.id)}">${esc(p.name)}　${p.accepted}${p.headcount ? '/' + p.headcount : ' 人'}${p.full ? ' <span class="badge ok">已額滿</span>' : ''}</button>`).join('')}</div>` : ''}
-      ${splitWrap(`${head}
+      ${head}${splitWrap(`
         <div class="card tablebox"><table><thead><tr>${pick ? '<th><input type="checkbox" id="all" aria-label="全選"></th>' : ''}<th>姓名</th><th>${shift ? '這個班次' : pool ? '已排班次' : '報名班次'}</th>${shift && pool ? '<th>同一天其他班</th>' : ''}<th class="r">合作過</th><th>契約</th></tr></thead>
         <tbody>${rows.map(a => `<tr data-k="${esc(a.app_id)}" class="${S.detail && S.detail.key === a.app_id ? 'on' : ''}">${pick ? `<td><input type="checkbox" class="ck" data-id="${esc(a.app_id)}" ${S.sel.has(a.app_id) ? 'checked' : ''} aria-label="選取 ${esc(a.name)}"></td>` : ''}
           <td>${esc(a.name)}${a.source === 'self' && !a.past_events ? ' <span class="badge ok">新人</span>' : ''}${a.has_photo ? ' <span class="dim">有照片</span>' : ''}${a.plan_id && !pool ? ' <span class="badge">' + esc(planName(a.plan_id)) + '</span>' : ''}<div class="dim">${esc(a.phone || '')}${a.linked ? '　LINE' : ''}${a.has_email ? '　Email' : ''}</div></td>
@@ -586,7 +586,7 @@ const recruitShifts = {
     const intro = pool ? '名單制：報名頁不列班次，班次給管理員排班用。到「報名與錄取」點班次排人。'
       : rc.mode === 'plans' ? '方案制：勾選班次建立方案，報名連結只會列出方案讓工讀生選一個（整組報名）。還沒建立方案時，報名連結維持自選班次。'
       : '工讀生打開報名連結會看到全部班次自己勾選。要限制某些人只能報特定組合，勾選班次產生專屬連結（拿到的人只看得到這幾班，且要整組報名）。';
-    return splitWrap(`<div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">${esc(intro)}</p><a class="btn ghost sm" style="display:inline-flex;align-items:center;text-decoration:none" href="#/calendar/${esc((rc.shifts[0] ? rc.shifts[0].work_date : today()).slice(0, 7))}/${esc(location.hash.split('/')[2] || '')}">行事曆檢視</a><button class="btn sm" id="newshift">新增班次</button></div>
+    return `<div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">${esc(intro)}</p><a class="btn ghost sm" style="display:inline-flex;align-items:center;text-decoration:none" href="#/calendar/${esc((rc.shifts[0] ? rc.shifts[0].work_date : today()).slice(0, 7))}/${esc(location.hash.split('/')[2] || '')}">行事曆檢視</a><button class="btn sm" id="newshift">新增班次</button></div>` + splitWrap(`
       <div class="card tablebox"><table><thead><tr>${pool ? '' : '<th data-xh="選取"><input type="checkbox" id="pall" aria-label="全選班次"></th>'}<th>日期</th><th>時段</th><th>崗位</th><th class="r">時薪</th><th class="r">錄取 / 名額</th><th class="r">待審</th></tr></thead>
       <tbody>${rc.shifts.map(x => `<tr data-k="${esc(x.id)}" class="${S.detail && S.detail.key === x.id ? 'on' : ''}">${pool ? '' : `<td><input type="checkbox" class="pck" data-id="${esc(x.id)}" ${ps.has(x.id) ? 'checked' : ''} aria-label="選取 ${esc(shiftLabel(x))}"></td>`}<td>${esc(d(x.work_date))}</td><td>${esc(x.start)}–${esc(x.end)}${x.overnight ? ' <span class="dim">翌日</span>' : ''}</td><td>${esc(x.role || '—')}</td>
         <td class="r">${x.rate != null ? money(x.rate) : cfg.default_hourly_rate != null ? money(cfg.default_hourly_rate) + ' <span class="dim">預設</span>' : '<span class="badge warn">未設</span>'}</td>
@@ -673,8 +673,7 @@ const recruitForm = {
 const stepStaff = {
   html: () => {
     const c = S.cache;
-    return splitWrap(`
-      <div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">已錄取或已出勤的人員，以及他們在這場活動的計薪方式。</p><button class="btn ghost sm" id="addatt">補登出勤</button></div>
+    return `<div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">已錄取或已出勤的人員，以及他們在這場活動的計薪方式。</p><button class="btn ghost sm" id="addatt">補登出勤</button></div>` + splitWrap(`
       <div class="card tablebox"><table>
         <thead><tr><th>姓名</th><th>計薪</th><th class="r">班次</th><th class="r">出勤</th><th class="r">證件</th><th>薪資單</th></tr></thead>
         <tbody>${c.staff.map(p => `<tr data-k="${esc(p.person_id)}" class="${S.detail && S.detail.key === p.person_id ? 'on' : ''}"><td>${esc(p.name)}${p.source === 'self' ? ' <span class="badge ok">新登錄</span>' : ''}<div class="dim">${esc(p.national_id)}</div></td>
