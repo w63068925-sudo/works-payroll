@@ -592,12 +592,12 @@ const recruitShifts = {
         <td class="r">${x.rate != null ? money(x.rate) : cfg.default_hourly_rate != null ? money(cfg.default_hourly_rate) + ' <span class="dim">預設</span>' : '<span class="badge warn">未設</span>'}</td>
         <td class="r">${x.accepted >= x.headcount ? '<span class="badge ok">已額滿 ' + x.accepted + ' / ' + x.headcount + '</span>' : x.accepted + ' / ' + x.headcount}</td><td class="r">${x.applied || '—'}</td></tr>`).join('') || `<tr><td colspan="${pool ? 6 : 7}" class="empty">還沒有班次，按「新增班次」開始。</td></tr>`}</tbody></table></div>
       ${!pool && ps.size ? `<form id="pf" class="bulk" style="flex-wrap:wrap;gap:8px"><span class="grow" style="min-width:160px">已選 ${ps.size} 個班次${ps.size > 1 ? '（整組報名）' : ''}</span>
-        <input id="pn" type="text" maxlength="40" placeholder="名稱（可空白，自動用崗位）" style="width:200px"><input id="ph" type="text" inputmode="numeric" placeholder="名額（可空白）" style="width:120px">
+        <input id="pn" type="text" maxlength="40" placeholder="方案名稱" title="方案名稱，可以修改" value="${esc(S.pnameEdited ? S.pname || '' : rc.shifts.filter(x => ps.has(x.id)).map(x => x.role || x.start).join('＋').slice(0, 40))}" style="width:220px"><input id="ph" type="text" inputmode="numeric" placeholder="名額（可空白）" style="width:120px">
         <button class="btn">${rc.mode === 'plans' ? '建立方案' : '產生專屬連結'}</button></form>` : ''}`) + `
       ${pool ? '' : `<h2 style="margin-top:22px">${rc.mode === 'plans' ? '方案' : '專屬連結'}</h2>
       ${plans.length ? `<div class="card tablebox"><table><thead><tr><th>名稱</th><th>班次</th><th class="r">報名 / 錄取</th><th class="r">名額</th><th></th></tr></thead><tbody>${plans.map(p => `<tr${p.disabled_at ? ' style="opacity:.5"' : ''}><td><b>${esc(p.name)}</b>${p.disabled_at ? ' <span class="badge">已停用</span>' : p.full ? ' <span class="badge ok">已額滿</span>' : ''}</td>
         <td>${planShifts(p)}</td><td class="r">${p.applied} / ${p.accepted}</td><td class="r">${p.headcount || '—'}</td>
-        <td class="r" style="white-space:nowrap">${p.disabled_at ? '' : `<button class="link" data-pcopy="${esc(p.code)}">複製連結</button>　<button class="link" data-pedit="${esc(p.id)}">名額</button>　<button class="link" style="color:var(--danger)" data-poff="${esc(p.id)}">停用</button>`}</td></tr>`).join('')}</tbody></table></div>`
+        <td class="r" style="white-space:nowrap">${p.disabled_at ? '' : `<button class="link" data-pcopy="${esc(p.code)}">複製連結</button>　<button class="link" data-pname="${esc(p.id)}">改名</button>　<button class="link" data-pedit="${esc(p.id)}">名額</button>　<button class="link" style="color:var(--danger)" data-poff="${esc(p.id)}">停用</button>`}</td></tr>`).join('')}</tbody></table></div>`
         : `<p class="sub">還沒有${word}。勾選上方班次${rc.mode === 'plans' ? '建立方案' : '產生專屬連結'}。</p>`}
       <div id="pm" style="margin-top:10px"></div>`}`;
   },
@@ -605,15 +605,16 @@ const recruitShifts = {
     $('newshift').onclick = () => openDetail('newshift', 'new', e);
     on('tbody tr[data-k]', 'click', (ev, tr) => { if (ev.target.closest('input')) return; openDetail('shift', tr.dataset.k, e); });
     const ps = S.psel || (S.psel = new Set());
-    on('.pck', 'change', (ev, c) => { c.checked ? ps.add(c.dataset.id) : ps.delete(c.dataset.id); viewEvent(e.id, 'staff'); });
+    on('.pck', 'change', (ev, c) => { c.checked ? ps.add(c.dataset.id) : ps.delete(c.dataset.id); if (!ps.size) { S.pname = ''; S.pnameEdited = false; } viewEvent(e.id, 'staff'); });
     const pall = $('pall'); if (pall) { const ids = S.cache.rc.shifts.map(x => x.id); pall.checked = ids.length && ids.every(i => ps.has(i)); pall.onchange = () => { ids.forEach(i => pall.checked ? ps.add(i) : ps.delete(i)); viewEvent(e.id, 'staff'); }; }
     const linkOf = code => new URL('./', location.href).href + '?join=' + code;
     const copy = async (url, btn) => { try { await navigator.clipboard.writeText(url); if (btn) btn.textContent = '已複製'; return true; } catch (err) { prompt('複製這個連結', url); return false; } };
     const PERR2 = { overlap: '同一組裡有時段重疊的班次，同一個人不能同時上。', bad_shift: '班次有變動，請重新整理。', bad_headcount: '名額請填 1–500 的數字，或留空。', session: '登入已逾時。' };
+    if ($('pn')) $('pn').oninput = () => { S.pname = $('pn').value; S.pnameEdited = true; };
     if ($('pf')) $('pf').onsubmit = async ev => { ev.preventDefault();
       const r = await rpc('admin_save_plan', { p_event: e.id, p_patch: { shift_ids: [...ps], name: $('pn').value, headcount: $('ph').value } });
       if (!r.ok) { flash('error', PERR2[r.error] || '建立失敗。'); return viewEvent(e.id, 'staff'); }
-      S.psel = new Set(); await copy(linkOf(r.code));
+      S.psel = new Set(); S.pname = ''; S.pnameEdited = false; await copy(linkOf(r.code));
       flash('ok', (r.existing ? '這組班次已經有「' + r.name + '」，沿用同一條連結' : '已建立「' + r.name + '」') + '，連結已複製：' + linkOf(r.code));
       refreshEvent(e, 'staff'); };
     on('[data-pcopy]', 'click', (ev, b) => copy(linkOf(b.dataset.pcopy), b));
@@ -621,6 +622,11 @@ const recruitShifts = {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = '確定停用？連結會失效'; return; }
       const r = await rpc('admin_save_plan', { p_event: e.id, p_patch: { id: b.dataset.poff, disabled: true } });
       flash(r.ok ? 'ok' : 'error', r.ok ? '已停用，這條連結不能再報名；已報名的資料保留。' : '停用失敗。'); refreshEvent(e, 'staff'); });
+    on('[data-pname]', 'click', async (ev, b) => {
+      const p = S.cache.rc.plans.find(x => x.id === b.dataset.pname); const v = prompt('方案名稱（最多 40 字）', p.name);
+      if (v === null || !v.trim()) return;
+      const r = await rpc('admin_save_plan', { p_event: e.id, p_patch: { id: p.id, name: v.trim() } });
+      flash(r.ok ? 'ok' : 'error', r.ok ? '已改名為「' + v.trim().slice(0, 40) + '」。' : '改名失敗。'); refreshEvent(e, 'staff'); });
     on('[data-pedit]', 'click', async (ev, b) => {
       const p = S.cache.rc.plans.find(x => x.id === b.dataset.pedit); const v = prompt('「' + p.name + '」的名額（留空表示不限，只看各班名額）', p.headcount || '');
       if (v === null) return;
