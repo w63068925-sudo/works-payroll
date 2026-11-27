@@ -369,7 +369,7 @@ function viewEvents() {
 }
 
 /* ---------- 單場活動 ---------- */
-const STEPS = [['staff', '招募'], ['att', '出勤'], ['review', '核對'], ['publish', '發布'], ['payout', '匯款']];
+const STEPS = [['staff', '招募'], ['att', '出勤'], ['review', '核對'], ['publish', '發布'], ['payout', '發薪']];
 async function loadEventData(id) {
   const [ev, att, st, rc] = await Promise.all([rpc('admin_event', { p_event: id }), rpc('admin_attendance', { p_event: id }), rpc('admin_event_staff', { p_event: id }), rpc('admin_recruit', { p_event: id })]);
   S.cache = { id, slips: ev.payslips, eventIssues: ev.event_issues, att: att.rows, settings: att.settings || {}, staff: st.staff, signupOpen: st.signup_open, rc };
@@ -443,7 +443,7 @@ async function toggleEditEvent(e, step) {
       <div><label for="efe">結束日（單日可留空）</label><input id="efe" type="date" value="${esc(e.end_date && e.end_date !== e.start_date ? e.end_date : '')}"></div></div>
     <label for="efl">工作地點</label><input id="efl" type="text" value="${esc(rc.location || '')}" placeholder="國立成功大學 光復校區">
     <label for="efd">活動說明（顯示在報名頁）</label><textarea id="efd" style="height:90px" placeholder="集合時間、服裝、注意事項">${esc(rc.description || '')}</textarea>
-    <p class="sub" style="margin-top:8px">改名稱或地點時，已確認契約的人需要重新確認。時薪、休息、投保薪資在「出勤」設定，發薪日在「匯款」設定。</p>
+    <p class="sub" style="margin-top:8px">改名稱或地點時，已確認契約的人需要重新確認。時薪、休息、投保薪資在「出勤」設定，發薪日在「發薪」設定。</p>
     <div id="efm" style="margin-top:10px"></div>
     <div class="row" style="margin-top:6px"><span class="grow"></span><button type="button" class="btn ghost" id="efc">取消</button><button class="btn" id="efsave">儲存</button></div></form>`;
   $('efn').focus();
@@ -457,7 +457,7 @@ async function toggleEditEvent(e, step) {
     if (ns !== (e.start_date || '')) patch.start_date = ns;
     if ((ne || ns) !== (e.end_date || e.start_date || '')) patch.end_date = ne || ns;
     const r = await rpc('admin_update_event', { p_id: e.id, p_patch: patch });
-    if (!r.ok) return err({ bad_name: '請填活動名稱（100 字以內）。', bad_date: '請確認日期，結束日不能早於開始日。', outside_dates: '有 ' + (r.count || '') + ' 筆班次或出勤落在新日期範圍外，請先調整班次再改日期。', pay_before_end: '發薪日早於新的結束日，請先到「匯款」調整發薪日。' }[r.error] || '儲存失敗，請再試一次。');
+    if (!r.ok) return err({ bad_name: '請填活動名稱（100 字以內）。', bad_date: '請確認日期，結束日不能早於開始日。', outside_dates: '有 ' + (r.count || '') + ' 筆班次或出勤落在新日期範圍外，請先調整班次再改日期。', pay_before_end: '發薪日早於新的結束日，請先到「發薪」調整發薪日。' }[r.error] || '儲存失敗，請再試一次。');
     if ((rc.location || '') !== $('efl').value.trim() || (rc.description || '') !== $('efd').value.trim()) {
       const r2 = await rpc('admin_save_event_info', { p_event: e.id, p_patch: { location: $('efl').value, description: $('efd').value } });
       if (!r2.ok) return err('名稱與日期已儲存，但地點或說明儲存失敗，請再試一次。');
