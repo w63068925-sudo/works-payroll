@@ -1,5 +1,5 @@
 /**
- * 沃克思薪資系統：寄「新人建檔」Email 驗證碼
+ * 沃克思薪資系統：寄「新人建檔」Email 驗證碼，以及錄取通知（type: notify）
  *
  * 由 w63068925 帳號建立一個獨立的 Apps Script 專案，貼上這個檔案，
  * 部署成網頁應用程式（執行身分：我；存取權：所有人）。
@@ -13,7 +13,9 @@ function doPost(e) {
   var body;
   try { body = JSON.parse(e.postData.contents); } catch (err) { return out('bad'); }
   var key = PropertiesService.getScriptProperties().getProperty('MAIL_KEY');
-  if (!key || !body || body.type !== 'signup_code') return out('denied');
+  if (!key || !body) return out('denied');
+  if (body.type === 'notify') return out(sendNotify_(body, key));
+  if (body.type !== 'signup_code') return out('denied');
   var to = String(body.to || '').trim();
   var code = String(body.code || '');
   var ts = Number(body.ts);
@@ -22,7 +24,7 @@ function doPost(e) {
   var raw = Utilities.computeHmacSha256Signature(to + '|' + code + '|' + ts, key, Utilities.Charset.UTF_8);
   var sig = raw.map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
   if (sig !== String(body.sig || '')) return out('denied');
-  if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(to) || to.length > 120 || !/^\d{6}$/.test(code)) return out('bad');
+  if (!EMAIL_RE.test(to) || to.length > 120 || !/^\d{6}$/.test(code)) return out('bad');
   if (MailApp.getRemainingDailyQuota() < 1) return out('quota');
   MailApp.sendEmail({
     to: to,
@@ -41,4 +43,42 @@ function doPost(e) {
 // 部署後在編輯器執行一次，完成寄信授權（會寄一封測試信給自己）
 function authorizeOnce() {
   MailApp.sendEmail(Session.getActiveUser().getEmail(), '沃克思驗證信授權測試', '授權完成，這封信可以刪除。');
+}
+
+var EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+function hex_(bytes) { return bytes.map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join(''); }
+function sha256Hex_(s) { return hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8)); }
+
+// 錄取通知：資料庫的 mail_flush 送來收件人、主旨、內文。
+// 簽章：notify|sha256(to)|sha256(subject)|sha256(text)|nonce|ts（各欄位雜湊後定長，不能重新切割欄位）；同一個 nonce 只寄一次
+function sendNotify_(body, key) {
+  var to = String(body.to || '').trim();
+  var subject = String(body.subject || '');
+  var text = String(body.text || '');
+  var nonce = String(body.nonce || '');
+  var ts = Number(body.ts);
+  if (!ts || Math.abs(Date.now() / 1000 - ts) > 600) return 'denied';
+  if (!/^[0-9a-f-]{36}:\d{1,2}$/.test(nonce)) return 'bad';
+  var msg = 'notify|' + sha256Hex_(to) + '|' + sha256Hex_(subject) + '|' + sha256Hex_(text) + '|' + nonce + '|' + ts;
+  if (hex_(Utilities.computeHmacSha256Signature(msg, key, Utilities.Charset.UTF_8)) !== String(body.sig || '')) return 'denied';
+  if (!EMAIL_RE.test(to) || to.length > 120) return 'bad';
+  if (subject.indexOf('【沃克思】') !== 0 || subject.length > 120 || /[\u0000-\u001f\u007f]/.test(subject) || text.length > 4000) return 'bad';
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return 'busy';
+  try {
+    var cache = CacheService.getScriptCache();
+    if (cache.get('n:' + nonce)) return 'dup';
+    if (MailApp.getRemainingDailyQuota() < 1) return 'quota';
+    var esc = function (s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+    MailApp.sendEmail({
+      to: to,
+      subject: subject,
+      name: '沃克思 WORKS',
+      body: text,
+      htmlBody: '<div style="font-size:15px;line-height:1.7;white-space:pre-wrap">' + esc(text) + '</div>'
+    });
+    cache.put('n:' + nonce, '1', 1800);
+    return 'ok';
+  } finally { lock.releaseLock(); }
 }

@@ -504,57 +504,123 @@ const stepRecruit = {
     const pend = rc.applicants.filter(a => Object.values(a.shifts).some(v => v === 'applied')).length;
     const tabs = `<div class="tabs" role="tablist" aria-label="招募">${RTABS.map(([k, n]) => `<button class="tab" role="tab" aria-selected="${k === t}" data-rt="${k}">${n}${k === 'apps' && pend ? ' <span class="badge warn">' + pend + '</span>' : k === 'shifts' ? ' <span class="dim">' + rc.shifts.length + '</span>' : ''}</button>`).join('')}</div>`;
     const bar = `<div class="row" style="margin-bottom:12px;align-items:center"><span class="badge ${rc.event.recruiting ? 'ok' : ''}">${rc.event.recruiting ? '招募中' : '已停止招募'}</span>
-      <span class="sub grow">${rc.applicants.length} 人報名</span><button class="btn ghost sm" id="copyjoin">複製報名連結</button></div>`;
+      <span class="sub grow">${rc.applicants.length} 人報名　<a href="#/settings" data-tosettings class="dim">報名方式：${({ pool: '名單制', plans: '方案制', pick: '自選班次' })[rc.mode] || '自選班次'}${rc.require_line ? '、須綁 LINE' : ''}</a></span><button class="btn ghost sm" id="copyjoin">複製報名連結</button></div>`;
     return tabs + bar + ({ apps: recruitApps, shifts: recruitShifts, form: recruitForm, pay: stepStaff }[t]).html(e);
   },
   bind: e => {
     on('[data-rt]', 'click', (ev, b) => { S.filter.rtab = b.dataset.rt; S.detail = null; S.sel = new Set(); viewEvent(e.id, 'staff'); });
+    on('[data-tosettings]', 'click', ev => { ev.preventDefault(); S.filter.settings = 'recruit'; go('#/settings'); });
     $('copyjoin').onclick = async () => { const url = new URL('./', location.href).href + '?join=' + S.cache.rc.event.signup_code; try { await navigator.clipboard.writeText(url); $('copyjoin').textContent = '已複製'; } catch (err) { prompt('複製這個連結', url); } };
     ({ apps: recruitApps, shifts: recruitShifts, form: recruitForm, pay: stepStaff }[stepRecruit.tab()]).bind(e);
   }
 };
 const recruitApps = {
   html: () => {
-    const rc = S.cache.rc, fs = S.filter.rshift || '';
+    const rc = S.cache.rc, fs = S.filter.rshift || '', pool = rc.mode === 'pool';
     const shift = rc.shifts.find(x => x.id === fs);
-    const rows = rc.applicants.filter(a => !shift || a.shifts[shift.id]);
+    const plans = (rc.plans || []).filter(p => !p.disabled_at), plan = !pool && !shift ? plans.find(p => p.id === S.filter.rplan) : null;
+    const planName = id => { const p = (rc.plans || []).find(q => q.id === id); return p ? p.name : ''; };
+    // 名單制：選了班次就列出所有報名的人，勾選後排入／移出；其他方式只列報了這個班次的人
+    const rows = rc.applicants.filter(a => plan ? a.plan_id === plan.id : !shift || pool || a.shifts[shift.id]);
     const sel = [...S.sel];
-    if (!rc.shifts.length) return '<div class="card empty">還沒有班次。先到「班次」分頁開班，工讀生才能報名。</div>';
-    return `<div class="chips"><button class="chip" aria-pressed="${!shift}" data-rs="">全部班次</button>${rc.shifts.map(x => `<button class="chip" aria-pressed="${x.id === fs}" data-rs="${esc(x.id)}">${esc(shiftLabel(x))}　${x.accepted}/${x.headcount}${Number(x.accepted) >= Number(x.headcount) ? ' <span class="badge ok">已額滿</span>' : ''}</button>`).join('')}</div>
-      ${splitWrap(`${shift ? '<p class="sub" style="margin-bottom:10px">' + esc(shiftLabel(shift)) + '　需要 ' + shift.headcount + ' 人，已錄取 ' + shift.accepted + ' 人' + (Number(shift.accepted) >= Number(shift.headcount) ? '，<span class="badge ok">已額滿</span> 再錄取會被擋下，可改列備取' : '，還差 ' + (shift.headcount - shift.accepted) + ' 人') + '。勾選後批次處理。</p>' : '<p class="sub" style="margin-bottom:10px">點選上方班次可以批次錄取；點任一人查看報名內容。</p>'}
-        <div class="card tablebox"><table><thead><tr>${shift ? '<th><input type="checkbox" id="all" aria-label="全選"></th>' : ''}<th>姓名</th><th>${shift ? '這個班次' : '報名班次'}</th><th class="r">合作過</th><th>契約</th></tr></thead>
-        <tbody>${rows.map(a => `<tr data-k="${esc(a.app_id)}" class="${S.detail && S.detail.key === a.app_id ? 'on' : ''}">${shift ? `<td><input type="checkbox" class="ck" data-id="${esc(a.app_id)}" ${S.sel.has(a.app_id) ? 'checked' : ''} aria-label="選取 ${esc(a.name)}"></td>` : ''}
-          <td>${esc(a.name)}${a.source === 'self' && !a.past_events ? ' <span class="badge ok">新人</span>' : ''}${a.has_photo ? ' <span class="dim">有照片</span>' : ''}<div class="dim">${esc(a.phone || '')}</div></td>
-          <td style="white-space:normal">${shift ? '<span class="badge ' + AST[a.shifts[shift.id]][1] + '">' + AST[a.shifts[shift.id]][0] + '</span>' : rc.shifts.filter(x => a.shifts[x.id]).map(x => '<span class="badge ' + AST[a.shifts[x.id]][1] + '" title="' + esc(shiftLabel(x) + ' ' + AST[a.shifts[x.id]][0]) + '">' + esc(md(x.work_date) + (rc.shifts.some(y => y !== x && y.work_date === x.work_date) ? ' ' + x.start + (x.role ? ' ' + x.role : '') : '')) + ' ' + esc(AST[a.shifts[x.id]][0]) + '</span>').join(' ')}</td>
+    if (!rc.shifts.length) return '<div class="card empty">還沒有班次。先到「班次」分頁開班' + (pool ? '，再從報名名單排人。' : '，工讀生才能報名。') + '</div>';
+    const sameDay = (a, x) => rc.shifts.filter(y => y.id !== x.id && y.work_date === x.work_date && a.shifts[y.id] === 'accepted').map(y => y.start + (y.role ? ' ' + y.role : '')).join('、');
+    const ST = pool ? Object.assign({}, AST, { accepted: ['已排入', 'ok'] }) : AST;
+    const cell = a => {
+      if (shift) return a.shifts[shift.id] ? '<span class="badge ' + ST[a.shifts[shift.id]][1] + '">' + ST[a.shifts[shift.id]][0] + '</span>' : '<span class="dim">未排</span>';
+      return rc.shifts.filter(x => a.shifts[x.id] && (!pool || a.shifts[x.id] === 'accepted')).map(x => '<span class="badge ' + ST[a.shifts[x.id]][1] + '" title="' + esc(shiftLabel(x) + ' ' + ST[a.shifts[x.id]][0]) + '">' + esc(md(x.work_date) + (rc.shifts.some(y => y !== x && y.work_date === x.work_date) ? ' ' + x.start + (x.role ? ' ' + x.role : '') : '')) + ' ' + esc(ST[a.shifts[x.id]][0]) + '</span>').join(' ') || (pool ? '<span class="dim">還沒排班</span>' : '');
+    };
+    const head = shift ? '<p class="sub" style="margin-bottom:10px">' + esc(shiftLabel(shift)) + '　需要 ' + shift.headcount + ' 人，已' + (pool ? '排入 ' : '錄取 ') + shift.accepted + ' 人' + (Number(shift.accepted) >= Number(shift.headcount) ? '，<span class="badge ok">已額滿</span>' + (pool ? '' : ' 再錄取會被擋下，可改列備取') : '，還差 ' + (shift.headcount - shift.accepted) + ' 人') + '。' + (pool ? '勾選報名的人，按「排入」就是錄取，會用 LINE／Email 通知本人。' : '勾選後批次處理。') + '</p>'
+      : plan ? '<p class="sub" style="margin-bottom:10px">方案「' + esc(plan.name) + '」' + (plan.headcount ? '名額 ' + plan.headcount + ' 人，' : '') + '已錄取 ' + plan.accepted + ' 人。整組處理：錄取時方案名額、每一班名額和時段都要符合，否則這個人整組不錄取。</p>'
+      : '<p class="sub" style="margin-bottom:10px">' + (pool ? '名單制：工讀生報名時不選班次。點上方班次，從名單勾選要排入的人。' : '點選上方班次' + (plans.length ? '或方案' : '') + '可以批次處理；點任一人查看報名內容。') + '</p>';
+    const pick = shift || plan;
+    return `<div class="chips"><button class="chip" aria-pressed="${!shift && !plan}" data-rs="">全部${pool ? '報名者' : '班次'}</button>${rc.shifts.map(x => `<button class="chip" aria-pressed="${x.id === fs}" data-rs="${esc(x.id)}">${esc(shiftLabel(x))}　${x.accepted}/${x.headcount}${Number(x.accepted) >= Number(x.headcount) ? ' <span class="badge ok">已額滿</span>' : ''}</button>`).join('')}</div>
+      ${!pool && plans.length ? `<div class="chips" style="margin-top:-4px"><span class="dim" style="align-self:center;margin-right:4px">方案</span>${plans.map(p => `<button class="chip" aria-pressed="${plan && plan.id === p.id}" data-rp="${esc(p.id)}">${esc(p.name)}　${p.accepted}${p.headcount ? '/' + p.headcount : ' 人'}${p.full ? ' <span class="badge ok">已額滿</span>' : ''}</button>`).join('')}</div>` : ''}
+      ${splitWrap(`${head}
+        <div class="card tablebox"><table><thead><tr>${pick ? '<th><input type="checkbox" id="all" aria-label="全選"></th>' : ''}<th>姓名</th><th>${shift ? '這個班次' : pool ? '已排班次' : '報名班次'}</th>${shift && pool ? '<th>同一天其他班</th>' : ''}<th class="r">合作過</th><th>契約</th></tr></thead>
+        <tbody>${rows.map(a => `<tr data-k="${esc(a.app_id)}" class="${S.detail && S.detail.key === a.app_id ? 'on' : ''}">${pick ? `<td><input type="checkbox" class="ck" data-id="${esc(a.app_id)}" ${S.sel.has(a.app_id) ? 'checked' : ''} aria-label="選取 ${esc(a.name)}"></td>` : ''}
+          <td>${esc(a.name)}${a.source === 'self' && !a.past_events ? ' <span class="badge ok">新人</span>' : ''}${a.has_photo ? ' <span class="dim">有照片</span>' : ''}${a.plan_id && !pool ? ' <span class="badge">' + esc(planName(a.plan_id)) + '</span>' : ''}<div class="dim">${esc(a.phone || '')}${a.linked ? '　LINE' : ''}${a.has_email ? '　Email' : ''}</div></td>
+          <td style="white-space:normal">${cell(a)}</td>${shift && pool ? '<td style="white-space:normal">' + esc(sameDay(a, shift) || '—') + '</td>' : ''}
           <td class="r">${a.past_events ? a.past_events + ' 場' : '—'}</td>
-          <td>${a.contract_accepted_at ? '<span class="badge ok">已確認</span>' : Object.values(a.shifts).includes('accepted') ? '<span class="badge warn">待確認</span>' : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">還沒有人報名。把報名連結傳到 LINE 群組。</td></tr>'}</tbody></table></div>
-        ${shift && sel.length ? `<div class="bulk"><span class="grow">已選 ${sel.length} 人${(() => { const add = sel.filter(id => { const a = rc.applicants.find(q => q.app_id === id); return a && a.shifts[shift.id] !== 'accepted'; }).length, left = Math.max(0, shift.headcount - shift.accepted);
-          return add > left ? `<div style="color:var(--warn);font-size:13px">名額只剩 ${left} 人，選了 ${add} 位未錄取的人；按「錄取」時超出的 ${add - left} 人會被擋下，可改列備取。</div>` : ''; })()}</span><button class="btn" data-dec="accepted">錄取</button><button class="btn ghost" data-dec="waitlist">備取</button><button class="btn ghost" data-dec="rejected">不錄取</button></div>` : ''}`)}`;
+          <td>${a.contract_accepted_at ? '<span class="badge ok">已確認</span>' : Object.values(a.shifts).includes('accepted') ? '<span class="badge warn">待確認</span>' : '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">' + (plan ? '還沒有人報名這個方案。' : '還沒有人報名。把報名連結傳到 LINE 群組。') + '</td></tr>'}</tbody></table></div>
+        ${pick && sel.length ? `<div class="bulk"><span class="grow">已選 ${sel.length} 人${shift ? (() => { const add = sel.filter(id => { const a = rc.applicants.find(q => q.app_id === id); return a && a.shifts[shift.id] !== 'accepted'; }).length, left = Math.max(0, shift.headcount - shift.accepted);
+          return add > left ? `<div style="color:var(--warn);font-size:13px">名額只剩 ${left} 人，選了 ${add} 位未${pool ? '排入' : '錄取'}的人；超出的 ${add - left} 人會被擋下${pool ? '' : '，可改列備取'}。</div>` : ''; })() : ''}</span>
+          ${shift && pool ? '<button class="btn" data-asg="1">排入</button><button class="btn ghost" data-asg="0">移出</button>'
+            : (plan ? '<button class="btn" data-pdec="accepted">整組錄取</button><button class="btn ghost" data-pdec="waitlist">備取</button><button class="btn ghost" data-pdec="rejected">不錄取</button>'
+              : '<button class="btn" data-dec="accepted">錄取</button><button class="btn ghost" data-dec="waitlist">備取</button><button class="btn ghost" data-dec="rejected">不錄取</button>')}</div>` : ''}`)}`;
   },
   bind: e => {
-    on('[data-rs]', 'click', (ev, b) => { S.filter.rshift = b.dataset.rs; S.sel = new Set(); viewEvent(e.id, 'staff'); });
+    on('[data-rs]', 'click', (ev, b) => { S.filter.rshift = b.dataset.rs; S.filter.rplan = ''; S.sel = new Set(); viewEvent(e.id, 'staff'); });
+    on('[data-rp]', 'click', (ev, b) => { S.filter.rplan = b.dataset.rp; S.filter.rshift = ''; S.sel = new Set(); viewEvent(e.id, 'staff'); });
     on('tbody tr[data-k]', 'click', (ev, tr) => { if (ev.target.closest('input')) return; openDetail('app', tr.dataset.k, e); });
     on('.ck', 'change', (ev, c) => { c.checked ? S.sel.add(c.dataset.id) : S.sel.delete(c.dataset.id); viewEvent(e.id, 'staff'); });
-    const all = $('all'); if (all) { const fs = S.filter.rshift; const ids = S.cache.rc.applicants.filter(a => a.shifts[fs]).map(a => a.app_id); all.checked = ids.length && ids.every(i => S.sel.has(i)); all.onchange = () => { ids.forEach(i => all.checked ? S.sel.add(i) : S.sel.delete(i)); viewEvent(e.id, 'staff'); }; }
+    const all = $('all'); if (all) { const ids = [...document.querySelectorAll('.ck')].map(c => c.dataset.id); all.checked = ids.length && ids.every(i => S.sel.has(i)); all.onchange = () => { ids.forEach(i => all.checked ? S.sel.add(i) : S.sel.delete(i)); viewEvent(e.id, 'staff'); }; }
+    const report = (r, word) => { const fl = (r.full || []).length, cl = (r.clash || []).length;
+      flash(!r.ok ? 'error' : fl || cl || (r.plan || []).length ? 'warn' : 'ok', !r.ok ? '更新失敗。' : '已更新 ' + r.updated + ' ' + (word || '人') + '。' + (fl ? '名額已滿，' + fl + ' 人未' + (S.cache.rc.mode === 'pool' ? '排入' : '錄取') + '。' : '') + (cl ? cl + ' 人已排同時段的其他班次，未重複排入。' : '') + ((r.plan || []).length ? (r.plan || []).length + ' 人是方案報名，要整組錄取，請點上方的方案處理。' : '')); };
     on('[data-dec]', 'click', async (ev, b) => {
-      const items = [...S.sel].map(app => ({ app, shift: S.filter.rshift }));
-      const r = await rpc('admin_decide', { p_items: items, p_status: b.dataset.dec });
-      const fl = (r.full || []).length, cl = (r.clash || []).length;
-      flash(fl || cl ? 'warn' : 'ok', '已更新 ' + r.updated + ' 人。' + (fl ? '名額已滿，' + fl + ' 人未錄取，可改列備取。' : '') + (cl ? cl + ' 人已錄取同時段的其他班次，未重複錄取。' : ''));
-      S.sel = new Set(); refreshEvent(e, 'staff');
+      const r = await rpc('admin_decide', { p_items: [...S.sel].map(app => ({ app, shift: S.filter.rshift })), p_status: b.dataset.dec });
+      report(r); S.sel = new Set(); refreshEvent(e, 'staff');
+    });
+    on('[data-pdec]', 'click', async (ev, b) => {
+      const r = await rpc('admin_decide_plan', { p_apps: [...S.sel], p_status: b.dataset.pdec });
+      report(r); S.sel = new Set(); refreshEvent(e, 'staff');
+    });
+    on('[data-asg]', 'click', async (ev, b) => {
+      const r = await rpc('admin_assign', { p_shift: S.filter.rshift, p_apps: [...S.sel], p_add: b.dataset.asg === '1' });
+      report(r, '筆'); S.sel = new Set(); refreshEvent(e, 'staff');
     });
   }
 };
 const recruitShifts = {
   html: () => {
-    const rc = S.cache.rc, cfg = S.cache.settings;
-    return splitWrap(`<div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">每個班次是一個時段與崗位。工讀生報名時勾選想上的班次。</p><a class="btn ghost sm" style="display:inline-flex;align-items:center;text-decoration:none" href="#/calendar/${esc((rc.shifts[0] ? rc.shifts[0].work_date : today()).slice(0, 7))}/${esc(location.hash.split('/')[2] || '')}">行事曆檢視</a><button class="btn sm" id="newshift">新增班次</button></div>
-      <div class="card tablebox"><table><thead><tr><th>日期</th><th>時段</th><th>崗位</th><th class="r">時薪</th><th class="r">錄取 / 名額</th><th class="r">待審</th></tr></thead>
-      <tbody>${rc.shifts.map(x => `<tr data-k="${esc(x.id)}" class="${S.detail && S.detail.key === x.id ? 'on' : ''}"><td>${esc(d(x.work_date))}</td><td>${esc(x.start)}–${esc(x.end)}${x.overnight ? ' <span class="dim">翌日</span>' : ''}</td><td>${esc(x.role || '—')}</td>
+    const rc = S.cache.rc, cfg = S.cache.settings, pool = rc.mode === 'pool', ps = S.psel || (S.psel = new Set());
+    [...ps].forEach(id => { if (!rc.shifts.some(x => x.id === id)) ps.delete(id); });   // 換活動或刪班次後清掉不屬於這場的勾選
+    const plans = rc.plans || [], word = rc.mode === 'plans' ? '方案' : '專屬連結';
+    const sl = id => { const x = rc.shifts.find(y => y.id === id); return x ? shiftLabel(x) : '（班次已刪除）'; };
+    const intro = pool ? '名單制：報名頁不列班次，班次給管理員排班用。到「報名與錄取」點班次排人。'
+      : rc.mode === 'plans' ? '方案制：勾選班次建立方案，報名連結只會列出方案讓工讀生選一個（整組報名）。還沒建立方案時，報名連結維持自選班次。'
+      : '工讀生打開報名連結會看到全部班次自己勾選。要限制某些人只能報特定組合，勾選班次產生專屬連結（拿到的人只看得到這幾班，且要整組報名）。';
+    return splitWrap(`<div class="row" style="margin-bottom:12px;align-items:center"><p class="sub grow">${esc(intro)}</p><a class="btn ghost sm" style="display:inline-flex;align-items:center;text-decoration:none" href="#/calendar/${esc((rc.shifts[0] ? rc.shifts[0].work_date : today()).slice(0, 7))}/${esc(location.hash.split('/')[2] || '')}">行事曆檢視</a><button class="btn sm" id="newshift">新增班次</button></div>
+      <div class="card tablebox"><table><thead><tr>${pool ? '' : '<th data-xh="選取"><input type="checkbox" id="pall" aria-label="全選班次"></th>'}<th>日期</th><th>時段</th><th>崗位</th><th class="r">時薪</th><th class="r">錄取 / 名額</th><th class="r">待審</th></tr></thead>
+      <tbody>${rc.shifts.map(x => `<tr data-k="${esc(x.id)}" class="${S.detail && S.detail.key === x.id ? 'on' : ''}">${pool ? '' : `<td><input type="checkbox" class="pck" data-id="${esc(x.id)}" ${ps.has(x.id) ? 'checked' : ''} aria-label="選取 ${esc(shiftLabel(x))}"></td>`}<td>${esc(d(x.work_date))}</td><td>${esc(x.start)}–${esc(x.end)}${x.overnight ? ' <span class="dim">翌日</span>' : ''}</td><td>${esc(x.role || '—')}</td>
         <td class="r">${x.rate != null ? money(x.rate) : cfg.default_hourly_rate != null ? money(cfg.default_hourly_rate) + ' <span class="dim">預設</span>' : '<span class="badge warn">未設</span>'}</td>
-        <td class="r">${x.accepted >= x.headcount ? '<span class="badge ok">已額滿 ' + x.accepted + ' / ' + x.headcount + '</span>' : x.accepted + ' / ' + x.headcount}</td><td class="r">${x.applied || '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">還沒有班次，按「新增班次」開始。</td></tr>'}</tbody></table></div>`);
+        <td class="r">${x.accepted >= x.headcount ? '<span class="badge ok">已額滿 ' + x.accepted + ' / ' + x.headcount + '</span>' : x.accepted + ' / ' + x.headcount}</td><td class="r">${x.applied || '—'}</td></tr>`).join('') || `<tr><td colspan="${pool ? 6 : 7}" class="empty">還沒有班次，按「新增班次」開始。</td></tr>`}</tbody></table></div>
+      ${!pool && ps.size ? `<form id="pf" class="bulk" style="flex-wrap:wrap;gap:8px"><span class="grow" style="min-width:160px">已選 ${ps.size} 個班次${ps.size > 1 ? '（整組報名）' : ''}</span>
+        <input id="pn" type="text" maxlength="40" placeholder="名稱（可空白，自動用崗位）" style="width:200px"><input id="ph" type="text" inputmode="numeric" placeholder="名額（可空白）" style="width:120px">
+        <button class="btn">${rc.mode === 'plans' ? '建立方案' : '產生專屬連結'}</button></form>` : ''}
+      ${pool ? '' : `<h2 style="margin-top:22px">${rc.mode === 'plans' ? '方案' : '專屬連結'}</h2>
+      ${plans.length ? `<div class="card tablebox"><table><thead><tr><th>名稱</th><th>班次</th><th class="r">報名 / 錄取</th><th class="r">名額</th><th></th></tr></thead><tbody>${plans.map(p => `<tr${p.disabled_at ? ' style="opacity:.5"' : ''}><td><b>${esc(p.name)}</b>${p.disabled_at ? ' <span class="badge">已停用</span>' : p.full ? ' <span class="badge ok">已額滿</span>' : ''}</td>
+        <td style="white-space:normal">${(p.shift_ids || []).map(id => esc(sl(id))).join('<br>')}</td><td class="r">${p.applied} / ${p.accepted}</td><td class="r">${p.headcount || '—'}</td>
+        <td class="r" style="white-space:nowrap">${p.disabled_at ? '' : `<button class="link" data-pcopy="${esc(p.code)}">複製連結</button>　<button class="link" data-pedit="${esc(p.id)}">名額</button>　<button class="link" style="color:var(--danger)" data-poff="${esc(p.id)}">停用</button>`}</td></tr>`).join('')}</tbody></table></div>`
+        : `<p class="sub">還沒有${word}。勾選上方班次${rc.mode === 'plans' ? '建立方案' : '產生專屬連結'}。</p>`}
+      <div id="pm" style="margin-top:10px"></div>`}`);
   },
-  bind: e => { $('newshift').onclick = () => openDetail('newshift', 'new', e); on('tbody tr[data-k]', 'click', (ev, tr) => openDetail('shift', tr.dataset.k, e)); }
+  bind: e => {
+    $('newshift').onclick = () => openDetail('newshift', 'new', e);
+    on('tbody tr[data-k]', 'click', (ev, tr) => { if (ev.target.closest('input')) return; openDetail('shift', tr.dataset.k, e); });
+    const ps = S.psel || (S.psel = new Set());
+    on('.pck', 'change', (ev, c) => { c.checked ? ps.add(c.dataset.id) : ps.delete(c.dataset.id); viewEvent(e.id, 'staff'); });
+    const pall = $('pall'); if (pall) { const ids = S.cache.rc.shifts.map(x => x.id); pall.checked = ids.length && ids.every(i => ps.has(i)); pall.onchange = () => { ids.forEach(i => pall.checked ? ps.add(i) : ps.delete(i)); viewEvent(e.id, 'staff'); }; }
+    const linkOf = code => new URL('./', location.href).href + '?join=' + code;
+    const copy = async (url, btn) => { try { await navigator.clipboard.writeText(url); if (btn) btn.textContent = '已複製'; return true; } catch (err) { prompt('複製這個連結', url); return false; } };
+    const PERR2 = { overlap: '同一組裡有時段重疊的班次，同一個人不能同時上。', bad_shift: '班次有變動，請重新整理。', bad_headcount: '名額請填 1–500 的數字，或留空。', session: '登入已逾時。' };
+    if ($('pf')) $('pf').onsubmit = async ev => { ev.preventDefault();
+      const r = await rpc('admin_save_plan', { p_event: e.id, p_patch: { shift_ids: [...ps], name: $('pn').value, headcount: $('ph').value } });
+      if (!r.ok) { flash('error', PERR2[r.error] || '建立失敗。'); return viewEvent(e.id, 'staff'); }
+      S.psel = new Set(); await copy(linkOf(r.code));
+      flash('ok', (r.existing ? '這組班次已經有「' + r.name + '」，沿用同一條連結' : '已建立「' + r.name + '」') + '，連結已複製：' + linkOf(r.code));
+      refreshEvent(e, 'staff'); };
+    on('[data-pcopy]', 'click', (ev, b) => copy(linkOf(b.dataset.pcopy), b));
+    on('[data-poff]', 'click', async (ev, b) => {
+      if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = '確定停用？連結會失效'; return; }
+      const r = await rpc('admin_save_plan', { p_event: e.id, p_patch: { id: b.dataset.poff, disabled: true } });
+      flash(r.ok ? 'ok' : 'error', r.ok ? '已停用，這條連結不能再報名；已報名的資料保留。' : '停用失敗。'); refreshEvent(e, 'staff'); });
+    on('[data-pedit]', 'click', async (ev, b) => {
+      const p = S.cache.rc.plans.find(x => x.id === b.dataset.pedit); const v = prompt('「' + p.name + '」的名額（留空表示不限，只看各班名額）', p.headcount || '');
+      if (v === null) return;
+      const r = await rpc('admin_save_plan', { p_event: e.id, p_patch: { id: p.id, headcount: v.trim() } });
+      flash(r.ok ? 'ok' : 'error', r.ok ? '名額已更新。' : (PERR2[r.error] || '更新失敗。')); refreshEvent(e, 'staff'); });
+  }
 };
 const recruitForm = {
   html: () => {
@@ -1705,9 +1771,32 @@ function viewPayouts() {
 async function viewSettings(tab) {
   tab = tab || S.filter.settings || 'company';
   S.filter.settings = tab;
-  const TABS = [['company', '公司資料'], ['line', 'LINE 通知'], ['holidays', '國定假日'], ['wages', '最低工資'], ['admins', '管理員']];
+  const TABS = [['company', '公司資料'], ['recruit', '報名方式'], ['line', 'LINE 通知'], ['holidays', '國定假日'], ['wages', '最低工資'], ['admins', '管理員']];
   let body = '';
-  if (tab === 'company') {
+  if (tab === 'recruit') {
+    const r = await rpc('admin_recruit_settings', { p_patch: null });
+    const MODES = [
+      ['pool', '名單制：先收報名名單，管理員排班', ['報名連結不列班表，工讀生只報名「這場活動」。', '管理員在活動的「報名與錄取」點一個班次，勾選要排入的人，按「排入」就是錄取；也可以「移出」。', '名額滿、同一人時段重疊會被擋下。', '適合：各班人數不一樣、由主管挑人。']],
+      ['plans', '方案制：報名時選一個方案', ['在活動的「班次」分頁勾選班次，建立方案（例如「進場＋撤場」），可以另外設方案名額。', '報名連結只列出方案，工讀生只能選一個；一個方案就是整組報名，錄取時也整組錄取（任何一班沒名額，整組都不錄取）。', '每個方案也有自己的專屬連結，可以只給特定的人。', '還沒建立方案的活動，報名連結維持自選班次。', '適合：固定有幾種班次組合。']],
+      ['pick', '自選班次＋專屬連結（原本的做法）', ['報名連結列出所有班次，工讀生自己勾選，可以複選。', '要限制某些人只能報特定組合時，到「班次」分頁勾選班次產生專屬連結；拿到連結的人只看得到那幾班，而且要整組報名。', '適合：班次少、讓工讀生自己挑。']]];
+    body = `<form id="rsf" style="max-width:760px">
+      <p class="sub" style="margin:0 0 12px">決定工讀生打開「報名連結」時看到什麼。切換會立刻套用到所有招募中的活動（目前 ${r.recruiting} 場）；已經報名、已經錄取的資料不會變動。</p>
+      ${MODES.map(([k, t, lines]) => `<label class="card pad" style="display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;cursor:pointer;${r.mode === k ? 'border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)' : ''}">
+        <input type="radio" name="rmode" value="${k}" ${r.mode === k ? 'checked' : ''} style="width:18px;height:18px;margin-top:3px;flex:0 0 auto">
+        <div><b>${esc(t)}</b>${r.mode === k ? ' <span class="badge ok">使用中</span>' : ''}<ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">${lines.map(x => '<li>' + esc(x) + '</li>').join('')}</ul></div></label>`).join('')}
+      <div class="card pad" style="margin-top:6px">
+        <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:0"><input type="checkbox" id="rline" ${r.require_line ? 'checked' : ''} ${r.line_ready || r.require_line ? '' : 'disabled'}> <b>報名前必須綁定 LINE</b></label>
+        <ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">
+          <li>打開後，還沒綁定 LINE 的人在報名頁會先看到綁定步驟（約 1 分鐘），綁好才能送出報名。三種報名方式都適用。</li>
+          <li>目前已綁定 ${r.linked} / ${r.people} 人。LINE 輕用量方案每月只有 200 則，大家都綁定後錄取、前一天提醒、薪資單都會用到額度，建議先在 LINE 官方帳號升級中用量。</li>
+          ${r.line_ready ? '' : '<li style="color:var(--warn)">LINE 通知還沒設定好或已關閉（設定 › LINE 通知），這個選項暫時不能打開' + (r.require_line ? '；目前已勾選但<b>沒有作用</b>，未綁定的人仍可報名' : '') + '。</li>'}</ul></div>
+      <div class="card pad" style="margin-top:10px"><b>錄取通知</b>
+        <ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">
+          <li>錄取（或名單制排入）後約 2 分鐘通知：有綁 LINE 的發 LINE；有 Email 的另外寄 Email，內容是活動名稱和上班時間。</li>
+          <li>Email 由 w63068925 的 Gmail 寄出，一天最多寄 75 封（含新人建檔驗證信；Gmail 每天約 100 封，剩下的留給建檔驗證信），超過的隔天再寄。寄送結果會在「LINE 通知」分頁的紀錄裡標示 Email。</li>
+          <li>目前有 Email 的人 ${r.with_email} / ${r.people}；近 24 小時已寄 ${r.mail_today} 封，等待寄出 ${r.mail_pending} 封。${r.mail_ready ? '' : '<span style="color:var(--warn)">寄信設定還沒完成（設定 › 公司資料 › 新人建檔驗證信），Email 暫時不會寄出。</span>'}</li></ul></div>
+      <div id="rsm" style="margin-top:12px"></div><button class="btn">儲存報名方式</button></form>`;
+  } else if (tab === 'company') {
     const em = S.ov.employer || {};
     body = `<form id="cf" class="card pad" style="max-width:520px"><p class="sub" style="margin:0">顯示在每張薪資單的「雇主」欄。</p>
       <label for="ln">公司全名</label><input id="ln" type="text" value="${esc(em.legal_name || '')}" placeholder="○○有限公司">
@@ -1738,8 +1827,8 @@ async function viewSettings(tab) {
     const [ov, st] = await Promise.all([rpc('admin_line_overview'), lineCall('status').catch(() => ({ ok: false }))]);
     S.lineSt = undefined;
     const KIND = { accepted: '錄取', reminder: '前一天提醒', checkout: '未簽退', payslip: '薪資單', test: '測試', docs: '補資料提醒' };
-    const NST = { sent: ['已送出', 'ok'], pending: ['等待中', ''], skipped: ['未送', 'warn'], failed: ['失敗', 'error'] };
-    const WHY = { not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退', expired: '過期未送', already_complete: '已補齊' };
+    const NST = { sending: ['送出中', ''], sent: ['已送出', 'ok'], pending: ['等待中', ''], skipped: ['未送', 'warn'], failed: ['失敗', 'error'] };
+    const WHY = { quota: 'Gmail 今日額度已滿，稍後重試', no_response: '寄信服務沒有回應', denied: '寄信驗證失敗', not_linked: '本人未綁定', disabled: '通知已關閉', no_longer_accepted: '已取消錄取', not_published: '已取消發布', already_out: '已簽退', expired: '過期未送', already_complete: '已補齊', no_email: '沒有 Email', unsupported: '不寄 Email' };
     const hook = LINE_FN;
     // 金鑰沒設好：等待中的通知永遠不會送出，不讓人以為快送了；測試訊息也送不出去
     const lineOff = !st.ok || !st.configured || !st.valid;
@@ -1755,9 +1844,9 @@ async function viewSettings(tab) {
         <div class="card stat"><div class="k">等待發送</div><div class="v" style="${lineOff && ov.pending ? 'color:var(--warn)' : ''}">${ov.pending}</div>${lineOff ? '<div class="dim">LINE 未設定好，通知不會送出</div>' : ''}</div></div>
       <div class="split" style="grid-template-columns:minmax(0,1fr) minmax(300px,380px)"><div>
         <div class="card tablebox"><table><thead><tr><th>時間</th><th>類型</th><th>對象</th><th>狀態</th></tr></thead>
-        <tbody>${ov.recent.map(n => `<tr title="${esc(n.body || '')}"><td>${esc(d(n.at))} ${esc(new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(n.at)))}</td><td>${esc(KIND[n.kind] || n.kind)}</td>
+        <tbody>${ov.recent.map(n => `<tr title="${esc(n.body || '')}"><td>${esc(d(n.at))} ${esc(new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(n.at)))}</td><td>${esc(KIND[n.kind] || n.kind)}${n.channel === 'mail' ? ' <span class="badge">Email</span>' : ''}</td>
           <td>${esc(n.name)}${n.event ? '<div class="dim">' + esc(n.event) + '</div>' : ''}</td><td><span class="badge ${NST[n.status][1]}">${NST[n.status][0]}</span>${n.error ? '<div class="dim">' + esc(WHY[n.error] || n.error) + '</div>' : ''}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">還沒有通知紀錄</td></tr>'}</tbody></table></div>
-        <div class="card pad" style="margin-top:16px"><b>系統會自動發送</b><p class="sub" style="margin-top:6px;line-height:1.8">錄取：錄取後約 2 分鐘（同一人連續錄取多班會合併成一則）<br>前一天提醒：每天 18:00 通知隔天有班的人<br>未簽退：班次結束 30 分鐘後仍未簽退（沒有班次則上班 10 小時後）<br>薪資單：發布後約 2 分鐘<br>沒有綁定 LINE 的人不會收到，紀錄會顯示「本人未綁定」。</p></div>
+        <div class="card pad" style="margin-top:16px"><b>系統會自動發送</b><p class="sub" style="margin-top:6px;line-height:1.8">錄取：錄取後約 2 分鐘（同一人連續錄取多班會合併成一則）<br>前一天提醒：每天 18:00 通知隔天有班的人<br>未簽退：班次結束 30 分鐘後仍未簽退（沒有班次則上班 10 小時後）<br>薪資單：發布後約 2 分鐘<br>沒有綁定 LINE 的人不會收到，紀錄會顯示「本人未綁定」。<br>錄取通知另外寄 Email 給有 Email 的人（標示 Email，不佔 LINE 額度；本月已寄 ${ov.mail_month || 0} 封）。</p></div>
       </div><div>
         <form id="lf" class="card pad"><b>設定</b>
           <label for="bid">官方帳號 ID（@ 開頭）</label><input id="bid" type="text" autocapitalize="none" value="${esc(ov.basic_id || '')}" placeholder="@123abcde">
@@ -1805,6 +1894,14 @@ async function viewSettings(tab) {
       $('mk').value = '';
       if (!r.ok) { $('mm').innerHTML = '<div class="msg err">' + (r.error === 'bad_url' ? '網址要是 https://script.google.com/macros/s/…/exec。' : r.error === 'bad_key' ? '密鑰格式不對（64 個 0–9、a–f）。' : '儲存失敗。') + '</div>'; return; }
       $('mm').innerHTML = '<div class="msg ok">寄信設定已儲存。</div>'; showMail(r); };
+  }
+  if (f('rsf')) {
+    on('[name=rmode]', 'change', () => document.querySelectorAll('#rsf > label.card').forEach(l => { const on1 = l.querySelector('input').checked; l.style.borderColor = on1 ? 'var(--ink)' : ''; l.style.boxShadow = on1 ? '0 0 0 1px var(--ink)' : ''; }));
+    f('rsf').onsubmit = async ev => { ev.preventDefault();
+      const m = document.querySelector('[name=rmode]:checked');
+      const r = await rpc('admin_recruit_settings', { p_patch: { mode: m ? m.value : 'pick', require_line: $('rline').checked ? 'true' : 'false' } });
+      if (!r.ok) { $('rsm').innerHTML = '<div class="msg err">' + (r.error === 'line_not_ready' ? 'LINE 通知還沒設定好或已關閉，不能要求報名前綁定 LINE。' : '儲存失敗。') + '</div>'; return; }
+      S.cache.stale = true; flash('ok', '報名方式已更新。'); viewSettings('recruit'); };
   }
   if (f('cf')) f('cf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_update_employer', { p_patch: { legal_name: $('ln').value, tax_id: $('tx').value, contact: $('ct').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + (r.error === 'contact_too_long' ? '聯絡窗口最多 200 字。' : '統一編號必須是 8 個數字。') + '</div>'; return; } await loadOverview(); flash('ok', '公司資料已更新。'); viewSettings('company'); };
   if (f('hf')) {

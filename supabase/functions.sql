@@ -234,7 +234,7 @@ CREATE OR REPLACE FUNCTION public.admin_decide(p_token text, p_items jsonb, p_st
  SET search_path TO ''
 AS $function$
 declare v_actor text := public.admin_actor(p_token); it jsonb; v_app uuid; v_shift uuid; a public.applications; s public.shifts; v_done int := 0;
-  full_list jsonb := '[]'::jsonb; clash_list jsonb := '[]'::jsonb; v_old text;
+  full_list jsonb := '[]'::jsonb; clash_list jsonb := '[]'::jsonb; v_old text; plan_list jsonb := '[]'::jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_status not in ('applied','accepted','waitlist','rejected') then return jsonb_build_object('ok', false, 'error', 'bad_status'); end if;
@@ -247,6 +247,10 @@ begin
     perform 1 from public.people where id = a.person_id for update;
     select status into v_old from public.application_shifts where application_id = v_app and shift_id = v_shift for update;
     if v_old is null or v_old = p_status then continue; end if;
+    -- 方案報名：整組錄取只能走 admin_decide_plan（它會設 payroll.plan_decide）；名單制不分方案
+    if p_status = 'accepted' and a.plan_id is not null and coalesce(current_setting('payroll.plan_decide', true), '') <> '1' and public.recruit_mode() <> 'pool' then
+      plan_list := plan_list || to_jsonb((select name from public.people where id = a.person_id)); continue;
+    end if;
     if p_status = 'accepted' and (select count(*) from public.application_shifts x join public.applications ax on ax.id = x.application_id
         where x.shift_id = v_shift and x.status = 'accepted' and ax.status = 'active') >= s.headcount then
       full_list := full_list || to_jsonb(to_char(s.work_date, 'MM/DD') || ' ' || coalesce(s.role, '')); continue;
@@ -266,7 +270,7 @@ begin
     insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'shift_' || p_status, 'application_shifts', v_app, jsonb_build_object('shift', v_shift));
     v_done := v_done + 1;
   end loop;
-  return jsonb_build_object('ok', true, 'updated', v_done, 'full', full_list, 'clash', clash_list);
+  return jsonb_build_object('ok', true, 'updated', v_done, 'full', full_list, 'clash', clash_list, 'plan', plan_list);
 end $function$
 ;
 
@@ -419,13 +423,15 @@ AS $function$
 declare v_actor text := public.admin_actor(p_token);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  -- 只算 LINE（LINE 每月額度）；Email 另外統計
   return jsonb_build_object('ok', true, 'basic_id', public.setting('line_basic_id'), 'enabled', coalesce(public.setting('line_enabled'), 'true') = 'true',
     'linked', (select count(*) from public.people where line_user_id is not null), 'people', (select count(*) from public.people),
-    'pending', (select count(*) from public.notifications where status = 'pending'),
+    'pending', (select count(*) from public.notifications where status = 'pending' and channel = 'line'),
     'month', (select jsonb_build_object('sent', count(*) filter (where status = 'sent'), 'skipped', count(*) filter (where status = 'skipped'), 'failed', count(*) filter (where status = 'failed'))
-              from public.notifications where created_at >= date_trunc('month', now() at time zone 'Asia/Taipei') at time zone 'Asia/Taipei'),
+              from public.notifications where channel = 'line' and created_at >= date_trunc('month', now() at time zone 'Asia/Taipei') at time zone 'Asia/Taipei'),
+    'mail_month', (select count(*) from public.notifications where channel = 'mail' and status = 'sent' and created_at >= date_trunc('month', now() at time zone 'Asia/Taipei') at time zone 'Asia/Taipei'),
     'recent', coalesce((select jsonb_agg(x) from (select jsonb_build_object('kind', n.kind, 'name', p.name, 'event', e.name, 'status', n.status, 'error', n.error,
-        'at', coalesce(n.sent_at, n.created_at), 'body', n.body) x
+        'at', coalesce(n.sent_at, n.created_at), 'body', n.body, 'channel', n.channel) x
       from public.notifications n join public.people p on p.id = n.person_id left join public.events e on e.id = n.event_id order by n.created_at desc limit 40) t), '[]'::jsonb));
 end $function$
 ;
@@ -721,12 +727,15 @@ AS $function$
 declare v_actor text := public.admin_actor(p_token);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  return (select jsonb_build_object('ok', true,
+  return (select jsonb_build_object('ok', true, 'mode', public.recruit_mode(), 'require_line', public.recruit_need_line(),
     'event', jsonb_build_object('location', e.location, 'description', e.description, 'recruiting', e.recruiting, 'form', e.form_config, 'signup_code', e.signup_code,
        'signup_open', coalesce(e.end_date, e.start_date) >= (now() at time zone 'Asia/Taipei')::date - 1),
     'shifts', coalesce((select jsonb_agg(public.shift_json(s) order by s.work_date, s.start_time) from public.shifts s where s.event_id = e.id), '[]'::jsonb),
+    'plans', coalesce((select jsonb_agg(public.plan_json(p) || jsonb_build_object('code', p.code, 'disabled_at', p.disabled_at, 'created_at', p.created_at)
+        order by p.disabled_at nulls first, p.created_at) from public.recruit_plans p where p.event_id = e.id), '[]'::jsonb),
     'applicants', coalesce((select jsonb_agg(jsonb_build_object('app_id', a.id, 'person_id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone,
         'source', p.profile_source, 'answers', a.answers, 'experience', a.experience, 'created_at', a.created_at, 'contract_accepted_at', a.contract_accepted_at,
+        'plan_id', a.plan_id, 'linked', p.line_user_id is not null, 'has_email', coalesce(btrim(p.email), '') <> '',
         'has_photo', exists (select 1 from public.people_documents d where d.person_id = p.id and d.kind = 'photo'),
         'docs', (select count(*) from public.people_documents d where d.person_id = p.id and d.kind <> 'photo'),
         'past_events', (select count(distinct s2.event_id) from public.payslips s2 where s2.person_id = p.id and s2.event_id <> e.id),
@@ -1323,7 +1332,7 @@ declare v_claim uuid := gen_random_uuid(); r record; out jsonb := '[]'::jsonb; v
 begin
   for r in select n.*, p.name, p.line_user_id, e.name as event_name from public.notifications n join public.people p on p.id = n.person_id
            left join public.events e on e.id = n.event_id
-           where ((n.status = 'pending' and n.send_after <= now()) or (n.status = 'sending' and n.claimed_at < now() - interval '10 minutes')) order by n.created_at limit p_limit for update of n skip locked loop
+           where n.channel = 'line' and ((n.status = 'pending' and n.send_after <= now()) or (n.status = 'sending' and n.claimed_at < now() - interval '10 minutes')) order by n.created_at limit p_limit for update of n skip locked loop
     if r.status = 'sending' and r.attempts >= 3 then
       update public.notifications set status = 'failed', error = coalesce(error, 'stuck'), claim = null where id = r.id; continue;
     end if;
@@ -1445,7 +1454,8 @@ CREATE OR REPLACE FUNCTION public.notify_tick()
 AS $function$
 begin
   perform public.notify_enqueue_checkout();
-  if exists (select 1 from public.notifications where (status = 'pending' and send_after <= now()) or (status = 'sending' and claimed_at < now() - interval '10 minutes')) then
+  perform public.mail_flush();
+  if exists (select 1 from public.notifications where channel = 'line' and ((status = 'pending' and send_after <= now()) or (status = 'sending' and claimed_at < now() - interval '10 minutes'))) then
     perform net.http_post(
       url := 'https://rxekuiadnzjfvjcgmrxr.supabase.co/functions/v1/line',
       body := jsonb_build_object('action', 'flush'),
@@ -1519,18 +1529,49 @@ CREATE OR REPLACE FUNCTION public.payroll_apply(p_token text, p_join text, p_dat
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_pid uuid := public.payroll_session_person(p_token); e public.events; v_app uuid; v_ids uuid[]; q jsonb; v_ans jsonb := '{}'::jsonb; v text;
+declare v_pid uuid := public.payroll_session_person(p_token); e public.events; t record; v_view jsonb; v_kind text; v_plan uuid; pl public.recruit_plans;
+  v_app uuid; v_ids uuid[]; q jsonb; v_ans jsonb := '{}'::jsonb; v text; v_old_plan uuid; v_has_acc boolean := false;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  select * into e from public.events where signup_code = btrim(coalesce(p_join,''));
+  select * into t from public.join_target(p_join);
+  select * into e from public.events where id = t.event_id;
   if not found or coalesce(e.end_date, e.start_date) < (now() at time zone 'Asia/Taipei')::date - 1 then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
   if not e.recruiting then return jsonb_build_object('ok', false, 'error', 'closed'); end if;
-  begin
-    select coalesce(array_agg(x::uuid), '{}') into v_ids from jsonb_array_elements_text(coalesce(p_data->'shift_ids','[]'::jsonb)) x;
-  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_shift'); end;
-  if exists (select 1 from public.shifts where event_id = e.id) and cardinality(v_ids) = 0 then return jsonb_build_object('ok', false, 'error', 'no_shift'); end if;
-  if exists (select 1 from unnest(v_ids) i where not exists (select 1 from public.shifts s where s.id = i and s.event_id = e.id)) then
-    return jsonb_build_object('ok', false, 'error', 'bad_shift');
+  if public.recruit_need_line() and not exists (select 1 from public.people where id = v_pid and line_user_id is not null) then
+    return jsonb_build_object('ok', false, 'error', 'need_line');
+  end if;
+  v_view := public.recruit_view(e.id, t.plan_id); v_kind := v_view->>'kind';
+  select a.plan_id, exists (select 1 from public.application_shifts x where x.application_id = a.id and x.status = 'accepted')
+    into v_old_plan, v_has_acc from public.applications a where a.event_id = e.id and a.person_id = v_pid and a.status = 'active' for update of a;
+  v_has_acc := coalesce(v_has_acc, false);
+  -- 已錄取的方案報名：不能經主連結改成自選，也不能改報別的方案（名單制不動班次，不受限）
+  if v_has_acc and v_old_plan is not null and v_kind <> 'pool' and (v_kind = 'pick' or nullif(p_data->>'plan_id', '') is distinct from v_old_plan::text) then
+    return jsonb_build_object('ok', false, 'error', 'has_accepted');
+  end if;
+  if v_kind = 'pool' then
+    -- 名單制：只報名這場活動，班次由管理員安排，這裡不動班次
+    v_ids := null;
+  elsif v_kind = 'pick' then
+    begin
+      select coalesce(array_agg(x::uuid), '{}') into v_ids from jsonb_array_elements_text(coalesce(p_data->'shift_ids','[]'::jsonb)) x;
+    exception when others then return jsonb_build_object('ok', false, 'error', 'bad_shift'); end;
+    if exists (select 1 from public.shifts where event_id = e.id) and cardinality(v_ids) = 0 then return jsonb_build_object('ok', false, 'error', 'no_shift'); end if;
+    if exists (select 1 from unnest(v_ids) i where not exists (select 1 from public.shifts s where s.id = i and s.event_id = e.id)) then
+      return jsonb_build_object('ok', false, 'error', 'bad_shift');
+    end if;
+  else
+    -- 方案：整組報名，只能選這個連結看得到的方案
+    begin v_plan := nullif(p_data->>'plan_id', '')::uuid; exception when others then return jsonb_build_object('ok', false, 'error', 'bad_plan'); end;
+    if v_plan is null then return jsonb_build_object('ok', false, 'error', 'no_plan'); end if;
+    if not exists (select 1 from jsonb_array_elements(v_view->'plans') x where (x->>'id')::uuid = v_plan) then return jsonb_build_object('ok', false, 'error', 'bad_plan'); end if;
+    select * into pl from public.recruit_plans where id = v_plan;
+    if exists (select 1 from unnest(pl.shift_ids) i where not exists (select 1 from public.shifts s where s.id = i and s.event_id = e.id)) then
+      return jsonb_build_object('ok', false, 'error', 'bad_shift');
+    end if;
+    -- 已經有錄取的班次：不能改報別的方案（請聯絡負責人）
+    if v_has_acc and v_old_plan is distinct from v_plan then return jsonb_build_object('ok', false, 'error', 'has_accepted'); end if;
+    if v_old_plan is distinct from v_plan and (public.plan_json(pl)->>'full')::boolean then return jsonb_build_object('ok', false, 'error', 'plan_full'); end if;
+    v_ids := pl.shift_ids;
   end if;
   for q in select * from jsonb_array_elements(coalesce(e.form_config->'questions', '[]'::jsonb)) loop
     v := btrim(coalesce(p_data->'answers'->>(q->>'id'), ''));
@@ -1549,13 +1590,17 @@ begin
   if jsonb_array_length(public.person_missing_docs(v_pid)) > 0 then
     return jsonb_build_object('ok', false, 'error', 'missing_docs', 'missing', public.person_missing_docs(v_pid));
   end if;
-  insert into public.applications(event_id, person_id, answers, experience)
-  values (e.id, v_pid, v_ans, nullif(left(btrim(coalesce(p_data->>'experience','')), 2000), ''))
-  on conflict (event_id, person_id) do update set answers = excluded.answers, experience = excluded.experience, status = 'active', updated_at = now()
+  insert into public.applications(event_id, person_id, answers, experience, plan_id)
+  values (e.id, v_pid, v_ans, nullif(left(btrim(coalesce(p_data->>'experience','')), 2000), ''), v_plan)
+  on conflict (event_id, person_id) do update set answers = excluded.answers, experience = excluded.experience, status = 'active', updated_at = now(),
+    plan_id = case when v_kind = 'pool' then public.applications.plan_id else excluded.plan_id end
   returning id into v_app;
-  delete from public.application_shifts where application_id = v_app and status in ('applied','waitlist','rejected') and not (shift_id = any(v_ids));
-  insert into public.application_shifts(application_id, shift_id) select v_app, i from unnest(v_ids) i on conflict do nothing;
-  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'applied', 'applications', v_app, jsonb_build_object('shifts', cardinality(v_ids)));
+  if v_ids is not null then
+    delete from public.application_shifts where application_id = v_app and status in ('applied','waitlist','rejected') and not (shift_id = any(v_ids));
+    insert into public.application_shifts(application_id, shift_id, status) select v_app, i, 'applied' from unnest(v_ids) i on conflict do nothing;
+  end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'applied', 'applications', v_app,
+    jsonb_build_object('shifts', coalesce(cardinality(v_ids), 0), 'mode', v_kind, 'plan', v_plan));
   return jsonb_build_object('ok', true);
 end $function$
 ;
@@ -2024,15 +2069,21 @@ CREATE OR REPLACE FUNCTION public.payroll_event_public(p_join text)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare e public.events; em public.employers;
+declare e public.events; em public.employers; t record; v jsonb; v_ids uuid[];
 begin
-  select * into e from public.events where signup_code = btrim(coalesce(p_join,''));
+  select * into t from public.join_target(p_join);
+  select * into e from public.events where id = t.event_id;
   if not found or coalesce(e.end_date, e.start_date) < (now() at time zone 'Asia/Taipei')::date - 1 then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
   select * into em from public.employers where id = e.employer_id;
+  v := public.recruit_view(e.id, t.plan_id);
+  select coalesce(array_agg(distinct x::uuid), '{}') into v_ids from jsonb_array_elements(v->'plans') pj, jsonb_array_elements_text(pj->'shift_ids') x;
   return jsonb_build_object('ok', true, 'event', jsonb_build_object('name', e.name, 'start_date', e.start_date, 'end_date', e.end_date,
       'location', e.location, 'description', e.description, 'recruiting', e.recruiting, 'employer', coalesce(em.legal_name, em.name),
       'default_hourly_rate', e.default_hourly_rate, 'form', e.form_config),
-    'shifts', coalesce((select jsonb_agg(public.shift_json(s) order by s.work_date, s.start_time) from public.shifts s where s.event_id = e.id), '[]'::jsonb));
+    'mode', v->>'kind', 'plans', v->'plans', 'require_line', public.recruit_need_line(),
+    'shifts', case v->>'kind' when 'pool' then '[]'::jsonb
+      else coalesce((select jsonb_agg(public.shift_json(s) order by s.work_date, s.start_time) from public.shifts s
+        where s.event_id = e.id and (v->>'kind' = 'pick' or s.id = any(v_ids))), '[]'::jsonb) end);
 end $function$
 ;
 
@@ -2044,7 +2095,7 @@ CREATE OR REPLACE FUNCTION public.payroll_join_info(p_join text)
 AS $function$
   select coalesce((select jsonb_build_object('ok', true, 'event', e.name, 'employer', em.name)
     from public.events e join public.employers em on em.id = e.employer_id
-    where e.signup_code = btrim(coalesce(p_join,'')) and coalesce(e.end_date, e.start_date) >= (now() at time zone 'Asia/Taipei')::date - 1),
+    where e.id = (select t.event_id from public.join_target(p_join) t) and coalesce(e.end_date, e.start_date) >= (now() at time zone 'Asia/Taipei')::date - 1),
     jsonb_build_object('ok', false, 'error', 'bad_join'));
 $function$
 ;
@@ -2275,14 +2326,18 @@ AS $function$
 declare v_pid uuid := public.payroll_session_person(p_token); a public.applications;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  select ap.* into a from public.applications ap join public.events e on e.id = ap.event_id where e.signup_code = btrim(coalesce(p_join,'')) and ap.person_id = v_pid;
+  select ap.* into a from public.applications ap where ap.event_id = (select t.event_id from public.join_target(p_join) t) and ap.person_id = v_pid;
   return jsonb_build_object('ok', true,
     'has_photo', exists (select 1 from public.people_documents where person_id = v_pid and kind = 'photo'),
     'documents', coalesce((select jsonb_object_agg(d.kind, d.uploaded_at) from public.people_documents d where d.person_id = v_pid), '{}'::jsonb),
     'missing_docs', public.person_missing_docs(v_pid),
+    'linked', exists (select 1 from public.people where id = v_pid and line_user_id is not null),
     'application', case when a.id is null then null else jsonb_build_object('status', a.status, 'answers', a.answers, 'experience', a.experience,
-      'contract_accepted_at', a.contract_accepted_at,
-      'shifts', coalesce((select jsonb_object_agg(x.shift_id, x.status) from public.application_shifts x where x.application_id = a.id), '{}'::jsonb)) end);
+      'contract_accepted_at', a.contract_accepted_at, 'plan_id', a.plan_id,
+      'shifts', coalesce((select jsonb_object_agg(x.shift_id, x.status) from public.application_shifts x where x.application_id = a.id), '{}'::jsonb),
+      -- 本人報名或被排入的班次（名單制的報名頁不列班表，靠這裡顯示）
+      'shift_list', coalesce((select jsonb_agg(public.shift_json(s) || jsonb_build_object('status', x.status) order by s.work_date, s.start_time)
+        from public.application_shifts x join public.shifts s on s.id = x.shift_id where x.application_id = a.id), '[]'::jsonb)) end);
 end $function$
 ;
 
@@ -2398,7 +2453,7 @@ declare e public.events; v_nid text := upper(btrim(coalesce(p_data->>'national_i
   v_bd date; v_age int; c jsonb; v_id uuid; v_token text; sv public.signup_verifications;
 begin
   if btrim(coalesce(p_join,'')) <> '' then
-    select * into e from public.events where signup_code = btrim(coalesce(p_join,'')) and coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1;
+    select * into e from public.events where id = (select t.event_id from public.join_target(p_join) t) and coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1;
     if not found then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
   else
     select * into sv from public.signup_verifications where ticket_hash = encode(extensions.digest(coalesce(p_data->>'signup_ticket',''), 'sha256'), 'hex')
@@ -2481,10 +2536,10 @@ AS $function$
 declare v_pid uuid := public.payroll_session_person(p_token); v_app uuid;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  select a.id into v_app from public.applications a join public.events e on e.id = a.event_id where e.signup_code = btrim(coalesce(p_join,'')) and a.person_id = v_pid;
+  select a.id into v_app from public.applications a where a.event_id = (select t.event_id from public.join_target(p_join) t) and a.person_id = v_pid;
   if v_app is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   if exists (select 1 from public.application_shifts where application_id = v_app and status = 'accepted') then return jsonb_build_object('ok', false, 'error', 'has_accepted'); end if;
-  update public.applications set status = 'withdrawn', updated_at = now() where id = v_app;
+  update public.applications set status = 'withdrawn', plan_id = null, updated_at = now() where id = v_app;
   delete from public.application_shifts where application_id = v_app;
   return jsonb_build_object('ok', true);
 end $function$
@@ -2567,6 +2622,9 @@ begin
     end if;
     update public.contract_history set superseded_at = now() where application_id = new.id and superseded_at is null;
     insert into public.notifications(person_id, event_id, kind, send_after) values (new.person_id, new.event_id, 'accepted', now() + interval '2 minutes') on conflict do nothing;
+    insert into public.notifications(person_id, event_id, kind, send_after, channel)
+    select new.person_id, new.event_id, 'accepted', now() + interval '2 minutes', 'mail' from public.people p where p.id = new.person_id and coalesce(btrim(p.email), '') <> ''
+    on conflict do nothing;
   end if;
   return new;
 end $function$
@@ -2616,9 +2674,12 @@ CREATE OR REPLACE FUNCTION public.trg_notify_accept()
  SET search_path TO ''
 AS $function$
 begin
+  -- 錄取通知：有綁 LINE 的發 LINE；有 Email 的另外寄信（同一人連續錄取多班會合併成一則）
   if new.status = 'accepted' and (tg_op = 'INSERT' or old.status is distinct from 'accepted') then
-    insert into public.notifications(person_id, event_id, kind, send_after)
-    select a.person_id, a.event_id, 'accepted', now() + interval '2 minutes' from public.applications a join public.people p on p.id = a.person_id and p.line_user_id is not null where a.id = new.application_id
+    insert into public.notifications(person_id, event_id, kind, send_after, channel)
+    select a.person_id, a.event_id, 'accepted', now() + interval '2 minutes', c.ch
+    from public.applications a join public.people p on p.id = a.person_id cross join (values ('line'), ('mail')) c(ch)
+    where a.id = new.application_id and ((c.ch = 'line' and p.line_user_id is not null) or (c.ch = 'mail' and coalesce(btrim(p.email), '') <> ''))
     on conflict do nothing;
   end if;
   return new;
@@ -3085,6 +3146,7 @@ declare v_nid text := upper(regexp_replace(public.halfwidth(coalesce(p_national_
   v_ip text := nullif(btrim(split_part(coalesce((nullif(current_setting('request.headers', true), ''))::json->>'x-forwarded-for', ''), ',', 1)), '');
 begin
   perform pg_advisory_xact_lock(hashtext('payroll_signup_start'));
+  perform pg_advisory_xact_lock(hashtext('mail_quota'));
   v_url := nullif(btrim(coalesce(v_url, '')), ''); v_key := nullif(btrim(coalesce(v_key, '')), '');
   if not public.valid_tw_id(v_nid) then return jsonb_build_object('ok', false, 'error', 'bad_national_id'); end if;
   if length(v_email) > 120 or v_email !~ '^[^@\s]+@[^@\s]+\.[a-z]{2,}$' then return jsonb_build_object('ok', false, 'error', 'bad_email'); end if;
@@ -3099,7 +3161,10 @@ begin
      or (select count(*) from public.signup_verifications where email = v_email and created_at > now() - interval '1 hour') >= 3 then
     return jsonb_build_object('ok', false, 'error', 'too_many');
   end if;
-  if (select count(*) from public.signup_verifications where created_at > now() - interval '1 day') >= 300 then return jsonb_build_object('ok', false, 'error', 'busy'); end if;
+  if (select count(*) from public.signup_verifications where created_at > now() - interval '1 day')
+     + (select count(*) from public.notifications where channel = 'mail' and (status = 'sending' or (status = 'sent' and sent_at > now() - interval '24 hours'))) >= 95 then
+    return jsonb_build_object('ok', false, 'error', 'busy');
+  end if;
   delete from public.signup_verifications where created_at < now() - interval '7 days';
   v_code := lpad(((('x' || encode(extensions.gen_random_bytes(4), 'hex'))::bit(32)::bigint) % 1000000)::text, 6, '0');
   v_id := gen_random_uuid();
@@ -3352,3 +3417,345 @@ $function$
 ;
 revoke all on function public.legacy_hd_priority_ids(integer) from public, anon, authenticated;
 grant execute on function public.legacy_hd_priority_ids(integer) to service_role;
+
+CREATE OR REPLACE FUNCTION public.recruit_mode()
+ RETURNS text
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  -- 報名方式：pool 名單制／plans 方案制／pick 自選班次（預設）
+  select case when public.setting('recruit_mode') in ('pool', 'plans', 'pick') then public.setting('recruit_mode') else 'pick' end
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.recruit_need_line()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  -- 報名前必須綁定 LINE：設定打開、LINE 通知沒關、而且官方帳號已設定才生效
+  select coalesce(public.setting('recruit_require_line'), 'false') = 'true' and coalesce(public.setting('line_enabled'), 'true') = 'true'
+    and nullif(btrim(coalesce(public.setting('line_basic_id'), '')), '') is not null
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.join_target(p_join text, OUT event_id uuid, OUT plan_id uuid)
+ RETURNS record
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 報名連結可以是活動的主連結，或方案／專屬連結（已停用的方案連結無效）
+declare v text := btrim(coalesce(p_join, ''));
+begin
+  if v = '' then return; end if;
+  select e.id into event_id from public.events e where e.signup_code = v;
+  if event_id is not null then return; end if;
+  select p.event_id, p.id into event_id, plan_id from public.recruit_plans p where p.code = v and p.disabled_at is null;
+  -- 名單制不分方案：方案連結當成這場活動的報名連結
+  if public.recruit_mode() = 'pool' then plan_id := null; end if;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.plan_json(p recruit_plans)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  with acc as (select count(*) n from public.applications a where a.plan_id = p.id and a.status = 'active'
+    and exists (select 1 from public.application_shifts x where x.application_id = a.id and x.status = 'accepted'))
+  select jsonb_build_object('id', p.id, 'name', p.name, 'headcount', p.headcount, 'shift_ids', to_jsonb(p.shift_ids),
+    'applied', (select count(*) from public.applications a where a.plan_id = p.id and a.status = 'active'),
+    'accepted', (select n from acc),
+    -- 額滿：方案名額已滿，或方案裡任何一班已錄取滿額
+    'full', (p.headcount is not null and (select n from acc) >= p.headcount)
+      or exists (select 1 from public.shifts s where s.id = any(p.shift_ids) and (select count(*) from public.application_shifts x join public.applications a on a.id = x.application_id
+          where x.shift_id = s.id and x.status = 'accepted' and a.status = 'active') >= s.headcount))
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.recruit_view(p_event uuid, p_plan uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE
+ SET search_path TO ''
+AS $function$
+-- 報名頁要呈現的方式：pool 不列班次／plan 單一方案連結／plans 列出方案單選／pick 自選班次
+declare v_mode text := public.recruit_mode(); v_plans jsonb;
+begin
+  if v_mode = 'pool' then return jsonb_build_object('kind', 'pool', 'plans', '[]'::jsonb); end if;
+  if p_plan is not null then
+    return jsonb_build_object('kind', 'plan', 'plans', coalesce((select jsonb_agg(public.plan_json(p)) from public.recruit_plans p
+      where p.id = p_plan and p.event_id = p_event and p.disabled_at is null), '[]'::jsonb));
+  end if;
+  if v_mode = 'plans' then
+    select jsonb_agg(public.plan_json(p) order by p.created_at) into v_plans from public.recruit_plans p where p.event_id = p_event and p.disabled_at is null;
+    if v_plans is not null then return jsonb_build_object('kind', 'plans', 'plans', v_plans); end if;
+  end if;
+  return jsonb_build_object('kind', 'pick', 'plans', '[]'::jsonb);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_save_plan(p_token text, p_event uuid, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 建立、改名、改名額或停用方案／專屬連結。同一組班次已有啟用中的方案就沿用，不重複產生連結
+declare v_actor text := public.admin_actor(p_token); pl public.recruit_plans; v_ids uuid[]; v_name text; v_head int; v_new public.recruit_plans;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if not exists (select 1 from public.events where id = p_event) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if p_patch ? 'headcount' then
+    begin v_head := nullif(btrim(coalesce(p_patch->>'headcount', '')), '')::int; exception when others then return jsonb_build_object('ok', false, 'error', 'bad_headcount'); end;
+    if v_head is not null and (v_head < 1 or v_head > 500) then return jsonb_build_object('ok', false, 'error', 'bad_headcount'); end if;
+  end if;
+  if p_patch ? 'id' then
+    begin
+      select * into pl from public.recruit_plans where id = (p_patch->>'id')::uuid and event_id = p_event for update;
+    exception when others then return jsonb_build_object('ok', false, 'error', 'not_found'); end;
+    if pl.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+    if coalesce((p_patch->>'disabled')::boolean, false) then
+      update public.recruit_plans set disabled_at = coalesce(disabled_at, now()) where id = pl.id;
+      insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'plan_disabled', 'recruit_plans', pl.id, jsonb_build_object('event', p_event));
+      return jsonb_build_object('ok', true);
+    end if;
+    v_name := left(btrim(coalesce(p_patch->>'name', pl.name)), 40);
+    if v_name = '' then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
+    update public.recruit_plans set name = v_name, headcount = case when p_patch ? 'headcount' then v_head else headcount end where id = pl.id;
+    insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'plan_updated', 'recruit_plans', pl.id, jsonb_build_object('name', v_name, 'headcount', v_head));
+    return jsonb_build_object('ok', true);
+  end if;
+  begin
+    select coalesce(array_agg(distinct x::uuid order by x::uuid), '{}') into v_ids from jsonb_array_elements_text(coalesce(p_patch->'shift_ids', '[]'::jsonb)) x;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_shift'); end;
+  if cardinality(v_ids) < 1 or cardinality(v_ids) > 50 then return jsonb_build_object('ok', false, 'error', 'bad_shift'); end if;
+  if (select count(*) from public.shifts where id = any(v_ids) and event_id = p_event) <> cardinality(v_ids) then return jsonb_build_object('ok', false, 'error', 'bad_shift'); end if;
+  -- 同一組裡時段重疊的班次不能放一起（同一人不能同時上兩班）
+  if exists (select 1 from public.shifts a join public.shifts b on a.id < b.id where a.id = any(v_ids) and b.id = any(v_ids)
+      and (a.work_date + a.start_time, a.work_date + a.end_time + case when a.end_time <= a.start_time then interval '1 day' else interval '0' end)
+          overlaps (b.work_date + b.start_time, b.work_date + b.end_time + case when b.end_time <= b.start_time then interval '1 day' else interval '0' end)) then
+    return jsonb_build_object('ok', false, 'error', 'overlap');
+  end if;
+  select * into pl from public.recruit_plans p where p.event_id = p_event and p.disabled_at is null
+    and (select array_agg(x order by x) from unnest(p.shift_ids) x) = v_ids limit 1;
+  if pl.id is not null then return jsonb_build_object('ok', true, 'id', pl.id, 'code', pl.code, 'existing', true, 'name', pl.name); end if;
+  v_name := left(btrim(coalesce(p_patch->>'name', '')), 40);
+  if v_name = '' then
+    select left(string_agg(coalesce(nullif(btrim(s.role), ''), to_char(s.start_time, 'HH24:MI')), '＋' order by s.work_date, s.start_time), 40) into v_name
+    from public.shifts s where s.id = any(v_ids);
+  end if;
+  insert into public.recruit_plans(event_id, name, shift_ids, headcount, created_by) values (p_event, v_name, v_ids, v_head, v_actor) returning * into v_new;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'plan_created', 'recruit_plans', v_new.id,
+    jsonb_build_object('event', p_event, 'shifts', cardinality(v_ids), 'headcount', v_head));
+  return jsonb_build_object('ok', true, 'id', v_new.id, 'code', v_new.code, 'name', v_new.name);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_decide_plan(p_token text, p_apps uuid[], p_status text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 方案報名的人整組處理：錄取時方案名額、每一班名額、時段衝突都要過，否則這個人整組都不錄取
+declare v_actor text := public.admin_actor(p_token); a public.applications; pl public.recruit_plans; v_items jsonb; v_n int; r jsonb; v_done int := 0;
+  full_list jsonb := '[]'::jsonb; clash_list jsonb := '[]'::jsonb; v_name text;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_status not in ('accepted','waitlist','rejected') then return jsonb_build_object('ok', false, 'error', 'bad_status'); end if;
+  for a in select * from public.applications where id = any(p_apps) and status = 'active' and plan_id is not null order by id for update loop
+    select * into pl from public.recruit_plans where id = a.plan_id for update;
+    select name into v_name from public.people where id = a.person_id;
+    select jsonb_agg(jsonb_build_object('app', a.id, 'shift', x.shift_id)), count(*) into v_items, v_n
+      from public.application_shifts x where x.application_id = a.id and x.status <> p_status;
+    if v_items is null then continue; end if;
+    if p_status = 'accepted' then
+      if pl.headcount is not null and (select count(*) from public.applications a2 where a2.plan_id = pl.id and a2.status = 'active' and a2.id <> a.id
+          and exists (select 1 from public.application_shifts x where x.application_id = a2.id and x.status = 'accepted')) >= pl.headcount then
+        full_list := full_list || to_jsonb(v_name); continue;
+      end if;
+      perform 1 from public.shifts where id in (select shift_id from public.application_shifts where application_id = a.id) order by id for update;
+      if exists (select 1 from public.application_shifts x join public.shifts s on s.id = x.shift_id where x.application_id = a.id and x.status <> 'accepted'
+          and (select count(*) from public.application_shifts y join public.applications ay on ay.id = y.application_id
+               where y.shift_id = s.id and y.status = 'accepted' and ay.status = 'active') >= s.headcount) then
+        full_list := full_list || to_jsonb(v_name); continue;
+      end if;
+      if exists (select 1 from public.application_shifts x join public.shifts s on s.id = x.shift_id
+          join public.application_shifts x2 on x2.status = 'accepted' join public.applications a2 on a2.id = x2.application_id and a2.status = 'active' and a2.person_id = a.person_id
+          join public.shifts s2 on s2.id = x2.shift_id
+          where x.application_id = a.id and x.status <> 'accepted' and s2.id <> s.id and s2.work_date between s.work_date - 1 and s.work_date + 1
+            and (s2.work_date + s2.start_time, s2.work_date + s2.end_time + case when s2.end_time <= s2.start_time then interval '1 day' else interval '0' end)
+                overlaps (s.work_date + s.start_time, s.work_date + s.end_time + case when s.end_time <= s.start_time then interval '1 day' else interval '0' end)) then
+        clash_list := clash_list || to_jsonb(v_name); continue;
+      end if;
+    end if;
+    perform set_config('payroll.plan_decide', '1', true);
+    r := public.admin_decide(p_token, v_items, p_status);
+    perform set_config('payroll.plan_decide', '', true);
+    -- 前面檢查都過了，整組一定要全部更新；萬一沒有就整筆取消，不留下只錄取一半的狀態
+    if (r->>'updated')::int <> v_n then raise exception 'plan_partial'; end if;
+    v_done := v_done + 1;
+  end loop;
+  return jsonb_build_object('ok', true, 'updated', v_done, 'full', full_list, 'clash', clash_list);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_assign(p_token text, p_shift uuid, p_apps uuid[], p_add boolean)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 名單制排班：把報名這場活動的人排入（直接錄取）或移出某個班次；名額、時段衝突沿用 admin_decide 的檢查
+declare v_actor text := public.admin_actor(p_token); s public.shifts; v_new uuid[]; v_items jsonb; r jsonb;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_add is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+  select * into s from public.shifts where id = p_shift;
+  if s.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if p_add then
+    with ins as (
+      insert into public.application_shifts(application_id, shift_id, status)
+      select a.id, s.id, 'applied' from public.applications a where a.id = any(p_apps) and a.event_id = s.event_id and a.status = 'active'
+      on conflict do nothing returning application_id)
+    select coalesce(array_agg(application_id), '{}') into v_new from ins;
+    select jsonb_agg(jsonb_build_object('app', a.id, 'shift', s.id)) into v_items from public.applications a where a.id = any(p_apps) and a.event_id = s.event_id and a.status = 'active';
+    r := public.admin_decide(p_token, coalesce(v_items, '[]'::jsonb), 'accepted');
+    -- 名額滿或時段衝突沒排進去的，不留下「報名」紀錄
+    delete from public.application_shifts where shift_id = s.id and application_id = any(v_new) and status = 'applied';
+  else
+    select jsonb_agg(jsonb_build_object('app', x.application_id, 'shift', s.id)) into v_items
+      from public.application_shifts x join public.applications a on a.id = x.application_id
+      where x.shift_id = s.id and x.application_id = any(p_apps) and a.event_id = s.event_id;
+    r := public.admin_decide(p_token, coalesce(v_items, '[]'::jsonb), 'rejected');
+    delete from public.application_shifts x using public.applications a
+      where a.id = x.application_id and a.event_id = s.event_id and x.shift_id = s.id and x.application_id = any(p_apps) and x.status = 'rejected';
+  end if;
+  return r;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_recruit_settings(p_token text, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 報名方式設定（全站）：p_patch 為 null 只讀取
+declare v_actor text := public.admin_actor(p_token); v_mode text; v_line text;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_patch is not null then
+    v_mode := coalesce(p_patch->>'mode', public.recruit_mode());
+    if v_mode not in ('pool', 'plans', 'pick') then return jsonb_build_object('ok', false, 'error', 'bad_mode'); end if;
+    v_line := coalesce(p_patch->>'require_line', coalesce(public.setting('recruit_require_line'), 'false'));
+    if v_line not in ('true', 'false') then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+    if v_line = 'true' and not (nullif(btrim(coalesce(public.setting('line_basic_id'), '')), '') is not null and coalesce(public.setting('line_enabled'), 'true') = 'true') then
+      return jsonb_build_object('ok', false, 'error', 'line_not_ready');
+    end if;
+    insert into public.app_settings(key, value) values ('recruit_mode', v_mode), ('recruit_require_line', v_line)
+      on conflict (key) do update set value = excluded.value;
+    insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'recruit_settings', 'app_settings', jsonb_build_object('mode', v_mode, 'require_line', v_line));
+  end if;
+  return jsonb_build_object('ok', true, 'mode', public.recruit_mode(), 'require_line', coalesce(public.setting('recruit_require_line'), 'false') = 'true', 'require_line_effective', public.recruit_need_line(),
+    'line_ready', nullif(btrim(coalesce(public.setting('line_basic_id'), '')), '') is not null and coalesce(public.setting('line_enabled'), 'true') = 'true',
+    'mail_ready', nullif(btrim(coalesce(public.setting('mail_webapp_url'), '')), '') is not null and nullif(btrim(coalesce(public.setting('mail_key'), '')), '') is not null,
+    'recruiting', (select count(*) from public.events where recruiting and archived_at is null and coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1),
+    'linked', (select count(*) from public.people where line_user_id is not null and disabled_at is null),
+    'with_email', (select count(*) from public.people where coalesce(btrim(email), '') <> '' and disabled_at is null),
+    'people', (select count(*) from public.people where disabled_at is null),
+    'mail_today', (select count(*) from public.notifications where channel = 'mail' and status = 'sent' and sent_at > now() - interval '24 hours'),
+    'mail_pending', (select count(*) from public.notifications where channel = 'mail' and status = 'pending'));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.mail_flush()
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 錄取通知 Email：經 w63068925 的 Apps Script 寄出。Gmail 一天約 100 封；錄取信最多用到 75 封（含建檔驗證信），其餘留給建檔驗證信，超過的隔天再寄
+-- 只送 HMAC 簽章，不送密鑰（pg_net 佇列表 PUBLIC 可讀）。簽章：notify|sha256(to)|sha256(subject)|sha256(text)|nonce|ts，各欄位定長或不含分隔符，不能重新切割
+-- 送出後先標「sending」，下一輪看 Apps Script 的回應（ok／dup 才算寄出；quota 三小時後重試；其他錯誤重試，滿 3 次轉失敗）
+declare v_url text := nullif(btrim(coalesce(public.setting('mail_webapp_url'), '')), ''); v_key text := nullif(btrim(coalesce(public.setting('mail_key'), '')), '');
+  v_site text := coalesce(public.setting('site_url'), ''); v_room int; r record; v_lines text; v_text text; v_subject text; v_ts bigint; v_sent int := 0;
+  v_req bigint; v_nonce text; v_res text;
+begin
+  if not pg_try_advisory_xact_lock(hashtext('mail_quota')) then return 0; end if;
+  for r in select n.id, n.attempts, n.claimed_at, h.status_code, btrim(coalesce(h.content, '')) as content, h.timed_out, h.error_msg, (h.id is not null) as answered
+           from public.notifications n left join net._http_response h on h.id = n.mail_req
+           where n.channel = 'mail' and n.status = 'sending' for update of n skip locked loop
+    if r.answered and r.status_code = 200 and r.content in ('ok', 'dup') then
+      update public.notifications set status = 'sent', sent_at = now(), error = null, claimed_at = null where id = r.id;
+    elsif r.answered and r.content = 'quota' then
+      update public.notifications set status = 'pending', send_after = now() + interval '3 hours', error = 'quota', claimed_at = null where id = r.id;
+    elsif r.answered or r.claimed_at < now() - interval '30 minutes' then
+      v_res := left(coalesce(nullif(r.content, ''), r.error_msg, case when r.timed_out then 'timeout' end, 'no_response'), 60);
+      update public.notifications set status = case when r.attempts >= 3 then 'failed' else 'pending' end, send_after = now() + interval '15 minutes',
+        error = v_res, claimed_at = null where id = r.id;
+    end if;
+  end loop;
+  update public.notifications set status = 'skipped', error = 'expired' where channel = 'mail' and status = 'pending' and created_at < now() - interval '7 days';
+  if v_url is null or v_key is null then return 0; end if;
+  v_room := 75 - (select count(*) from public.notifications where channel = 'mail' and (status = 'sending' or (status = 'sent' and sent_at > now() - interval '24 hours')))::int
+               - (select count(*) from public.signup_verifications where created_at > now() - interval '24 hours')::int;
+  if v_room <= 0 then return 0; end if;
+  for r in select n.id, n.kind, n.person_id, n.event_id, n.attempts, regexp_replace(coalesce(p.name, ''), '[[:cntrl:]]', ' ', 'g') as name,
+             lower(btrim(p.email)) as email, regexp_replace(coalesce(e.name, '活動'), '[[:cntrl:]]', ' ', 'g') as event_name
+           from public.notifications n join public.people p on p.id = n.person_id left join public.events e on e.id = n.event_id
+           where n.channel = 'mail' and n.status = 'pending' and n.send_after <= now() order by n.created_at limit least(v_room, 20) for update of n skip locked loop
+    if r.email is null or length(r.email) > 120 or r.email !~ '^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$' then
+      update public.notifications set status = 'skipped', error = 'no_email' where id = r.id; continue;
+    end if;
+    if r.kind <> 'accepted' then update public.notifications set status = 'skipped', error = 'unsupported' where id = r.id; continue; end if;
+    select string_agg(to_char(sh.work_date, 'MM/DD') || '（' || (array['日','一','二','三','四','五','六'])[extract(dow from sh.work_date)::int + 1] || '）'
+        || to_char(sh.start_time, 'HH24:MI') || '–' || to_char(sh.end_time, 'HH24:MI') || coalesce('　' || regexp_replace(sh.role, '[[:cntrl:]]', ' ', 'g'), ''), E'\n' order by sh.work_date, sh.start_time)
+    into v_lines
+    from public.application_shifts x join public.applications a on a.id = x.application_id join public.shifts sh on sh.id = x.shift_id
+    where a.person_id = r.person_id and a.event_id = r.event_id and a.status = 'active' and x.status = 'accepted';
+    if v_lines is null then update public.notifications set status = 'skipped', error = 'no_longer_accepted' where id = r.id; continue; end if;
+    v_subject := left('【沃克思】錄取通知：' || r.event_name, 110);
+    v_text := r.name || ' 你好：' || E'\n\n' || '你已錄取「' || r.event_name || '」，上班時間：' || E'\n' || v_lines || E'\n\n'
+      || '請登入確認勞動契約，確認後才算完成排班：' || E'\n' || v_site || E'\n\n' || '沃克思 WORKS';
+    v_ts := floor(extract(epoch from now()))::bigint;
+    v_nonce := r.id::text || ':' || (r.attempts + 1);
+    v_req := net.http_post(url := v_url, body := jsonb_build_object('type', 'notify', 'to', r.email, 'subject', v_subject, 'text', v_text, 'nonce', v_nonce, 'ts', v_ts,
+        'sig', encode(extensions.hmac('notify|' || encode(extensions.digest(r.email, 'sha256'), 'hex') || '|' || encode(extensions.digest(v_subject, 'sha256'), 'hex')
+          || '|' || encode(extensions.digest(v_text, 'sha256'), 'hex') || '|' || v_nonce || '|' || v_ts, v_key, 'sha256'), 'hex')),
+      headers := '{"Content-Type": "application/json"}'::jsonb, timeout_milliseconds := 15000);
+    update public.notifications set status = 'sending', claimed_at = now(), mail_req = v_req, body = v_text, attempts = attempts + 1, error = null where id = r.id;
+    v_sent := v_sent + 1;
+  end loop;
+  return v_sent;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_shift_deleted_plans()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  update public.recruit_plans set disabled_at = now() where old.id = any(shift_ids) and disabled_at is null;
+  return old;
+end $function$
+;
+-- 報名方式（2026-11-27）：recruit_plans 表、applications.plan_id、notifications.channel、shifts 刪除觸發 shifts_deleted_plans
+revoke all on function public.trg_shift_deleted_plans() from public, anon, authenticated;
+revoke all on function public.recruit_mode() from public, anon, authenticated;
+revoke all on function public.recruit_need_line() from public, anon, authenticated;
+revoke all on function public.join_target(text) from public, anon, authenticated;
+revoke all on function public.plan_json(public.recruit_plans) from public, anon, authenticated;
+revoke all on function public.recruit_view(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.mail_flush() from public, anon, authenticated;
+grant execute on function public.admin_save_plan(text, uuid, jsonb) to anon, authenticated, service_role;
+grant execute on function public.admin_decide_plan(text, uuid[], text) to anon, authenticated, service_role;
+grant execute on function public.admin_assign(text, uuid, uuid[], boolean) to anon, authenticated, service_role;
+grant execute on function public.admin_recruit_settings(text, jsonb) to anon, authenticated, service_role;

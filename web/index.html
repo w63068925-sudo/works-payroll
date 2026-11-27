@@ -708,15 +708,22 @@ async function viewRecruit(message) {
   try { pub = await rpc('payroll_event_public', { p_join: state.join }); } catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewRecruit()">再試一次</button>'; return; }
   if (!pub.ok) { saveJoin(null); return state.token ? viewList() : viewLogin(PERR.bad_join); }
   const ev = pub.event, form = ev.form || {}, qs = form.questions || [];
-  let mine = null, hasPhoto = false, docs = {}, missingDocs = [];
+  let mine = null, hasPhoto = false, docs = {}, missingDocs = [], linked = false;
   if (state.token) {
     const r = await rpc('payroll_my_application', { p_token: state.token, p_join: state.join });
-    if (!r.ok) { saveToken(null); } else { mine = r.application; hasPhoto = r.has_photo; docs = r.documents || {}; missingDocs = r.missing_docs || []; }
+    if (!r.ok) { saveToken(null); } else { mine = r.application; hasPhoto = r.has_photo; docs = r.documents || {}; missingDocs = r.missing_docs || []; linked = r.linked; }
   }
   const my = (mine && mine.shifts) || {}, ans = (mine && mine.answers) || {};
   const days = {}; pub.shifts.forEach(s => (days[s.work_date] = days[s.work_date] || []).push(s));
   // 每個班次都額滿：先說清楚，不讓新朋友填完資料才發現沒班可報
-  const allFull = pub.shifts.length > 0 && pub.shifts.every(s => s.accepted >= s.headcount), noShift = !pub.shifts.length;
+  // 報名方式：pool 名單制（不列班表）／plan 專屬連結（單一方案）／plans 方案單選／pick 自選班次
+  const mode = pub.mode || 'pick', plans = pub.plans || [], isPlan = mode === 'plan' || mode === 'plans';
+  const sById = {}; pub.shifts.forEach(s => { sById[s.id] = s; });
+  const planShifts = p => (p.shift_ids || []).map(id => sById[id]).filter(Boolean).sort((a, b) => (a.work_date + a.start).localeCompare(b.work_date + b.start));
+  const allFull = mode === 'pool' ? false : isPlan ? plans.length > 0 && plans.every(p => p.full) : pub.shifts.length > 0 && pub.shifts.every(s => s.accepted >= s.headcount);
+  const noShift = mode === 'pool' ? false : isPlan ? !plans.length : !pub.shifts.length;
+  const planLines = p => planShifts(p).map(s => esc(fmtDate(s.work_date, true).slice(5) + ' ' + shiftTime(s) + (s.role ? '　' + s.role : ''))).join('<br>');
+  const planInfo = p => (p.full ? '已額滿' : p.headcount ? '需要 ' + p.headcount + ' 人' : '') + (planShifts(p).length > 1 ? (p.full || p.headcount ? '　' : '') + '整組報名，以上班次都要上' : '');
   const open = ev.recruiting && !allFull && !noShift;
   const head = `<p class="sub">${esc(ev.employer)}</p><h1>${esc(ev.name)}</h1>
     <p class="sub">${esc(fmtPeriod(ev.start_date, ev.end_date))}${ev.location ? '　' + esc(ev.location) : ''}</p>
@@ -725,7 +732,9 @@ async function viewRecruit(message) {
   if (!state.token) {
     app.innerHTML = brand + head + `
       ${!ev.recruiting ? '<div class="msg warn">這場活動目前不開放報名。</div>' : allFull ? '<div class="msg warn">這場活動的班次都已額滿，目前不收新報名。有名額釋出時活動負責人會再通知。</div>' : noShift ? '<div class="msg warn">這場活動還沒開放班次，請等活動負責人通知後再報名。</div>' : ''}
-      ${pub.shifts.length ? '<h2>班次</h2>' + Object.keys(days).sort().map(dk => '<div class="sday">' + esc(fmtDate(dk, true)) + '</div>' + days[dk].map(s => `<div class="sopt off" style="cursor:default"><div><div class="t">${esc(shiftTime(s))}　${esc(s.role || '')}</div><div class="d">${s.rate || ev.default_hourly_rate ? '時薪 ' + money(s.rate || ev.default_hourly_rate) + ' 元　' : ''}${s.accepted >= s.headcount ? '已額滿' : '需要 ' + s.headcount + ' 人'}</div></div></div>`).join('')).join('') : ''}
+      ${mode === 'pool' ? '<div class="card pad" style="margin-top:14px;font-size:14px">報名後由活動負責人安排班次，排好會用 LINE 或 Email 通知你。</div>'
+        : isPlan ? (plans.length ? '<h2>' + (mode === 'plan' ? '報名班次' : '可報名的方案') + '</h2>' + plans.map(p => `<div class="sopt off" style="cursor:default"><div><div class="t">${esc(p.name)}</div><div class="d" style="line-height:1.6">${planLines(p)}${planInfo(p) ? '<br>' + esc(planInfo(p)) : ''}</div></div></div>`).join('') : '')
+        : pub.shifts.length ? '<h2>班次</h2>' + Object.keys(days).sort().map(dk => '<div class="sday">' + esc(fmtDate(dk, true)) + '</div>' + days[dk].map(s => `<div class="sopt off" style="cursor:default"><div><div class="t">${esc(shiftTime(s))}　${esc(s.role || '')}</div><div class="d">${s.rate || ev.default_hourly_rate ? '時薪 ' + money(s.rate || ev.default_hourly_rate) + ' 元　' : ''}${s.accepted >= s.headcount ? '已額滿' : '需要 ' + s.headcount + ' 人'}</div></div></div>`).join('')).join('') : ''}
       ${open ? '<button class="btn" id="reg">第一次報名，填寫基本資料</button>' : ''}
       <button class="btn ghost" id="login">${open ? '我已經有帳號，登入報名' : '已報名的人登入查看結果'}</button>
       ${open ? '<p class="foot">基本資料只要填一次，之後報名其他活動直接登入即可。</p>' : ''}`;
@@ -738,8 +747,18 @@ async function viewRecruit(message) {
     ${ev.recruiting ? '' : '<div class="msg warn">這場活動目前不開放報名，以下是你的報名結果。</div>'}
     ${ev.recruiting && allFull && !mine ? '<div class="msg warn">這場活動的班次都已額滿，目前不收新報名。</div>' : ''}
     ${missingDocs.length && ev.recruiting ? '<div class="msg warn">還缺：' + esc(missingDocs.map(k => ({ id_front: '身分證正面', id_back: '身分證反面', bankbook: '存摺封面' })[k] || k).join('、')) + '。三項證件都上傳後才能報名，<a href="#docs">到下方上傳</a>。</div>' : ''}
+    ${pub.require_line && !linked && ev.recruiting ? '<h2>先綁定 LINE</h2><div class="msg warn">這場活動要先綁定 LINE 才能報名，錄取和上班時間會用 LINE 通知你。</div><div class="card pad" id="linebox"><p class="sub">載入中…</p></div>' : ''}
     <form id="f">
-      ${pub.shifts.length ? '<h2>選擇想上的班次（可複選）</h2>' + Object.keys(days).sort().map(dk => '<div class="sday">' + esc(fmtDate(dk, true)) + '</div>' + days[dk].map(s => {
+      ${mode === 'pool' ? '<h2>班次</h2>' + ((mine && (mine.shift_list || []).some(s => s.status === 'accepted'))
+          ? (mine.shift_list || []).filter(s => s.status === 'accepted').map(s => `<div class="sopt off" style="cursor:default;opacity:1"><div style="flex:1"><div class="t">${esc(fmtDate(s.work_date, true).slice(5))}　${esc(shiftTime(s))}　${esc(s.role || '')}</div></div><span class="pill ok">已排入</span></div>`).join('')
+          : '<div class="card pad" style="font-size:14px">' + (mine ? '已收到你的報名。' : '') + '活動負責人會安排班次，排好會用 LINE 或 Email 通知你，也會顯示在這裡。</div>')
+      : isPlan ? (plans.length ? '<h2>' + (mode === 'plan' ? '報名班次' : '選擇方案（選一個）') + '</h2>' + plans.map(p => {
+          const cur = mine && mine.plan_id === p.id, off = !ev.recruiting || lockedAccepted || (p.full && !cur);
+          return `<label class="sopt ${off && !cur ? 'off' : ''}"><input type="radio" name="plan" value="${esc(p.id)}" ${cur || (mode === 'plan' && !lockedAccepted) ? 'checked' : ''} ${off ? 'disabled' : ''}>
+            <div style="flex:1"><div class="t">${esc(p.name)}</div><div class="d" style="line-height:1.6">${planLines(p)}${planInfo(p) ? '<br>' + esc(planInfo(p)) : ''}</div></div>
+            ${cur ? '<span class="pill ' + (lockedAccepted ? 'ok' : '') + '">' + (lockedAccepted ? '已錄取' : '已報名') + '</span>' : ''}</label>`; }).join('')
+          + (mine && mine.plan_id && !plans.some(p => p.id === mine.plan_id) ? '<div class="msg warn">你目前報名的是其他方案，改選這裡的方案會取代原本的報名。</div>' : '') : '')
+      : pub.shifts.length ? '<h2>選擇想上的班次（可複選）</h2>' + Object.keys(days).sort().map(dk => '<div class="sday">' + esc(fmtDate(dk, true)) + '</div>' + days[dk].map(s => {
         const st = my[s.id], full = s.accepted >= s.headcount && st !== 'accepted', off = st === 'accepted' || !ev.recruiting || (full && !st);
         return `<label class="sopt ${off ? 'off' : ''}"><input type="checkbox" name="sh" value="${esc(s.id)}" ${st ? 'checked' : ''} ${off ? 'disabled' : ''}>
           <div style="flex:1"><div class="t">${esc(shiftTime(s))}　${esc(s.role || '')}</div><div class="d">${s.rate || ev.default_hourly_rate ? '時薪 ' + money(s.rate || ev.default_hourly_rate) + ' 元　' : ''}${full ? '已額滿' : '需要 ' + s.headcount + ' 人'}${s.note ? '　' + esc(s.note) : ''}</div></div>
@@ -757,6 +776,7 @@ async function viewRecruit(message) {
     <button class="btn ghost" id="tolist">查看我的排班與薪資</button>
     <p class="foot">錄取結果會顯示在「我的排班」。已錄取的班次如需取消，請聯絡活動負責人。</p>`;
   bindDocs();
+  if (document.getElementById('linebox')) renderLine();
   document.getElementById('tolist').addEventListener('click', viewList);
   const wd = document.getElementById('wd');
   if (wd) wd.addEventListener('click', async () => {
@@ -770,12 +790,13 @@ async function viewRecruit(message) {
     const m = document.getElementById('m'), go = document.getElementById('go'); m.innerHTML = ''; go.disabled = true;
     const answers = {}; f.querySelectorAll('[data-q]').forEach(el => { answers[el.dataset.q] = el.value; });
     const shift_ids = [...f.querySelectorAll('input[name=sh]:checked')].map(x => x.value);
+    const pk = f.querySelector('input[name=plan]:checked');
     const exp = document.getElementById('exp');
     try {
-      const r = await rpc('payroll_apply', { p_token: state.token, p_join: state.join, p_data: { shift_ids, answers, experience: exp ? exp.value : '' } });
+      const r = await rpc('payroll_apply', { p_token: state.token, p_join: state.join, p_data: { shift_ids, plan_id: pk ? pk.value : null, answers, experience: exp ? exp.value : '' } });
       if (r.ok) { window.scrollTo(0, 0); return viewRecruit(mine ? '報名已更新。' : '已送出報名。錄取結果會顯示在「我的排班」。'); }
       if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
-      m.innerHTML = '<div class="msg err">' + esc({ closed: '這場活動目前不開放報名。', no_shift: '請至少選一個班次。', bad_shift: '班次有變動，請重新整理頁面。', missing_answer: '請回答「' + (r.question || '') + '」。', bad_answer: '請重新選擇「' + (r.question || '') + '」。', missing_experience: '請填寫相關經驗。', missing_photo: '請上傳個人照片。', missing_docs: '請先上傳' + ((r.missing || []).map(k => ({ id_front: '身分證正面', id_back: '身分證反面', bankbook: '存摺封面' })[k]).join('、') || '證件影本') + '，三項都上傳後才能報名。', bad_join: PERR.bad_join }[r.error] || '送出失敗，請再試一次。') + '</div>';
+      m.innerHTML = '<div class="msg err">' + esc({ closed: '這場活動目前不開放報名。', no_shift: '請至少選一個班次。', bad_shift: '班次有變動，請重新整理頁面。', missing_answer: '請回答「' + (r.question || '') + '」。', bad_answer: '請重新選擇「' + (r.question || '') + '」。', missing_experience: '請填寫相關經驗。', missing_photo: '請上傳個人照片。', missing_docs: '請先上傳' + ((r.missing || []).map(k => ({ id_front: '身分證正面', id_back: '身分證反面', bankbook: '存摺封面' })[k]).join('、') || '證件影本') + '，三項都上傳後才能報名。', bad_join: PERR.bad_join, no_plan: '請選一個方案。', bad_plan: '方案有變動，請重新整理頁面。', plan_full: '這個方案已額滿，請選其他方案。', has_accepted: '你已經錄取了，要更換班次請聯絡活動負責人。', need_line: '請先完成上方的 LINE 綁定再送出報名。' }[r.error] || '送出失敗，請再試一次。') + '</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
     go.disabled = false;
   });
