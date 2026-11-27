@@ -1814,16 +1814,22 @@ async function viewSettings(tab) {
       ['plans', '方案制：報名時選一個方案', ['在活動的「班次」分頁勾選班次，建立方案（例如「進場＋撤場」），可以另外設方案名額。', '報名連結只列出方案，工讀生只能選一個；一個方案就是整組報名，錄取時也整組錄取（任何一班沒名額，整組都不錄取）。', '每個方案也有自己的專屬連結，可以只給特定的人。', '還沒建立方案的活動，報名連結維持自選班次。', '適合：固定有幾種班次組合。']],
       ['pick', '自選班次＋專屬連結（原本的做法）', ['報名連結列出所有班次，工讀生自己勾選，可以複選。', '要限制某些人只能報特定組合時，到「班次」分頁勾選班次產生專屬連結；拿到連結的人只看得到那幾班，而且要整組報名。', '適合：班次少、讓工讀生自己挑。']]];
     body = `<form id="rsf" style="max-width:760px">
-      <p class="sub" style="margin:0 0 12px">決定工讀生打開「報名連結」時看到什麼。切換會立刻套用到所有招募中的活動（目前 ${r.recruiting} 場）；已經報名、已經錄取的資料不會變動。</p>
+      <p class="sub" style="margin:0 0 12px">決定工讀生打開「報名連結」時看到什麼，以及哪些資料一定要填。切換會立刻套用到所有招募中的活動（目前 ${r.recruiting} 場）；已經報名、已經錄取的資料不會變動。</p>
       ${MODES.map(([k, t, lines]) => `<label class="card pad" style="display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;cursor:pointer;${r.mode === k ? 'border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)' : ''}">
         <input type="radio" name="rmode" value="${k}" ${r.mode === k ? 'checked' : ''} style="width:18px;height:18px;margin-top:3px;flex:0 0 auto">
         <div><b>${esc(t)}</b>${r.mode === k ? ' <span class="badge ok">使用中</span>' : ''}<ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">${lines.map(x => '<li>' + esc(x) + '</li>').join('')}</ul></div></label>`).join('')}
       <div class="card pad" style="margin-top:6px">
-        <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:0"><input type="checkbox" id="rline" ${r.require_line ? 'checked' : ''} ${r.line_ready || r.require_line ? '' : 'disabled'}> <b>報名前必須綁定 LINE</b></label>
+        <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:0"><input type="checkbox" id="rline" ${r.require_line ? 'checked' : ''} ${r.line_ready || r.require_line ? '' : 'disabled'}> <b>LINE 必須綁定（報名、補資料、上傳證件前）</b></label>
         <ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">
-          <li>打開後，還沒綁定 LINE 的人在報名頁會先看到綁定步驟（約 1 分鐘），綁好才能送出報名。三種報名方式都適用。</li>
+          <li>打開後，還沒綁定 LINE 的人要先綁定（約 1 分鐘）才能：送出報名、在「我的資料」儲存資料、上傳證件。新建檔的人建完帳號就會看到綁定步驟。三種報名方式都適用。</li>
+          <li>不影響看薪資單和簽到退；已經填好的資料不會被清掉。</li>
           <li>目前已綁定 ${r.linked} / ${r.people} 人。LINE 輕用量方案每月只有 200 則，大家都綁定後錄取、前一天提醒、薪資單都會用到額度，建議先在 LINE 官方帳號升級中用量。</li>
           ${r.line_ready ? '' : '<li style="color:var(--warn)">LINE 通知還沒設定好或已關閉（設定 › LINE 通知），這個選項暫時不能打開' + (r.require_line ? '；目前已勾選但<b>沒有作用</b>，未綁定的人仍可報名' : '') + '。</li>'}</ul></div>
+      <div class="card pad" style="margin-top:10px">
+        <label style="display:flex;gap:8px;align-items:center;color:var(--ink);margin:0"><input type="checkbox" id="remail" ${r.require_email ? 'checked' : ''}> <b>Email 必填</b></label>
+        <ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">
+          <li>打開後，新建檔和在「我的資料」儲存時都要填 Email，錄取通知會寄到這裡。關閉時 Email 變成選填。</li>
+          <li>舊資料沒有 Email 的人，下次修改「我的資料」時才需要補；不影響看薪資單、報名和簽到退。目前有 Email 的人 ${r.with_email} / ${r.people}。</li></ul></div>
       <div class="card pad" style="margin-top:10px"><b>錄取通知</b>
         <ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">
           <li>錄取（或名單制排入）後約 2 分鐘通知：有綁 LINE 的發 LINE；有 Email 的另外寄 Email，內容是活動名稱和上班時間。</li>
@@ -1933,7 +1939,7 @@ async function viewSettings(tab) {
     on('[name=rmode]', 'change', () => document.querySelectorAll('#rsf > label.card').forEach(l => { const on1 = l.querySelector('input').checked; l.style.borderColor = on1 ? 'var(--ink)' : ''; l.style.boxShadow = on1 ? '0 0 0 1px var(--ink)' : ''; }));
     f('rsf').onsubmit = async ev => { ev.preventDefault();
       const m = document.querySelector('[name=rmode]:checked');
-      const r = await rpc('admin_recruit_settings', { p_patch: { mode: m ? m.value : 'pick', require_line: $('rline').checked ? 'true' : 'false' } });
+      const r = await rpc('admin_recruit_settings', { p_patch: { mode: m ? m.value : 'pick', require_line: $('rline').checked ? 'true' : 'false', require_email: $('remail').checked ? 'true' : 'false' } });
       if (!r.ok) { $('rsm').innerHTML = '<div class="msg err">' + (r.error === 'line_not_ready' ? 'LINE 通知還沒設定好或已關閉，不能要求報名前綁定 LINE。' : '儲存失敗。') + '</div>'; return; }
       S.cache.stale = true; flash('ok', '報名方式已更新。'); viewSettings('recruit'); };
   }

@@ -1703,8 +1703,8 @@ declare v_phone text := regexp_replace(coalesce(p->>'phone',''), '\D', '', 'g');
 begin
   if v_phone !~ '^09\d{8}$' then return jsonb_build_object('error', 'bad_phone'); end if;
   if length(v_addr) < 8 then return jsonb_build_object('error', 'bad_address'); end if;
-  if v_email = '' then return jsonb_build_object('error', 'no_email'); end if;
-  if length(v_email) > 120 or v_email !~ '^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$' then return jsonb_build_object('error', 'bad_email'); end if;
+  if v_email = '' and public.require_email() then return jsonb_build_object('error', 'no_email'); end if;
+  if v_email <> '' and (length(v_email) > 120 or v_email !~ '^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$') then return jsonb_build_object('error', 'bad_email'); end if;
   if v_code !~ '^\d{3}$' then return jsonb_build_object('error', 'bad_bank_code'); end if;
   if v_acct !~ '^\d{6,16}$' then return jsonb_build_object('error', 'bad_bank_account'); end if;
   if v_an <> btrim(p_name) then return jsonb_build_object('error', 'payee_not_self'); end if;
@@ -2171,7 +2171,7 @@ begin
   return jsonb_build_object('ok', true, 'event', jsonb_build_object('name', e.name, 'start_date', e.start_date, 'end_date', e.end_date,
       'location', e.location, 'description', e.description, 'recruiting', e.recruiting, 'employer', coalesce(em.legal_name, em.name),
       'default_hourly_rate', e.default_hourly_rate, 'form', e.form_config),
-    'mode', v->>'kind', 'plans', v->'plans', 'require_line', public.recruit_need_line(),
+    'mode', v->>'kind', 'plans', v->'plans', 'require_line', public.recruit_need_line(), 'require_email', public.require_email(),
     'shifts', case v->>'kind' when 'pool' then '[]'::jsonb
       else coalesce((select jsonb_agg(public.shift_json(s) order by s.work_date, s.start_time) from public.shifts s
         where s.event_id = e.id and (v->>'kind' = 'pick' or s.id = any(v_ids))), '[]'::jsonb) end);
@@ -2528,7 +2528,7 @@ begin
   return (select jsonb_build_object('ok', true, 'profile', jsonb_build_object(
       'name', p.name, 'national_id', public.payroll_mask_id(p.national_id), 'birth_date', p.birth_date, 'phone', p.phone, 'email', p.email,
       'address', p.address, 'bank_code', p.bank_code, 'bank_branch', p.bank_branch, 'bank_account_name', p.bank_account_name, 'bank_account', p.bank_account,
-      'default_password', p.password_changed_at is null,
+      'default_password', p.password_changed_at is null, 'linked', p.line_user_id is not null, 'require_line', public.recruit_need_line(), 'require_email', public.require_email(),
       'documents', coalesce((select jsonb_object_agg(d.kind, d.uploaded_at) from public.people_documents d where d.person_id = p.id), '{}'::jsonb)))
     from public.people p where p.id = v_pid);
 end $function$
@@ -2606,6 +2606,7 @@ declare v_pid uuid := public.payroll_session_person(p_token); v public.people; c
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into v from public.people where id = v_pid;
+  if public.recruit_need_line() and v.line_user_id is null then return jsonb_build_object('ok', false, 'error', 'need_line'); end if;
   c := public.payroll_clean_profile(p_data, v.name);
   if c ? 'error' then return jsonb_build_object('ok', false, 'error', c->>'error'); end if;
   if v.bank_account is distinct from c->>'bank_account' or v.bank_code is distinct from c->>'bank_code' then
@@ -3752,9 +3753,13 @@ begin
     end if;
     insert into public.app_settings(key, value) values ('recruit_mode', v_mode), ('recruit_require_line', v_line)
       on conflict (key) do update set value = excluded.value;
-    insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'recruit_settings', 'app_settings', jsonb_build_object('mode', v_mode, 'require_line', v_line));
+    if p_patch ? 'require_email' then
+      if p_patch->>'require_email' not in ('true', 'false') then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+      insert into public.app_settings(key, value) values ('require_email', p_patch->>'require_email') on conflict (key) do update set value = excluded.value;
+    end if;
+    insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'recruit_settings', 'app_settings', jsonb_build_object('mode', v_mode, 'require_line', v_line, 'require_email', p_patch->>'require_email'));
   end if;
-  return jsonb_build_object('ok', true, 'mode', public.recruit_mode(), 'require_line', coalesce(public.setting('recruit_require_line'), 'false') = 'true', 'require_line_effective', public.recruit_need_line(),
+  return jsonb_build_object('ok', true, 'mode', public.recruit_mode(), 'require_line', coalesce(public.setting('recruit_require_line'), 'false') = 'true', 'require_line_effective', public.recruit_need_line(), 'require_email', public.require_email(),
     'line_ready', nullif(btrim(coalesce(public.setting('line_basic_id'), '')), '') is not null and coalesce(public.setting('line_enabled'), 'true') = 'true',
     'mail_ready', nullif(btrim(coalesce(public.setting('mail_webapp_url'), '')), '') is not null and nullif(btrim(coalesce(public.setting('mail_key'), '')), '') is not null,
     'recruiting', (select count(*) from public.events where recruiting and archived_at is null and coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1),
@@ -3900,3 +3905,15 @@ revoke all on function public.payroll_nda_text() from public;
 grant execute on function public.payroll_nda_text() to anon, authenticated, service_role;
 revoke all on function public.payroll_contract_preview(text, text, jsonb) from public;
 grant execute on function public.payroll_contract_preview(text, text, jsonb) to anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.require_email()
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  -- 工讀生資料的 Email 是否必填（後台「設定 › 報名方式」切換，預設必填）
+  select coalesce(public.setting('require_email'), 'true') = 'true'
+$function$
+;
+revoke all on function public.require_email() from public, anon, authenticated;

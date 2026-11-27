@@ -751,5 +751,24 @@ begin
     update public.app_settings set value = coalesce(v_line0, 'false') where key = 'recruit_require_line';
   end;
 
-  if fails = '' then raise exception 'PASS 全部 40 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 41. 必要項目開關：Email 必填可關；LINE 必綁時沒綁不能在「我的資料」儲存；設定值檢查
+  declare p41 uuid; t41 text := encode(extensions.gen_random_bytes(16), 'hex'); b41 jsonb := '{"phone":"0912345041","address":"台北市信義區信義里1鄰信義路1號","bank_code":"822","bank_account":"123456789041","bank_account_name":"測試四一"}';
+  begin
+    insert into public.people(national_id, name, birth_date, profile_source) values ('Z999990411', '測試四一', '2000-01-01', 'test') returning id into p41;
+    insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(t41, 'sha256'), 'hex'), p41, now() + interval '1 hour');
+    perform public.admin_recruit_settings(atok, '{"require_line":"false","require_email":"true"}');
+    if public.payroll_update_profile(t41, b41)->>'error' is distinct from 'no_email' then fails := fails || ' [41a email required]'; end if;
+    perform public.admin_recruit_settings(atok, '{"require_email":"false"}');
+    if (public.payroll_update_profile(t41, b41)->>'ok')::boolean is not true then fails := fails || ' [41b email optional]'; end if;
+    if public.admin_recruit_settings(atok, '{"require_email":"x"}')->>'error' is distinct from 'bad_value' then fails := fails || ' [41c bad value]'; end if;
+    update public.app_settings set value = '@regress' where key = 'line_basic_id';
+    perform public.admin_recruit_settings(atok, '{"require_line":"true"}');
+    if public.payroll_update_profile(t41, b41)->>'error' is distinct from 'need_line' then fails := fails || ' [41d need line]'; end if;
+    if (public.payroll_profile(t41)->'profile'->>'require_line')::boolean is not true then fails := fails || ' [41e profile flag]'; end if;
+    update public.people set line_user_id = 'Uregress41' where id = p41;
+    if (public.payroll_update_profile(t41, b41 || '{"email":"r41@example.com"}')->>'ok')::boolean is not true then fails := fails || ' [41f linked save]'; end if;
+    perform public.admin_recruit_settings(atok, '{"require_line":"false","require_email":"true"}');
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 41 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

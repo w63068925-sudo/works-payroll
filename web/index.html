@@ -67,6 +67,7 @@ input[type=date],input[type=tel],input[type=email]{width:100%;height:52px;paddin
 .doc:last-child{border-bottom:0}
 .doc .st{font-size:13px;color:var(--muted)}.doc .st.ok{color:var(--accent)}
 .filebtn{display:inline-flex;align-items:center;height:40px;padding:0 14px;border:1px solid var(--line);border-radius:10px;font-size:14px;cursor:pointer;white-space:nowrap;background:#fff}
+.filebtn.off{opacity:.45;pointer-events:none}
 .filebtn input{position:absolute;width:1px;height:1px;opacity:0}
 .filebtn:focus-within{border-color:var(--ink);box-shadow:0 0 0 3px rgba(29,28,26,.08)}
 .sday{font-size:13px;color:var(--muted);margin:16px 0 6px;font-weight:600}
@@ -297,6 +298,7 @@ function gateItems(inc) {
 }
 
 async function viewList() {
+  state.onLinked = null;
   document.title = '我的薪資｜沃克思';
   app.innerHTML = brand + '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
   let r;
@@ -482,10 +484,10 @@ function viewPassword() {
   });
 }
 
-const PERR = { bad_phone: '手機號碼請填 09 開頭的 10 碼。', bad_address: '請填完整的戶籍地址（含鄰里）。', bad_email: 'Email 格式不正確。', no_email: '請填寫 Email，錄取通知會寄到這裡。', bad_bank_code: '銀行代碼是 3 個數字，例如 822。', bad_bank_account: '銀行帳號請只填數字（6 到 16 碼）。', payee_not_self: '戶名必須和本人姓名相同，薪資依法只能匯入本人帳戶。', bad_national_id: '身分證字號不正確，請再檢查一次。', bad_name: '請填寫姓名。', bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', exists: '這個身分證字號已經有資料了，請直接登入。', no_consent: '請勾選同意聲明。', bad_join: '報名連結已失效，請向活動負責人索取新的連結。', bad_ticket: 'Email 驗證已過期，請重新取得驗證碼。', ticket_mismatch: '身分證字號要和驗證 Email 時填的一樣。' };
+const PERR = { bad_phone: '手機號碼請填 09 開頭的 10 碼。', bad_address: '請填完整的戶籍地址（含鄰里）。', bad_email: 'Email 格式不正確。', need_line: '請先綁定 LINE 再儲存（在下方「LINE 通知」）。', no_email: '請填寫 Email，錄取通知會寄到這裡。', bad_bank_code: '銀行代碼是 3 個數字，例如 822。', bad_bank_account: '銀行帳號請只填數字（6 到 16 碼）。', payee_not_self: '戶名必須和本人姓名相同，薪資依法只能匯入本人帳戶。', bad_national_id: '身分證字號不正確，請再檢查一次。', bad_name: '請填寫姓名。', bad_birth: '請選擇正確的生日。', too_young: '未滿 15 歲依法不得受僱。', exists: '這個身分證字號已經有資料了，請直接登入。', no_consent: '請勾選同意聲明。', bad_join: '報名連結已失效，請向活動負責人索取新的連結。', bad_ticket: 'Email 驗證已過期，請重新取得驗證碼。', ticket_mismatch: '身分證字號要和驗證 Email 時填的一樣。' };
 const profileFields = (p, withName) => `
   <label for="ph">手機</label><input id="ph" type="tel" inputmode="numeric" maxlength="10" value="${esc(p.phone || '')}" placeholder="0912345678" required>
-  <label for="em">Email（必填，錄取通知會寄到這裡）</label><input id="em" type="email" required autocomplete="email" value="${esc(p.email || '')}">
+  <label for="em">Email（${state.reqEmail === false ? '選填' : '必填，錄取通知會寄到這裡'}）</label><input id="em" type="email" ${state.reqEmail === false ? '' : 'required'} autocomplete="email" value="${esc(p.email || '')}">
   <label for="ad">戶籍地址（需與身分證相同，含鄰里）</label><input id="ad" type="text" value="${esc(p.address || '')}" required>
   <h2>薪資匯款帳戶（須為本人帳戶）</h2>
   <label for="bk" style="margin-top:0">銀行</label><select id="bk"><option value="">選擇銀行（找不到就直接填下面的代碼）</option>${BANKS.map(([c, n]) => `<option value="${c}" ${c === p.bank_code ? 'selected' : ''}>${c} ${n}</option>`).join('')}</select>
@@ -637,6 +639,8 @@ async function uploadDoc(kind, file) {
 function docsBlock(documents) {
   return '<div class="card pad" style="padding-top:4px;padding-bottom:4px">' + DOCS.map(([k, t]) => `<div class="doc"><div><div>${t}</div><div class="st ${documents[k] ? 'ok' : ''}" id="st-${k}">${documents[k] ? '已上傳（' + esc(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei' }).format(new Date(documents[k])).replace(/-/g, '/')) + '）' : '尚未上傳'}</div></div><label class="filebtn">${documents[k] ? '重新上傳' : '選擇檔案'}<input type="file" accept="image/*,application/pdf" data-doc="${k}"></label></div>`).join('') + '</div>';
 }
+// 設定要求綁 LINE 而本人還沒綁：證件先鎖住，綁好後畫面自動重新整理
+function lockDocsForLine() { app.querySelectorAll('input[data-doc]').forEach(i => { i.disabled = true; if (i.parentElement) i.parentElement.classList.add('off'); }); }
 function bindDocs(after) {
   app.querySelectorAll('input[data-doc]').forEach(inp => inp.addEventListener('change', async () => {
     const f = inp.files[0], st = document.getElementById('st-' + inp.dataset.doc); if (!f) return;
@@ -646,17 +650,22 @@ function bindDocs(after) {
     inp.value = '';
   }));
 }
-function viewDocs(message) {
+async function viewDocs(message) {
   document.title = '上傳證件｜沃克思';
+  let lineGate = false;
+  try { const pr = await rpc('payroll_profile', { p_token: state.token }); if (pr.ok) { lineGate = pr.profile.require_line && !pr.profile.linked; state.reqEmail = pr.profile.require_email !== false; } } catch (e) {}
+  state.onLinked = lineGate ? () => viewDocs('LINE 已綁定，請繼續上傳證件。') : null;
   app.innerHTML = brand + `<h1>上傳證件影本</h1>
     <p class="sub">加保勞保和匯款需要核對。照片只有你本人和沃克思的管理人員看得到。</p>
     ${message ? '<div class="msg ok">' + esc(message) + '</div>' : ''}
+    ${lineGate ? '<h2>先綁定 LINE</h2><div class="msg warn">綁定 LINE 後才能上傳證件。錄取、上班提醒和薪資單都會用 LINE 通知你。</div><div class="card pad" id="linebox"><p class="sub">載入中…</p></div>' : ''}
     <h2>請拍照或選擇檔案（三項都必填）</h2>${docsBlock({})}
     <div id="dm"></div>
     <button class="btn" id="done">完成，繼續報名</button>
     <p class="foot">存摺請拍封面（有戶名與帳號的那一頁），不要拍提款卡或信用卡。三項都上傳後才能報名班次。</p>`;
   const got = new Set();
   bindDocs(k => { got.add(k); document.getElementById('dm').innerHTML = ''; });
+  if (lineGate) { lockDocsForLine(); renderLine(); }
   document.getElementById('done').addEventListener('click', () => {
     const left = DOCS.filter(([k]) => !got.has(k)).map(([, t]) => t);
     if (left.length) { document.getElementById('dm').innerHTML = '<div class="msg err">還沒上傳：' + esc(left.join('、')) + '。三項都上傳後才能報名。</div>'; return; }
@@ -670,12 +679,16 @@ async function viewProfile(message, focusLine, gate) {
   try { r = await rpc('payroll_profile', { p_token: state.token }); } catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewList()">返回</button>'; return; }
   if (!r.ok) { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
   const p = r.profile;
+  state.reqEmail = p.require_email !== false;
+  const lineGate = p.require_line && !p.linked;
+  state.onLinked = lineGate ? () => viewProfile('LINE 已綁定，可以繼續補資料。') : null;
   app.innerHTML = brand + `
     <button class="link" id="back">← 返回列表</button>
     <h1 style="margin-top:8px">我的資料</h1>
     <p class="sub">${esc(p.name)}　${esc(p.national_id)}　生日 ${esc(fmtDate(p.birth_date))}</p>
     ${typeof message === 'string' ? '<div class="msg ok">' + esc(message) + '</div>' : ''}
     ${gate ? '<div class="msg warn">查看薪資前，請先補齊：' + esc(gateItems(gate).join('、')) + '。補好後按最下方「查看我的薪資」。</div>' : ''}
+    ${lineGate ? '<div class="msg warn">請先在下方「LINE 通知」綁定 LINE，才能儲存資料和上傳證件。錄取、上班提醒和薪資單都會用 LINE 通知你。</div>' : ''}
     <form id="f" class="card pad" style="margin-top:18px">
       <div style="margin-top:-16px"></div>${profileFields(p, false)}
       <div id="m"></div><button class="btn" id="go">儲存</button>
@@ -686,11 +699,12 @@ async function viewProfile(message, focusLine, gate) {
     <button class="btn ghost" id="cp">更改密碼</button>
     <p class="foot">姓名、身分證字號或生日有誤無法自行修改，請聯絡沃克思的活動窗口。更改匯款帳戶後請重新上傳存摺封面。</p>`;
   bindDocs();
+  if (lineGate) lockDocsForLine();
   document.getElementById('back').addEventListener('click', viewList);
   document.getElementById('cp').addEventListener('click', viewPassword);
   if (gate) document.getElementById('seepay').addEventListener('click', viewList);
   renderLine();
-  if (focusLine) document.getElementById('lineh').scrollIntoView({ block: 'start' });
+  if (focusLine || lineGate) document.getElementById('lineh').scrollIntoView({ block: 'start' });
   document.getElementById('f').addEventListener('submit', async e => {
     e.preventDefault(); const m = document.getElementById('m'); m.innerHTML = '';
     try {
@@ -721,6 +735,7 @@ async function viewRecruit(message) {
   try { pub = await rpc('payroll_event_public', { p_join: state.join }); } catch (err) { app.innerHTML = brand + '<div class="msg err">' + esc(err.message) + '</div><button class="btn ghost" onclick="viewRecruit()">再試一次</button>'; return; }
   if (!pub.ok) { saveJoin(null); return state.token ? viewList() : viewLogin(PERR.bad_join); }
   const ev = pub.event, form = ev.form || {}, qs = form.questions || [];
+  state.reqEmail = pub.require_email !== false;
   let mine = null, hasPhoto = false, docs = {}, missingDocs = [], linked = false;
   if (state.token) {
     const r = await rpc('payroll_my_application', { p_token: state.token, p_join: state.join });
@@ -793,7 +808,7 @@ async function viewRecruit(message) {
     <button class="btn ghost" id="tolist">查看我的排班與薪資</button>
     <p class="foot">錄取結果會顯示在「我的排班」。已錄取的班次如需取消，請聯絡活動負責人。</p>`;
   bindDocs();
-  if (document.getElementById('linebox')) renderLine();
+  if (document.getElementById('linebox')) { lockDocsForLine(); state.onLinked = () => viewRecruit('LINE 已綁定，可以繼續報名。'); renderLine(); }
   document.getElementById('tolist').addEventListener('click', viewList);
   const wd = document.getElementById('wd');
   if (wd) wd.addEventListener('click', async () => {
@@ -870,6 +885,7 @@ async function renderLine(code) {
   if (!st.ok) return;
   const id = st.basic_id;
   if (!id) { box.innerHTML = '<p class="sub">LINE 通知尚未開放。</p>'; return; }
+  if (st.linked && typeof state.onLinked === 'function') { const fn = state.onLinked; state.onLinked = null; return fn(); }
   if (st.linked) {
     box.innerHTML = `<p style="color:var(--accent);font-weight:600">已綁定 LINE</p><p class="sub" style="margin-top:4px">錄取、上班前一天提醒、忘記簽退和薪資單發布都會傳到 LINE。</p><button class="link" id="unlink" style="margin-top:8px">解除綁定</button>`;
     const u = document.getElementById('unlink');
