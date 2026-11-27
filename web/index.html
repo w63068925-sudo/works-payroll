@@ -782,6 +782,10 @@ async function viewRecruit(message) {
       ${form.experience ? `<h2>相關經驗</h2><textarea id="exp" style="width:100%;min-height:96px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-size:16px" placeholder="曾擔任過的活動、品牌與工作內容">${esc((mine && mine.experience) || '')}</textarea>` : ''}
       ${missingDocs.length && ev.recruiting ? '<h2 id="docs">證件影本（必填）</h2><div class="msg warn">報名前要先上傳身分證正反面和存摺封面，資料只有你本人和沃克思的管理人員看得到。</div>' + docsBlock(docs) : ''}
       ${form.photo ? `<h2>個人照片</h2><div class="card pad" style="padding-top:4px;padding-bottom:4px"><div class="doc"><div><div>清楚的半身生活照</div><div class="st ${hasPhoto ? 'ok' : ''}" id="st-photo">${hasPhoto ? '已上傳' : '尚未上傳'}</div></div><label class="filebtn">${hasPhoto ? '重新上傳' : '選擇照片'}<input type="file" accept="image/*" data-doc="photo"></label></div></div>` : ''}
+      ${ev.recruiting ? `<h2>勞動契約</h2><div class="card pad contract" id="ctext">${mode === 'pool' ? '活動負責人排好班後，會依你被排入的班次產生勞動契約，到時再請你登入確認。' : '選好' + (isPlan ? '方案' : '班次') + '後，這裡會顯示依你的班次產生的勞動契約。'}</div>
+        ${mode === 'pool' ? '' : '<label class="check"><input type="checkbox" id="cok" disabled><span>我已閱讀並同意以上勞動契約。錄取的班次和這裡一樣就直接生效；只錄取部分或班次有變動時，會再請你確認。</span></label>'}
+        <h2>活動保密條款</h2><div class="card pad contract" id="ndatext">載入中…</div>
+        <label class="check"><input type="checkbox" id="nok"><span>我已閱讀並同意上述活動保密條款。</span></label>` : ''}
       <div id="m"></div>
       ${ev.recruiting ? `<button class="btn" id="go">${mine ? '更新報名' : '送出報名'}</button>` : ''}
     </form>
@@ -798,18 +802,36 @@ async function viewRecruit(message) {
     viewRecruit(r.ok ? '已取消報名。' : '無法取消，已錄取的班次請聯絡活動負責人。');
   });
   const f = document.getElementById('f');
+  // 依目前勾選的班次／方案產生勞動契約預覽；換選擇時要重新勾選同意
+  let chash = null, cseq = 0;
+  const loadC = async () => {
+    if (!document.getElementById('ndatext')) return;
+    const my = ++cseq, pk0 = f.querySelector('input[name=plan]:checked');
+    let r; try { r = await rpc('payroll_contract_preview', { p_token: state.token, p_join: state.join, p_data: { shift_ids: [...f.querySelectorAll('input[name=sh]:checked')].map(x => x.value), plan_id: pk0 ? pk0.value : null } }); } catch (err) { return; }
+    if (my !== cseq || !r.ok) return;
+    document.getElementById('ndatext').textContent = r.nda_text;
+    chash = r.hash || null;
+    const c = document.getElementById('cok');
+    if (c) { document.getElementById('ctext').textContent = r.text || ('選好' + (isPlan ? '方案' : '班次') + '後，這裡會顯示依你的班次產生的勞動契約。'); c.checked = false; c.disabled = !r.text; }
+  };
+  f.addEventListener('change', ev2 => { if (ev2.target.name === 'sh' || ev2.target.name === 'plan') loadC(); });
+  loadC();
   f.addEventListener('submit', async e => {
     e.preventDefault();
     const m = document.getElementById('m'), go = document.getElementById('go'); m.innerHTML = ''; go.disabled = true;
     const answers = {}; f.querySelectorAll('[data-q]').forEach(el => { answers[el.dataset.q] = el.value; });
     const shift_ids = [...f.querySelectorAll('input[name=sh]:checked')].map(x => x.value);
     const pk = f.querySelector('input[name=plan]:checked');
+    const nok = document.getElementById('nok'), cok = document.getElementById('cok');
+    if (nok && !nok.checked) { m.innerHTML = '<div class="msg err">請先閱讀並勾選同意活動保密條款。</div>'; go.disabled = false; return; }
+    if (cok && chash && !cok.checked) { m.innerHTML = '<div class="msg err">請先閱讀並勾選同意勞動契約。</div>'; go.disabled = false; return; }
     const exp = document.getElementById('exp');
     try {
-      const r = await rpc('payroll_apply', { p_token: state.token, p_join: state.join, p_data: { shift_ids, plan_id: pk ? pk.value : null, answers, experience: exp ? exp.value : '' } });
+      const r = await rpc('payroll_apply', { p_token: state.token, p_join: state.join, p_data: { shift_ids, plan_id: pk ? pk.value : null, nda: !!(nok && nok.checked), contract_hash: chash, answers, experience: exp ? exp.value : '' } });
       if (r.ok) { window.scrollTo(0, 0); return viewRecruit(mine ? '報名已更新。' : '已送出報名。錄取結果會顯示在「我的排班」。'); }
       if (r.error === 'session') { saveToken(null); return viewLogin('登入已逾時，請重新登入。'); }
-      m.innerHTML = '<div class="msg err">' + esc({ closed: '這場活動目前不開放報名。', no_shift: '請至少選一個班次。', bad_shift: '班次有變動，請重新整理頁面。', missing_answer: '請回答「' + (r.question || '') + '」。', bad_answer: '請重新選擇「' + (r.question || '') + '」。', missing_experience: '請填寫相關經驗。', missing_photo: '請上傳個人照片。', missing_docs: '請先上傳' + ((r.missing || []).map(k => ({ id_front: '身分證正面', id_back: '身分證反面', bankbook: '存摺封面' })[k]).join('、') || '證件影本') + '，三項都上傳後才能報名。', bad_join: PERR.bad_join, no_plan: '請選一個方案。', bad_plan: '方案有變動，請重新整理頁面。', plan_full: '這個方案已額滿，請選其他方案。', has_accepted: '你已經錄取了，要更換班次請聯絡活動負責人。', need_line: '請先完成上方的 LINE 綁定再送出報名。' }[r.error] || '送出失敗，請再試一次。') + '</div>';
+      if (r.error === 'contract_changed') loadC();
+      m.innerHTML = '<div class="msg err">' + esc({ closed: '這場活動目前不開放報名。', no_shift: '請至少選一個班次。', bad_shift: '班次有變動，請重新整理頁面。', missing_answer: '請回答「' + (r.question || '') + '」。', bad_answer: '請重新選擇「' + (r.question || '') + '」。', missing_experience: '請填寫相關經驗。', missing_photo: '請上傳個人照片。', missing_docs: '請先上傳' + ((r.missing || []).map(k => ({ id_front: '身分證正面', id_back: '身分證反面', bankbook: '存摺封面' })[k]).join('、') || '證件影本') + '，三項都上傳後才能報名。', bad_join: PERR.bad_join, no_plan: '請選一個方案。', bad_plan: '方案有變動，請重新整理頁面。', plan_full: '這個方案已額滿，請選其他方案。', has_accepted: '你已經錄取了，要更換班次請聯絡活動負責人。', need_line: '請先完成上方的 LINE 綁定再送出報名。', need_nda: '請先閱讀並勾選同意活動保密條款。', need_contract: '請先閱讀並勾選同意勞動契約。', contract_changed: '勞動契約內容有更新，請重新閱讀後再勾選同意。' }[r.error] || '送出失敗，請再試一次。') + '</div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '</div>'; }
     go.disabled = false;
   });

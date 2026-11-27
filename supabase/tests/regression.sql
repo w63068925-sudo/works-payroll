@@ -10,6 +10,12 @@ declare
   p3 uuid; tok3 text := encode(extensions.gen_random_bytes(16), 'hex'); sl uuid; base jsonb;
   fails text := '';
 begin
+  -- 測試用：報名時一併同意保密條款與當下的勞動契約（第 40 組另外測不同意的情況）
+  create function pg_temp.tapply(t text, j text, d jsonb) returns jsonb language sql as $f$
+    select public.payroll_apply(t, j, d || jsonb_build_object('nda', true, 'contract_hash', public.payroll_contract_preview(t, j, d)->>'hash')) $f$;
+  -- 測試以預設報名方式（自選、不須綁 LINE）進行，不受正式設定影響（整段會回滾）
+  update public.app_settings set value = 'pick' where key = 'recruit_mode';
+  update public.app_settings set value = 'false' where key = 'recruit_require_line';
   -- 隔離既有佇列，避免影響通知測試
   update public.notifications set send_after = now() + interval '1 year' where status = 'pending';
   select id into emp from public.employers order by created_at limit 1;
@@ -57,20 +63,20 @@ begin
   update public.events set signup_code = 'regress-join-2', recruiting = true where id = ev2;
 
   -- 15. 沒上傳身分證正反面與存摺不能報名；補齊後可以
-  r := public.payroll_apply(tok1, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
+  r := pg_temp.tapply(tok1, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
   if r->>'error' is distinct from 'missing_docs' or jsonb_array_length(r->'missing') <> 3 then fails := fails || ' [15a apply without documents: ' || r::text || ']'; end if;
   insert into public.people_documents(person_id, kind, path) values (p1, 'id_front', p1 || '/id_front-x.jpg'), (p1, 'id_back', p1 || '/id_back-x.jpg');
-  r := public.payroll_apply(tok1, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
+  r := pg_temp.tapply(tok1, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
   if r->>'error' is distinct from 'missing_docs' or r->'missing' <> '["bankbook"]'::jsonb then fails := fails || ' [15b partial documents: ' || r::text || ']'; end if;
   insert into public.people_documents(person_id, kind, path) values (p1, 'bankbook', p1 || '/bankbook-x.jpg'),
     (p2, 'id_front', p2 || '/id_front-x.jpg'), (p2, 'id_back', p2 || '/id_back-x.jpg'), (p2, 'bankbook', p2 || '/bankbook-x.jpg');
 
   -- 5. 報名不能夾帶別場活動的班次（即使該場沒有班次）
   insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values (ev, v_today, '21:00', '22:00', 1) returning id into s_other;
-  if public.payroll_apply(tok1, 'regress-join-2', jsonb_build_object('shift_ids', jsonb_build_array(s_other)))->>'error' is distinct from 'bad_shift' then fails := fails || ' [5 cross-event shift accepted]'; end if;
+  if pg_temp.tapply(tok1, 'regress-join-2', jsonb_build_object('shift_ids', jsonb_build_array(s_other)))->>'error' is distinct from 'bad_shift' then fails := fails || ' [5 cross-event shift accepted]'; end if;
 
-  perform public.payroll_apply(tok1, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1, s2, s3)));
-  perform public.payroll_apply(tok2, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
+  perform pg_temp.tapply(tok1, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1, s2, s3)));
+  perform pg_temp.tapply(tok2, 'regress-join-1', jsonb_build_object('shift_ids', jsonb_build_array(s1)));
   select id into a1 from public.applications where event_id = ev and person_id = p1;
   select id into a2 from public.applications where event_id = ev and person_id = p2;
   if a1 is null or a2 is null then fails := fails || ' [15c apply with documents failed]'; end if;
@@ -630,25 +636,25 @@ begin
     -- 自選模式：主連結看得到全部班次；專屬連結只看得到那一組，而且要整組報
     if jsonb_array_length(public.payroll_event_public('regress-join-39')->'shifts') <> 3 or public.payroll_event_public('regress-join-39')->>'mode' <> 'pick' then fails := fails || ' [39f pick main]'; end if;
     if jsonb_array_length(public.payroll_event_public(c39)->'shifts') <> 2 or public.payroll_event_public(c39)->>'mode' <> 'plan' then fails := fails || ' [39g plan link view]'; end if;
-    if public.payroll_apply(ta, c39, jsonb_build_object('plan_id', q2))->>'error' is distinct from 'bad_plan' then fails := fails || ' [39h other plan via link]'; end if;
-    r := public.payroll_apply(ta, c39, jsonb_build_object('plan_id', q1, 'shift_ids', jsonb_build_array(h1)));
+    if pg_temp.tapply(ta, c39, jsonb_build_object('plan_id', q2))->>'error' is distinct from 'bad_plan' then fails := fails || ' [39h other plan via link]'; end if;
+    r := pg_temp.tapply(ta, c39, jsonb_build_object('plan_id', q1, 'shift_ids', jsonb_build_array(h1)));
     select id into aa from public.applications where event_id = e39 and person_id = pa;
     if (r->>'ok')::boolean is not true or (select count(*) from public.application_shifts where application_id = aa) <> 2 or (select plan_id from public.applications where id = aa) <> q1 then fails := fails || ' [39i bundle apply ' || r::text || ']'; end if;
     -- 方案制：主連結只列方案；沒選方案不收；自選班次的參數被忽略
     perform public.admin_recruit_settings(atok, '{"mode":"plans"}');
     if public.payroll_event_public('regress-join-39')->>'mode' <> 'plans' or jsonb_array_length(public.payroll_event_public('regress-join-39')->'plans') <> 2 then fails := fails || ' [39j plans view]'; end if;
-    if public.payroll_apply(tb, 'regress-join-39', jsonb_build_object('shift_ids', jsonb_build_array(h2)))->>'error' is distinct from 'no_plan' then fails := fails || ' [39k plans needs plan]'; end if;
-    perform public.payroll_apply(tb, 'regress-join-39', jsonb_build_object('plan_id', q1));
+    if pg_temp.tapply(tb, 'regress-join-39', jsonb_build_object('shift_ids', jsonb_build_array(h2)))->>'error' is distinct from 'no_plan' then fails := fails || ' [39k plans needs plan]'; end if;
+    perform pg_temp.tapply(tb, 'regress-join-39', jsonb_build_object('plan_id', q1));
     select id into ab from public.applications where event_id = e39 and person_id = pb;
     -- 整組錄取：甲錄取（兩班都錄取）；乙因方案名額 1 人已滿，整組都不錄取
     r := public.admin_decide_plan(atok, array[aa], 'accepted');
     if (select count(*) from public.application_shifts where application_id = aa and status = 'accepted') <> 2 then fails := fails || ' [39l bundle accept ' || r::text || ']'; end if;
     r := public.admin_decide_plan(atok, array[ab], 'accepted');
     if jsonb_array_length(r->'full') <> 1 or exists (select 1 from public.application_shifts where application_id = ab and status = 'accepted') then fails := fails || ' [39m plan quota ' || r::text || ']'; end if;
-    if public.payroll_apply(tb, 'regress-join-39', jsonb_build_object('plan_id', q2))->>'ok' <> 'true' then fails := fails || ' [39n switch plan]'; end if;
+    if pg_temp.tapply(tb, 'regress-join-39', jsonb_build_object('plan_id', q2))->>'ok' <> 'true' then fails := fails || ' [39n switch plan]'; end if;
     if (select count(*) from public.application_shifts where application_id = ab) <> 1 then fails := fails || ' [39o switch keeps old shifts]'; end if;
     -- 已錄取的人不能改報別的方案；已滿的方案不能新報
-    if public.payroll_apply(ta, 'regress-join-39', jsonb_build_object('plan_id', q2))->>'error' is distinct from 'has_accepted' then fails := fails || ' [39p accepted switch]'; end if;
+    if pg_temp.tapply(ta, 'regress-join-39', jsonb_build_object('plan_id', q2))->>'error' is distinct from 'has_accepted' then fails := fails || ' [39p accepted switch]'; end if;
     -- 錄取通知：有 Email 的排 Email；沒綁 LINE 的不排 LINE
     if not exists (select 1 from public.notifications where person_id = pa and event_id = e39 and kind = 'accepted' and channel = 'mail' and status = 'pending')
        or exists (select 1 from public.notifications where person_id = pa and event_id = e39 and channel = 'line') then fails := fails || ' [39q accept channels]'; end if;
@@ -658,7 +664,7 @@ begin
     r := public.admin_decide(atok, jsonb_build_array(jsonb_build_object('app', ab, 'shift', h3)), 'accepted');
     if jsonb_array_length(r->'plan') <> 1 or exists (select 1 from public.application_shifts where application_id = ab and status = 'accepted') then fails := fails || ' [39r2 per-shift plan accept ' || r::text || ']'; end if;
     perform public.admin_recruit_settings(atok, '{"mode":"pick"}');
-    if public.payroll_apply(ta, 'regress-join-39', jsonb_build_object('shift_ids', jsonb_build_array(h1, h2, h3)))->>'error' is distinct from 'has_accepted' then fails := fails || ' [39r3 accepted plan via pick]'; end if;
+    if pg_temp.tapply(ta, 'regress-join-39', jsonb_build_object('shift_ids', jsonb_build_array(h1, h2, h3)))->>'error' is distinct from 'has_accepted' then fails := fails || ' [39r3 accepted plan via pick]'; end if;
     perform public.admin_recruit_settings(atok, '{"mode":"plans"}');
     -- Email：簽章請求不含密鑰，送出後標「送出中」；Apps Script 回 ok 才算寄出
     update public.app_settings set value = 'https://example.invalid/exec' where key = 'mail_webapp_url';
@@ -680,7 +686,7 @@ begin
     if public.payroll_event_public('regress-join-39')->>'mode' <> 'pool' or jsonb_array_length(public.payroll_event_public('regress-join-39')->'shifts') <> 0 then fails := fails || ' [39t pool view]'; end if;
     if public.payroll_event_public(c39)->>'mode' <> 'pool' then fails := fails || ' [39u plan link in pool]'; end if;
     delete from public.application_shifts where application_id = ab;
-    if (public.payroll_apply(tb, 'regress-join-39', '{}'::jsonb)->>'ok')::boolean is not true or exists (select 1 from public.application_shifts where application_id = ab) then fails := fails || ' [39v pool apply]'; end if;
+    if (pg_temp.tapply(tb, 'regress-join-39', '{}'::jsonb)->>'ok')::boolean is not true or exists (select 1 from public.application_shifts where application_id = ab) then fails := fails || ' [39v pool apply]'; end if;
     r := public.admin_assign(atok, h2, array[ab], true);
     if (select status from public.application_shifts where application_id = ab and shift_id = h2) is distinct from 'accepted' then fails := fails || ' [39w assign ' || r::text || ']'; end if;
     r := public.admin_assign(atok, h1, array[ab], true);
@@ -693,7 +699,7 @@ begin
     if public.admin_recruit_settings(atok, '{"require_line":"true"}')->>'error' is distinct from 'line_not_ready' then fails := fails || ' [39z2 line not ready]'; end if;
     update public.app_settings set value = '@regress' where key = 'line_basic_id';
     perform public.admin_recruit_settings(atok, '{"require_line":"true"}');
-    if public.payroll_apply(tb, 'regress-join-39', '{}'::jsonb)->>'error' is distinct from 'need_line' then fails := fails || ' [39za need line]'; end if;
+    if pg_temp.tapply(tb, 'regress-join-39', '{}'::jsonb)->>'error' is distinct from 'need_line' then fails := fails || ' [39za need line]'; end if;
     -- 權限：內部函式匿名不能呼叫、方案表匿名不能讀
     if has_function_privilege('anon', 'public.mail_flush()', 'execute') or has_function_privilege('anon', 'public.join_target(text)', 'execute')
        or has_table_privilege('anon', 'public.recruit_plans', 'select') then fails := fails || ' [39zb privileges]'; end if;
@@ -701,5 +707,40 @@ begin
     update public.app_settings set value = coalesce(v_line0, 'false') where key = 'recruit_require_line';
   end;
 
-  if fails = '' then raise exception 'PASS 全部 39 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 40. 報名時同意勞動契約與保密條款：沒同意保密條款或契約不收；契約內容要和當下一致；錄取的班次一樣就直接生效、只錄取部分要重新確認；取消報名清掉
+  declare e40 uuid; k1 uuid; k2 uuid; p40 uuid; t40 text := encode(extensions.gen_random_bytes(16), 'hex'); a40 uuid; h text; dd date := (now() at time zone 'Asia/Taipei')::date + 25; v_mode0 text := public.setting('recruit_mode'); v_line0 text := public.setting('recruit_require_line');
+  begin
+    perform public.admin_recruit_settings(atok, '{"mode":"pick","require_line":"false"}');
+    insert into public.events(employer_id, name, start_date, end_date, default_hourly_rate, recruiting, signup_code) values (emp, '回歸40', dd, dd, 200, true, 'regress-join-40') returning id into e40;
+    insert into public.shifts(event_id, work_date, start_time, end_time, role, headcount) values (e40, dd, '09:00', '12:00', '進場', 2) returning id into k1;
+    insert into public.shifts(event_id, work_date, start_time, end_time, role, headcount) values (e40, dd, '13:00', '17:00', '撤場', 2) returning id into k2;
+    insert into public.people(national_id, name, birth_date, profile_source) values ('Z999990400', '測試四十', '2000-01-01', 'test') returning id into p40;
+    insert into public.people_documents(person_id, kind, path) select p40, k, p40 || '/' || k || '-x.jpg' from unnest(array['id_front','id_back','bankbook']) k;
+    insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(t40, 'sha256'), 'hex'), p40, now() + interval '1 hour');
+    if public.payroll_contract_preview('bad', 'regress-join-40', '{}')->>'error' is distinct from 'session' then fails := fails || ' [40a preview session]'; end if;
+    r := public.payroll_contract_preview(t40, 'regress-join-40', jsonb_build_object('shift_ids', jsonb_build_array(k1, k2)));
+    h := r->>'hash';
+    if h is null or r->>'text' not like '%測試四十%' or r->>'nda_text' not like '%保密%' then fails := fails || ' [40b preview]'; end if;
+    if public.payroll_apply(t40, 'regress-join-40', jsonb_build_object('shift_ids', jsonb_build_array(k1, k2), 'contract_hash', h))->>'error' is distinct from 'need_nda' then fails := fails || ' [40c need nda]'; end if;
+    if public.payroll_apply(t40, 'regress-join-40', jsonb_build_object('shift_ids', jsonb_build_array(k1, k2), 'nda', true))->>'error' is distinct from 'need_contract' then fails := fails || ' [40d need contract]'; end if;
+    if public.payroll_apply(t40, 'regress-join-40', jsonb_build_object('shift_ids', jsonb_build_array(k1), 'nda', true, 'contract_hash', h))->>'error' is distinct from 'contract_changed' then fails := fails || ' [40e other shifts hash]'; end if;
+    r := public.payroll_apply(t40, 'regress-join-40', jsonb_build_object('shift_ids', jsonb_build_array(k1, k2), 'nda', true, 'contract_hash', h));
+    select id into a40 from public.applications where event_id = e40 and person_id = p40;
+    if (r->>'ok')::boolean is not true or (select apply_contract_hash from public.applications where id = a40) is distinct from h or (select nda_accepted_at from public.applications where id = a40) is null then fails := fails || ' [40f apply ' || r::text || ']'; end if;
+    -- 只錄取一班：契約不同，不會自動生效
+    perform public.admin_decide(atok, jsonb_build_array(jsonb_build_object('app', a40, 'shift', k1)), 'accepted');
+    if (select contract_accepted_at from public.applications where id = a40) is not null then fails := fails || ' [40g partial auto accepted]'; end if;
+    -- 兩班都錄取：和報名時一樣，直接生效
+    perform public.admin_decide(atok, jsonb_build_array(jsonb_build_object('app', a40, 'shift', k2)), 'accepted');
+    if (select contract_accepted_at from public.applications where id = a40) is distinct from (select apply_contract_at from public.applications where id = a40)
+       or not exists (select 1 from public.contract_history where application_id = a40 and superseded_at is null and text_hash = h) then fails := fails || ' [40h full auto accept]'; end if;
+    -- 之後地點改了：契約失效，要本人重新確認（不會被報名時的同意自動補回）
+    update public.events set location = '新地點' where id = e40;
+    if (select contract_accepted_at from public.applications where id = a40) is not null then fails := fails || ' [40i material change kept]'; end if;
+    if has_function_privilege('anon', 'public.payroll_contract_text_for(uuid,uuid,uuid[])', 'execute') then fails := fails || ' [40j text_for anon]'; end if;
+    update public.app_settings set value = coalesce(v_mode0, 'pick') where key = 'recruit_mode';
+    update public.app_settings set value = coalesce(v_line0, 'false') where key = 'recruit_require_line';
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 40 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

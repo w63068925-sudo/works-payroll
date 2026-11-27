@@ -735,7 +735,7 @@ begin
         order by p.disabled_at nulls first, p.created_at) from public.recruit_plans p where p.event_id = e.id), '[]'::jsonb),
     'applicants', coalesce((select jsonb_agg(jsonb_build_object('app_id', a.id, 'person_id', p.id, 'name', p.name, 'national_id', p.national_id, 'phone', p.phone,
         'source', p.profile_source, 'answers', a.answers, 'experience', a.experience, 'created_at', a.created_at, 'contract_accepted_at', a.contract_accepted_at,
-        'plan_id', a.plan_id, 'linked', p.line_user_id is not null, 'has_email', coalesce(btrim(p.email), '') <> '',
+        'plan_id', a.plan_id, 'nda_at', a.nda_accepted_at, 'apply_contract_at', a.apply_contract_at, 'linked', p.line_user_id is not null, 'has_email', coalesce(btrim(p.email), '') <> '',
         'has_photo', exists (select 1 from public.people_documents d where d.person_id = p.id and d.kind = 'photo'),
         'docs', (select count(*) from public.people_documents d where d.person_id = p.id and d.kind <> 'photo'),
         'past_events', (select count(distinct s2.event_id) from public.payslips s2 where s2.person_id = p.id and s2.event_id <> e.id),
@@ -1246,16 +1246,30 @@ CREATE OR REPLACE FUNCTION public.contract_recheck_app(p_app uuid)
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare a public.applications; v_hash text;
+declare a public.applications; v_hash text; v_text text; v_full text;
 begin
   select * into a from public.applications where id = p_app for update;
-  if a.id is null or a.contract_accepted_at is null then return; end if;
-  select text_hash into v_hash from public.contract_history where application_id = p_app and superseded_at is null order by id desc limit 1;
-  -- 已確認的內容與新版或舊版模板任一相符就仍有效（換模板本身不讓已確認的契約失效）
-  if v_hash is null or (v_hash is distinct from md5(coalesce(public.payroll_contract_text(p_app), ''))
-                        and v_hash is distinct from md5(coalesce(public.payroll_contract_text_v2(p_app), ''))
-                        and v_hash is distinct from md5(coalesce(public.payroll_contract_text_v1(p_app), ''))) then
-    update public.applications set contract_accepted_at = null, contract_text = null, updated_at = now() where id = p_app;
+  if a.id is null then return; end if;
+  if a.contract_accepted_at is not null then
+    select text_hash into v_hash from public.contract_history where application_id = p_app and superseded_at is null order by id desc limit 1;
+    -- 已確認的內容與新版或舊版模板任一相符就仍有效（換模板本身不讓已確認的契約失效）
+    if v_hash is null or (v_hash is distinct from md5(coalesce(public.payroll_contract_text(p_app), ''))
+                          and v_hash is distinct from md5(coalesce(public.payroll_contract_text_v2(p_app), ''))
+                          and v_hash is distinct from md5(coalesce(public.payroll_contract_text_v1(p_app), ''))) then
+      update public.applications set contract_accepted_at = null, contract_text = null, updated_at = now() where id = p_app;
+      a.contract_accepted_at := null;
+    end if;
+  end if;
+  -- 報名時已同意的契約：錄取的班次與內容和報名時一字不差就直接生效；不同（只錄取部分、名單制排班、活動資料改過）就要本人重新確認
+  if a.contract_accepted_at is null and a.apply_contract_hash is not null then
+    v_text := public.payroll_contract_text(p_app);
+    if v_text is not null and md5(v_text) = a.apply_contract_hash then
+      update public.contract_history set superseded_at = now() where application_id = p_app and superseded_at is null;
+      v_full := v_text || E'\n\n' || '乙方於 ' || to_char(a.apply_contract_at at time zone 'Asia/Taipei', 'YYYY/MM/DD HH24:MI') || ' 報名時以本人帳號登入系統線上確認同意。';
+      update public.applications set contract_text = v_full, contract_accepted_at = a.apply_contract_at, updated_at = now() where id = p_app;
+      insert into public.contract_history(application_id, text, text_hash, accepted_at) values (p_app, v_full, md5(v_text), a.apply_contract_at);
+      insert into public.audit_log(actor, action, table_name, row_id, detail) values (a.person_id::text, 'contract_accepted', 'applications', p_app, jsonb_build_object('at_apply', true));
+    end if;
   end if;
 end $function$
 ;
@@ -1355,7 +1369,7 @@ begin
       where a.person_id = r.person_id and a.event_id = r.event_id and a.status = 'active' and x.status = 'accepted';
       if v_lines is null then update public.notifications set status = 'skipped', error = 'no_longer_accepted' where id = r.id; continue; end if;
       v_text := '【沃克思】' || r.name || ' 你好，你已錄取「' || r.event_name || '」：' || E'\n' || v_lines || E'\n\n'
-        || '請登入確認勞動契約，確認後才算完成排班：' || E'\n' || v_site;
+        || case when exists (select 1 from public.applications ca where ca.person_id = r.person_id and ca.event_id = r.event_id and ca.contract_accepted_at is not null) then '勞動契約已確認，可登入查看：' else '請登入確認勞動契約，確認後才算完成排班：' end || E'\n' || v_site;
     elsif r.kind = 'payslip' then
       select * into s from public.payslips where id = r.ref_id;
       if s.id is null or s.status <> 'published' then update public.notifications set status = 'skipped', error = 'not_published' where id = r.id; continue; end if;
@@ -1531,7 +1545,7 @@ CREATE OR REPLACE FUNCTION public.payroll_apply(p_token text, p_join text, p_dat
  SET search_path TO ''
 AS $function$
 declare v_pid uuid := public.payroll_session_person(p_token); e public.events; t record; v_view jsonb; v_kind text; v_plan uuid; pl public.recruit_plans;
-  v_app uuid; v_ids uuid[]; q jsonb; v_ans jsonb := '{}'::jsonb; v text; v_old_plan uuid; v_has_acc boolean := false;
+  v_app uuid; v_ids uuid[]; q jsonb; v_ans jsonb := '{}'::jsonb; v text; v_old_plan uuid; v_has_acc boolean := false; v_ctext text;
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into t from public.join_target(p_join);
@@ -1591,6 +1605,13 @@ begin
   if jsonb_array_length(public.person_missing_docs(v_pid)) > 0 then
     return jsonb_build_object('ok', false, 'error', 'missing_docs', 'missing', public.person_missing_docs(v_pid));
   end if;
+  if coalesce((p_data->>'nda')::boolean, false) is not true then return jsonb_build_object('ok', false, 'error', 'need_nda'); end if;
+  if v_ids is not null and cardinality(v_ids) > 0 then
+    v_ctext := public.payroll_contract_text_for(e.id, v_pid, v_ids);
+    if v_ctext is not null and (p_data->>'contract_hash') is distinct from md5(v_ctext) then
+      return jsonb_build_object('ok', false, 'error', case when nullif(p_data->>'contract_hash', '') is null then 'need_contract' else 'contract_changed' end);
+    end if;
+  end if;
   insert into public.applications(event_id, person_id, answers, experience, plan_id)
   values (e.id, v_pid, v_ans, nullif(left(btrim(coalesce(p_data->>'experience','')), 2000), ''), v_plan)
   on conflict (event_id, person_id) do update set answers = excluded.answers, experience = excluded.experience, status = 'active', updated_at = now(),
@@ -1600,6 +1621,12 @@ begin
     delete from public.application_shifts where application_id = v_app and status in ('applied','waitlist','rejected') and not (shift_id = any(v_ids));
     insert into public.application_shifts(application_id, shift_id, status) select v_app, i, 'applied' from unnest(v_ids) i on conflict do nothing;
   end if;
+  update public.applications set nda_accepted_at = now(), nda_hash = md5(public.payroll_nda_text()),
+    apply_contract_text = case when v_kind = 'pool' then apply_contract_text else v_ctext end,
+    apply_contract_hash = case when v_kind = 'pool' then apply_contract_hash else md5(v_ctext) end,
+    apply_contract_at = case when v_kind = 'pool' then apply_contract_at when v_ctext is not null then now() end
+  where id = v_app;
+  perform public.contract_recheck_app(v_app);
   insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'applied', 'applications', v_app,
     jsonb_build_object('shifts', coalesce(cardinality(v_ids), 0), 'mode', v_kind, 'plan', v_plan));
   return jsonb_build_object('ok', true);
@@ -2019,7 +2046,7 @@ begin
 end $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.payroll_contract_text(p_app uuid)
+CREATE OR REPLACE FUNCTION public.payroll_contract_text_for(p_event uuid, p_person uuid, p_shifts uuid[])
  RETURNS text
  LANGUAGE plpgsql
  STABLE SECURITY DEFINER
@@ -2027,13 +2054,12 @@ CREATE OR REPLACE FUNCTION public.payroll_contract_text(p_app uuid)
 AS $function$
 declare a public.applications; e public.events; em public.employers; p public.people; lines text; roles text; rates numeric[]; one_rate boolean;
 begin
-  select * into a from public.applications where id = p_app;
-  select * into e from public.events where id = a.event_id;
+  select * into e from public.events where id = p_event;
   select * into em from public.employers where id = e.employer_id;
-  select * into p from public.people where id = a.person_id;
+  select * into p from public.people where id = p_person;
   select array_agg(distinct coalesce(s.rate, e.default_hourly_rate)), string_agg(distinct coalesce(s.role, '活動人員'), '、')
   into rates, roles
-  from public.application_shifts x join public.shifts s on s.id = x.shift_id where x.application_id = p_app and x.status = 'accepted';
+  from public.shifts s where s.id = any(p_shifts) and s.event_id = p_event;
   if roles is null then return null; end if;
   -- 全部班次同一個時薪就寫在第四條；不同時薪時逐行列出
   one_rate := cardinality(rates) = 1 and rates[1] is not null;
@@ -2043,7 +2069,7 @@ begin
       case when one_rate then '' else '　時薪 ' || coalesce(trim(to_char(coalesce(s.rate, e.default_hourly_rate), 'FM999999990.##')), '（未定）') || ' 元' end),
       E'\n' order by s.work_date, s.start_time)
   into lines
-  from public.application_shifts x join public.shifts s on s.id = x.shift_id where x.application_id = p_app and x.status = 'accepted';
+  from public.shifts s where s.id = any(p_shifts) and s.event_id = p_event;
   return '短期性僱用勞動契約' || E'\n\n'
     || '僱用人：' || coalesce(em.legal_name, em.name) || '（下稱甲方）' || E'\n'
     || coalesce('統一編號：' || nullif(btrim(em.tax_id), '') || E'\n', '')
@@ -2063,6 +2089,17 @@ begin
     || '九、契約期間：本契約為短期性職務代理人契約，自本契約效力僅於第三項所約定之期間，期滿自動終止。' || E'\n'
     || '十、本契約未約定事項，依勞動基準法及相關法令辦理。';
 end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_contract_text(p_app uuid)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select public.payroll_contract_text_for(a.event_id, a.person_id, array(select x.shift_id from public.application_shifts x where x.application_id = a.id and x.status = 'accepted'))
+  from public.applications a where a.id = p_app
+$function$
 ;
 
 CREATE OR REPLACE FUNCTION public.payroll_contract_text_v2(p_app uuid)
@@ -2587,7 +2624,7 @@ begin
   select a.id into v_app from public.applications a where a.event_id = (select t.event_id from public.join_target(p_join) t) and a.person_id = v_pid;
   if v_app is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   if exists (select 1 from public.application_shifts where application_id = v_app and status = 'accepted') then return jsonb_build_object('ok', false, 'error', 'has_accepted'); end if;
-  update public.applications set status = 'withdrawn', plan_id = null, updated_at = now() where id = v_app;
+  update public.applications set status = 'withdrawn', plan_id = null, apply_contract_text = null, apply_contract_hash = null, apply_contract_at = null, updated_at = now() where id = v_app;
   delete from public.application_shifts where application_id = v_app;
   return jsonb_build_object('ok', true);
 end $function$
@@ -3771,7 +3808,7 @@ begin
     if v_lines is null then update public.notifications set status = 'skipped', error = 'no_longer_accepted' where id = r.id; continue; end if;
     v_subject := left('【沃克思】錄取通知：' || r.event_name, 110);
     v_text := r.name || ' 你好：' || E'\n\n' || '你已錄取「' || r.event_name || '」，上班時間：' || E'\n' || v_lines || E'\n\n'
-      || '請登入確認勞動契約，確認後才算完成排班：' || E'\n' || v_site || E'\n\n' || '沃克思 WORKS';
+      || case when exists (select 1 from public.applications ca where ca.person_id = r.person_id and ca.event_id = r.event_id and ca.contract_accepted_at is not null) then '勞動契約已確認，可登入查看：' else '請登入確認勞動契約，確認後才算完成排班：' end || E'\n' || v_site || E'\n\n' || '沃克思 WORKS';
     v_ts := floor(extract(epoch from now()))::bigint;
     v_nonce := r.id::text || ':' || (r.attempts + 1);
     v_req := net.http_post(url := v_url, body := jsonb_build_object('type', 'notify', 'to', r.email, 'subject', v_subject, 'text', v_text, 'nonce', v_nonce, 'ts', v_ts,
@@ -3808,3 +3845,52 @@ grant execute on function public.admin_save_plan(text, uuid, jsonb) to anon, aut
 grant execute on function public.admin_decide_plan(text, uuid[], text) to anon, authenticated, service_role;
 grant execute on function public.admin_assign(text, uuid, uuid[], boolean) to anon, authenticated, service_role;
 grant execute on function public.admin_recruit_settings(text, jsonb) to anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.payroll_nda_text()
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+  select '本人因參與本活動而知悉的未公開資訊，包括合作品牌資訊、活動流程、後台影像、工作群組資料及他人個資，僅限工作使用。未經沃克思國際有限公司同意，不得擅自拍攝、截圖、直播、轉傳或公開。活動結束後，仍須對未公開資訊保密。'
+    || E'\n\n' || '若本人因故意或過失違反本條款，造成沃克思國際有限公司或合作品牌方可證明的損失，應依法負賠償責任。公司不得預扣工資作為賠償。本條款不影響本人依法申訴、檢舉或行使勞動權益。'
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_contract_preview(p_token text, p_join text, p_data jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 報名頁用：依勾選的班次或方案產生勞動契約內容（本人才能看，含本人姓名與遮蔽身分證），以及活動保密條款
+declare v_pid uuid := public.payroll_session_person(p_token); e public.events; t record; v_view jsonb; v_kind text; v_ids uuid[]; v_plan uuid; v_text text;
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  select * into t from public.join_target(p_join);
+  select * into e from public.events where id = t.event_id;
+  if not found then return jsonb_build_object('ok', false, 'error', 'bad_join'); end if;
+  v_view := public.recruit_view(e.id, t.plan_id); v_kind := v_view->>'kind';
+  if v_kind = 'pick' then
+    begin
+      select coalesce(array_agg(x::uuid), '{}') into v_ids from jsonb_array_elements_text(coalesce(p_data->'shift_ids', '[]'::jsonb)) x;
+    exception when others then return jsonb_build_object('ok', false, 'error', 'bad_shift'); end;
+  elsif v_kind in ('plan', 'plans') then
+    begin v_plan := nullif(p_data->>'plan_id', '')::uuid; exception when others then return jsonb_build_object('ok', false, 'error', 'bad_plan'); end;
+    if v_plan is not null and exists (select 1 from jsonb_array_elements(v_view->'plans') x where (x->>'id')::uuid = v_plan) then
+      select shift_ids into v_ids from public.recruit_plans where id = v_plan;
+    end if;
+  end if;
+  if v_ids is not null and cardinality(v_ids) > 0 then
+    v_text := public.payroll_contract_text_for(e.id, v_pid, array(select s.id from public.shifts s where s.id = any(v_ids) and s.event_id = e.id));
+  end if;
+  return jsonb_build_object('ok', true, 'mode', v_kind, 'text', v_text, 'hash', case when v_text is not null then md5(v_text) end,
+    'nda_text', public.payroll_nda_text(), 'nda_hash', md5(public.payroll_nda_text()));
+end $function$
+;
+-- 報名時同意契約與保密條款（2026-11-28）：applications 新增 apply_contract_text／apply_contract_hash／apply_contract_at／nda_accepted_at／nda_hash
+revoke all on function public.payroll_contract_text_for(uuid, uuid, uuid[]) from public, anon, authenticated;
+revoke all on function public.payroll_nda_text() from public;
+grant execute on function public.payroll_nda_text() to anon, authenticated, service_role;
+revoke all on function public.payroll_contract_preview(text, text, jsonb) from public;
+grant execute on function public.payroll_contract_preview(text, text, jsonb) to anon, authenticated, service_role;
