@@ -20,7 +20,7 @@ a{color:inherit}
 .nav.on{background:var(--soft);color:var(--ink);font-weight:600}
 .nav .cnt{font-size:12px;min-width:20px;padding:0 6px;border-radius:99px;background:var(--warn-soft);color:var(--warn);text-align:center;font-weight:600}
 .side .me{margin-top:auto;padding:12px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
-.main{padding:26px 32px 90px;min-width:0;max-width:1240px}
+.main{padding:26px 32px 90px;min-width:0;max-width:1800px}
 @media (max-width:880px){
   .shell{grid-template-columns:1fr}
   .side{position:sticky;top:0;z-index:6;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px 10px;border-right:0;border-bottom:1px solid var(--line);scrollbar-width:none}
@@ -576,7 +576,9 @@ const recruitShifts = {
     const rc = S.cache.rc, cfg = S.cache.settings, pool = rc.mode === 'pool', ps = S.psel || (S.psel = new Set());
     [...ps].forEach(id => { if (!rc.shifts.some(x => x.id === id)) ps.delete(id); });   // 換活動或刪班次後清掉不屬於這場的勾選
     const plans = rc.plans || [], word = rc.mode === 'plans' ? '方案' : '專屬連結';
+    const order = id => { const i = rc.shifts.findIndex(y => y.id === id); return i < 0 ? 1e9 : i; };
     const sl = id => { const x = rc.shifts.find(y => y.id === id); return x ? shiftLabel(x) : '（班次已刪除）'; };
+    const planShifts = p => [...(p.shift_ids || [])].sort((a, b) => order(a) - order(b)).map(id => '<div style="white-space:nowrap">' + esc(sl(id)) + '</div>').join('');
     const intro = pool ? '名單制：報名頁不列班次，班次給管理員排班用。到「報名與錄取」點班次排人。'
       : rc.mode === 'plans' ? '方案制：勾選班次建立方案，報名連結只會列出方案讓工讀生選一個（整組報名）。還沒建立方案時，報名連結維持自選班次。'
       : '工讀生打開報名連結會看到全部班次自己勾選。要限制某些人只能報特定組合，勾選班次產生專屬連結（拿到的人只看得到這幾班，且要整組報名）。';
@@ -587,13 +589,13 @@ const recruitShifts = {
         <td class="r">${x.accepted >= x.headcount ? '<span class="badge ok">已額滿 ' + x.accepted + ' / ' + x.headcount + '</span>' : x.accepted + ' / ' + x.headcount}</td><td class="r">${x.applied || '—'}</td></tr>`).join('') || `<tr><td colspan="${pool ? 6 : 7}" class="empty">還沒有班次，按「新增班次」開始。</td></tr>`}</tbody></table></div>
       ${!pool && ps.size ? `<form id="pf" class="bulk" style="flex-wrap:wrap;gap:8px"><span class="grow" style="min-width:160px">已選 ${ps.size} 個班次${ps.size > 1 ? '（整組報名）' : ''}</span>
         <input id="pn" type="text" maxlength="40" placeholder="名稱（可空白，自動用崗位）" style="width:200px"><input id="ph" type="text" inputmode="numeric" placeholder="名額（可空白）" style="width:120px">
-        <button class="btn">${rc.mode === 'plans' ? '建立方案' : '產生專屬連結'}</button></form>` : ''}
+        <button class="btn">${rc.mode === 'plans' ? '建立方案' : '產生專屬連結'}</button></form>` : ''}`) + `
       ${pool ? '' : `<h2 style="margin-top:22px">${rc.mode === 'plans' ? '方案' : '專屬連結'}</h2>
       ${plans.length ? `<div class="card tablebox"><table><thead><tr><th>名稱</th><th>班次</th><th class="r">報名 / 錄取</th><th class="r">名額</th><th></th></tr></thead><tbody>${plans.map(p => `<tr${p.disabled_at ? ' style="opacity:.5"' : ''}><td><b>${esc(p.name)}</b>${p.disabled_at ? ' <span class="badge">已停用</span>' : p.full ? ' <span class="badge ok">已額滿</span>' : ''}</td>
-        <td style="white-space:normal">${(p.shift_ids || []).map(id => esc(sl(id))).join('<br>')}</td><td class="r">${p.applied} / ${p.accepted}</td><td class="r">${p.headcount || '—'}</td>
+        <td>${planShifts(p)}</td><td class="r">${p.applied} / ${p.accepted}</td><td class="r">${p.headcount || '—'}</td>
         <td class="r" style="white-space:nowrap">${p.disabled_at ? '' : `<button class="link" data-pcopy="${esc(p.code)}">複製連結</button>　<button class="link" data-pedit="${esc(p.id)}">名額</button>　<button class="link" style="color:var(--danger)" data-poff="${esc(p.id)}">停用</button>`}</td></tr>`).join('')}</tbody></table></div>`
         : `<p class="sub">還沒有${word}。勾選上方班次${rc.mode === 'plans' ? '建立方案' : '產生專屬連結'}。</p>`}
-      <div id="pm" style="margin-top:10px"></div>`}`);
+      <div id="pm" style="margin-top:10px"></div>`}`;
   },
   bind: e => {
     $('newshift').onclick = () => openDetail('newshift', 'new', e);
