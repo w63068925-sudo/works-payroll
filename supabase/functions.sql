@@ -3943,3 +3943,21 @@ end $function$
 -- people.is_test（2026-11-28）
 revoke all on function public.admin_set_person_test(text, uuid, boolean) from public;
 grant execute on function public.admin_set_person_test(text, uuid, boolean) to anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.payroll_remember(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 「在這支手機保持登入」：把這個登入延長到 30 天後；每次打開網站再延一次（2026-11-28 使用者要求，掃簽到不用每次登入）
+declare v_pid uuid := public.payroll_session_person(p_token);
+begin
+  if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  update public.sessions set expires_at = greatest(expires_at, now() + interval '30 days')
+  where token_hash = encode(extensions.digest(p_token, 'sha256'), 'hex');
+  return jsonb_build_object('ok', true);
+end $function$
+;
+revoke all on function public.payroll_remember(text) from public;
+grant execute on function public.payroll_remember(text) to anon, authenticated, service_role;

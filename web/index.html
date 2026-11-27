@@ -153,11 +153,20 @@ const KEY = 'sb_publishable_ZQtUdhkpsPV_XhIkI1K05A_mDaLNsQQ';
 const app = document.getElementById('app');
 const state = { token: null, person: null, payslips: [], year: 'all', ticket: null, join: null };
 
-try { state.token = sessionStorage.getItem('payroll_token'); state.ticket = sessionStorage.getItem('payroll_ticket'); state.join = sessionStorage.getItem('payroll_join'); } catch (e) {}
+// 登入憑證：勾「在這支手機保持登入」存 localStorage（30 天，打開網站時自動延長），否則只存這個分頁
+try { state.token = sessionStorage.getItem('payroll_token') || localStorage.getItem('payroll_token_keep'); state.ticket = sessionStorage.getItem('payroll_ticket'); state.join = sessionStorage.getItem('payroll_join'); } catch (e) {}
 function saveJoin(j) { state.join = j; try { j ? sessionStorage.setItem('payroll_join', j) : sessionStorage.removeItem('payroll_join'); } catch (e) {}
   if (!j && /[?&]join=/.test(location.search)) { try { history.replaceState(null, '', location.pathname); } catch (e) {} } }
 function saveTicket(t) { state.ticket = t; try { t ? sessionStorage.setItem('payroll_ticket', t) : sessionStorage.removeItem('payroll_ticket'); } catch (e) {} }
-function saveToken(t) { state.token = t; try { t ? sessionStorage.setItem('payroll_token', t) : sessionStorage.removeItem('payroll_token'); } catch (e) {} }
+function saveToken(t, keep) {
+  state.token = t;
+  try {
+    if (!t) { sessionStorage.removeItem('payroll_token'); localStorage.removeItem('payroll_token_keep'); return; }
+    sessionStorage.setItem('payroll_token', t);
+    if (keep === true) localStorage.setItem('payroll_token_keep', t);
+    else if (keep === false) localStorage.removeItem('payroll_token_keep');
+  } catch (e) {}
+}
 
 async function rpc(name, body) {
   const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -213,6 +222,7 @@ function viewLogin(message) {
         <button type="button" class="toggle" id="show" aria-label="顯示密碼">顯示</button>
       </div>
       <p class="hint">合作過的夥伴，密碼預設是民國生日 7 碼，例如民國 90 年 1 月 1 日請輸入 0900101。</p>
+      <label class="check" style="margin-top:14px"><input type="checkbox" id="keep" checked><span>在這支手機保持登入 30 天（之後掃簽到 QR 碼不用再登入）。借用別人的手機請取消勾選。</span></label>
       <div id="m">${message ? '<div class="msg warn">' + esc(message) + '</div>' : ''}</div>
       <button class="btn" id="go">登入</button>
     </form>
@@ -234,7 +244,12 @@ function viewLogin(message) {
     go.disabled = true; go.textContent = '登入中…';
     try {
       const r = await rpc('payroll_login', { p_national_id: nid.value, p_password: pw.value });
-      if (r.ok) { saveToken(r.token); return state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList(); }
+      if (r.ok) {
+        const keep = document.getElementById('keep').checked;
+        saveToken(r.token, keep);
+        if (keep) { try { await rpc('payroll_remember', { p_token: r.token }); } catch (e2) {} }
+        return state.ticket ? viewCheckin() : state.join ? viewRecruit() : viewList();
+      }
       else m.innerHTML = '<div class="msg err">身分證字號或密碼不正確。<div class="dim" style="margin-top:4px">請確認身分證字號沒有打錯；密碼是民國生日 7 碼，例如 0900101（改過密碼的請用新密碼）。連續錯 10 次會暫停 15 分鐘。</div>'
         + '<div style="margin-top:6px"><b>還沒報名過的新朋友沒有帳號</b>，' + (state.join ? '請按下方「第一次報名？先填基本資料」。' : '請按下方「第一次合作？建立帳號」。') + '</div></div>';
     } catch (err) { m.innerHTML = '<div class="msg err">' + esc(err.message) + '，請檢查網路後再試一次。</div>'; }
@@ -974,6 +989,8 @@ async function viewCheckin(action, ack) {
 }
 
 (async function boot() {
+  // 保持登入的手機：每次打開網站把登入延長到 30 天後
+  try { if (state.token && localStorage.getItem('payroll_token_keep') === state.token) rpc('payroll_remember', { p_token: state.token }).catch(() => {}); } catch (e) {}
   const qs = new URLSearchParams(location.search), code = qs.get('k'), join = qs.get('join');
   let codeMsg = null;
   // 報名碼留在網址：從 LINE 轉開 Safari、重新整理、轉傳連結都還帶得到（報名碼本來就公開貼在群組）
