@@ -154,7 +154,13 @@ const app = document.getElementById('app');
 const state = { token: null, person: null, payslips: [], year: 'all', ticket: null, join: null };
 
 // 登入憑證：勾「在這支手機保持登入」存 localStorage（30 天，打開網站時自動延長），否則只存這個分頁
-try { state.token = sessionStorage.getItem('payroll_token') || localStorage.getItem('payroll_token_keep'); state.ticket = sessionStorage.getItem('payroll_ticket'); state.join = sessionStorage.getItem('payroll_join'); } catch (e) {}
+try {
+  const ss = sessionStorage.getItem('payroll_token'), ls = localStorage.getItem('payroll_token_keep');
+  // 兩處的登入不一樣（同一支手機換過帳號）：不猜是哪一個，請重新登入
+  if (ss && ls && ss !== ls) { sessionStorage.removeItem('payroll_token'); localStorage.removeItem('payroll_token_keep'); state.token = null; }
+  else state.token = ss || ls;
+} catch (e) {}
+try { state.ticket = sessionStorage.getItem('payroll_ticket'); state.join = sessionStorage.getItem('payroll_join'); } catch (e) {}
 function saveJoin(j) { state.join = j; try { j ? sessionStorage.setItem('payroll_join', j) : sessionStorage.removeItem('payroll_join'); } catch (e) {}
   if (!j && /[?&]join=/.test(location.search)) { try { history.replaceState(null, '', location.pathname); } catch (e) {} } }
 function saveTicket(t) { state.ticket = t; try { t ? sessionStorage.setItem('payroll_ticket', t) : sessionStorage.removeItem('payroll_ticket'); } catch (e) {} }
@@ -950,7 +956,7 @@ async function viewCheckin(action, ack) {
   const note = { not_scheduled: '你今天沒有被排到這場活動的班，無法簽到。如果現場臨時需要你支援，請請負責人在後台補登出勤。', not_event_day: '今天不在這場活動的日期內，無法簽到。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '找不到簽到紀錄，請先簽到。' }[r.error];
   const st = r.state || 'none';
   app.innerHTML = brand + `
-    <p class="sub">${esc(r.event || '')}</p>
+    <p class="sub">${esc(r.event || '')}${r.me ? '　目前登入：<b>' + esc(r.me) + '</b>　<button class="link" id="notme" style="padding:0">不是你？登出</button>' : ''}</p>
     <h1>${st === 'in' ? '上班中' : st === 'done' ? '今天已完成' : '尚未簽到'}</h1>
     <div class="card hero" style="margin-top:18px">
       <div class="label">現在時間</div>
@@ -969,6 +975,8 @@ async function viewCheckin(action, ack) {
     <button class="btn ghost" id="tolist">查看我的薪資</button>
     <p class="foot">簽到退時間以伺服器時間為準，記錄到分鐘，並依勞動基準法第 30 條保存 5 年。時間有誤請當場告訴現場負責人。</p>`;
   document.getElementById('tolist').addEventListener('click', viewList);
+  const nm = document.getElementById('notme');
+  if (nm) nm.addEventListener('click', async () => { try { await rpc('payroll_logout', { p_token: state.token }); } catch (e) {} saveToken(null); viewLogin('請用你自己的帳號登入，登入後就可以簽到。'); });
   const act = document.getElementById('act');
   // 掃碼後先問清楚是「簽到」還是「簽退」，避免上班中的人又掃一次就變成下班
   if (act) act.addEventListener('click', () => {

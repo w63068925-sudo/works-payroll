@@ -1728,7 +1728,7 @@ begin
   if not found then return jsonb_build_object('ok', false, 'error', 'ticket'); end if;
   select s_in, s_out into v_s_in, v_s_out from public.today_schedule(v_pid, e.id, v_today);
   if p_action = 'status' then
-    return jsonb_build_object('ok', true, 'event', e.name, 'block', case
+    return jsonb_build_object('ok', true, 'event', e.name, 'me', (select name from public.people where id = v_pid), 'block', case
         when e.start_date is null or v_today < e.start_date or v_today > coalesce(e.end_date, e.start_date) then 'not_event_day'
         when exists (select 1 from public.shifts where event_id = e.id) and v_s_in is null then 'not_scheduled'
         end,
@@ -3940,7 +3940,7 @@ begin
   return jsonb_build_object('ok', true);
 end $function$
 ;
--- people.is_test（2026-11-28）
+-- people.is_test、sessions.remember（2026-11-28）
 revoke all on function public.admin_set_person_test(text, uuid, boolean) from public;
 grant execute on function public.admin_set_person_test(text, uuid, boolean) to anon, authenticated, service_role;
 
@@ -3950,12 +3950,15 @@ CREATE OR REPLACE FUNCTION public.payroll_remember(p_token text)
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
--- 「在這支手機保持登入」：把這個登入延長到 30 天後；每次打開網站再延一次（2026-11-28 使用者要求，掃簽到不用每次登入）
+-- 「在這支手機保持登入」：只有登入後 5 分鐘內選擇保持登入、或本來就是保持登入的 session 才能延長到 30 天後；
+-- 沒勾選的 8 小時登入，事後拿到憑證也不能延長（2026-11-28 Codex 審查）
 declare v_pid uuid := public.payroll_session_person(p_token);
 begin
   if v_pid is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
-  update public.sessions set expires_at = greatest(expires_at, now() + interval '30 days')
-  where token_hash = encode(extensions.digest(p_token, 'sha256'), 'hex');
+  update public.sessions set remember = true, expires_at = greatest(expires_at, now() + interval '30 days')
+  where token_hash = encode(extensions.digest(p_token, 'sha256'), 'hex') and expires_at > now()
+    and (remember or created_at > now() - interval '5 minutes');
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_allowed'); end if;
   return jsonb_build_object('ok', true);
 end $function$
 ;
