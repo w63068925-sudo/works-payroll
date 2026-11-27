@@ -1253,6 +1253,7 @@ begin
   select text_hash into v_hash from public.contract_history where application_id = p_app and superseded_at is null order by id desc limit 1;
   -- 已確認的內容與新版或舊版模板任一相符就仍有效（換模板本身不讓已確認的契約失效）
   if v_hash is null or (v_hash is distinct from md5(coalesce(public.payroll_contract_text(p_app), ''))
+                        and v_hash is distinct from md5(coalesce(public.payroll_contract_text_v2(p_app), ''))
                         and v_hash is distinct from md5(coalesce(public.payroll_contract_text_v1(p_app), ''))) then
     update public.applications set contract_accepted_at = null, contract_text = null, updated_at = now() where id = p_app;
   end if;
@@ -2058,6 +2059,52 @@ begin
     || '六、保險與退休金：甲方依法為勞工投保勞工保險、就業保險及職業災害保險，乙方應自付之保費自工資中扣除；甲方並依勞工退休金條例提繳退休金。' || E'\n'
     || '七、出勤紀錄：乙方應於現場以 QR 碼簽到、簽退。出勤紀錄依法保存五年，乙方得隨時申請副本。' || E'\n'
     || '八、請假與異動：乙方如無法出勤，應儘速於排定日前通知甲方。甲方如需取消或變更排班，應事先通知乙方。' || E'\n'
+    || '九、契約期間：本契約為短期性職務代理人契約，自本契約效力僅於第三項所約定之期間，期滿自動終止。' || E'\n'
+    || '十、本契約未約定事項，依勞動基準法及相關法令辦理。';
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_contract_text_v2(p_app uuid)
+ RETURNS text
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare a public.applications; e public.events; em public.employers; p public.people; lines text; roles text; rates numeric[]; one_rate boolean;
+begin
+  select * into a from public.applications where id = p_app;
+  select * into e from public.events where id = a.event_id;
+  select * into em from public.employers where id = e.employer_id;
+  select * into p from public.people where id = a.person_id;
+  select array_agg(distinct coalesce(s.rate, e.default_hourly_rate)), string_agg(distinct coalesce(s.role, '活動人員'), '、')
+  into rates, roles
+  from public.application_shifts x join public.shifts s on s.id = x.shift_id where x.application_id = p_app and x.status = 'accepted';
+  if roles is null then return null; end if;
+  -- 全部班次同一個時薪就寫在第四條；不同時薪時逐行列出
+  one_rate := cardinality(rates) = 1 and rates[1] is not null;
+  select string_agg(format('　%s（%s）%s–%s%s%s', to_char(s.work_date, 'YYYY/MM/DD'),
+      (array['日','一','二','三','四','五','六'])[extract(dow from s.work_date)::int + 1], to_char(s.start_time, 'HH24:MI'), to_char(s.end_time, 'HH24:MI'),
+      case when s.end_time <= s.start_time then '（翌日）' else '' end,
+      case when one_rate then '' else '　時薪 ' || coalesce(trim(to_char(coalesce(s.rate, e.default_hourly_rate), 'FM999999990.##')), '（未定）') || ' 元' end),
+      E'\n' order by s.work_date, s.start_time)
+  into lines
+  from public.application_shifts x join public.shifts s on s.id = x.shift_id where x.application_id = p_app and x.status = 'accepted';
+  return '短期性僱用勞動契約' || E'\n\n'
+    || '僱用人：' || coalesce(em.legal_name, em.name) || '（下稱甲方）' || E'\n'
+    || coalesce('統一編號：' || nullif(btrim(em.tax_id), '') || E'\n', '')
+    || '受僱人：' || p.name || '（下稱乙方）' || E'\n'
+    || '身分證字號：' || public.payroll_mask_id(p.national_id) || E'\n\n'
+    || '一、工作地點：' || coalesce(nullif(btrim(e.location), ''), '依甲方通知之地點') || E'\n'
+    || '二、工作內容：乙方擔任「' || e.name || '」' || roles || '，從事活動現場相關工作，並遵守現場負責人之合理指揮。' || E'\n'
+    || '三、工作日期與時間：' || E'\n' || lines || E'\n'
+    || '　每日連續工作逾 4 小時，於現場安排休息 ' || greatest(e.default_break_minutes, 30) || ' 分鐘，休息時間不計入工時。' || E'\n'
+    || '四、工資：' || case when one_rate then '時薪 ' || trim(to_char(rates[1], 'FM999999990.##')) || ' 元，' else '依上列時薪，' end
+    || '甲方按乙方實際簽到退紀錄（記錄至分鐘）計算給付。延長工時、休息日及國定假日出勤，依勞動基準法第 24 條、第 39 條規定加給。工資不低於最低工資。' || E'\n'
+    || '五、發薪：甲方' || case when e.pay_date is not null then '於 ' || to_char(e.pay_date, 'YYYY/MM/DD') when e.pay_within_days is not null then '於活動結束後 ' || e.pay_within_days || ' 日內' else '於活動結束後依甲方通知之日期' end
+    || '全額匯入乙方本人帳戶，並於系統提供工資各項目計算方式明細，乙方可隨時查閱及列印。' || E'\n'
+    || '六、保險與退休金：甲方依法為勞工投保勞工保險、就業保險及職業災害保險，乙方應自付之保費自工資中扣除；甲方並依勞工退休金條例提繳退休金。' || E'\n'
+    || '七、出勤紀錄：乙方應於現場以 QR 碼簽到、簽退。出勤紀錄依法保存五年，乙方得隨時申請副本。' || E'\n'
+    || '八、請假與異動：乙方如無法出勤，應儘速於排定日前通知甲方。甲方如需取消或變更排班，應事先通知乙方。' || E'\n'
     || '九、契約期間：本契約為短期性定期契約，效力僅及於第三項所約定之期間，期滿自動終止。' || E'\n'
     || '十、本契約未約定事項，依勞動基準法及相關法令辦理。';
 end $function$
@@ -2724,6 +2771,7 @@ end $function$
 -- 內部函式（沒有登入檢查）只給資料庫內部呼叫
 revoke all on function public.payslip_regenerate(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.payroll_contract_text_v1(uuid) from public, anon, authenticated;
+revoke all on function public.payroll_contract_text_v2(uuid) from public, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.admin_event_people_export(p_token text, p_event uuid)
  RETURNS jsonb
