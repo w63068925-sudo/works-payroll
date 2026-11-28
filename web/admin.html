@@ -271,6 +271,10 @@ function viewAuth(mode, message) {
 
 /* ---------- 外框與路由 ---------- */
 const NAV = [['today', '今日現場'], ['events', '活動'], ['import', 'AI 匯入'], ['calendar', '班表'], ['people', '人員'], ['roster', '加保名冊'], ['payouts', '薪資發放'], ['settings', '設定']];
+// 人員權限：選單與畫面依角色顯示（伺服器另外逐項檢查，這裡只是不顯示用不到的功能）
+const PERM_OF = { today: 'today', events: 'events', import: 'import', calendar: 'calendar', people: 'people', doc: 'people', roster: 'roster', payouts: 'payouts', settings: 'settings' };
+const PERM_NAME = { today: '今日現場（看打卡名單、出示簽到 QR 碼）', events: '活動（招募、班次、出勤）', event_pay: '活動的核對、發布、發薪（看得到薪資金額）', calendar: '班表', people: '人員（個資、證件、下載人員資料）', import: 'AI 匯入', roster: '加保名冊', payouts: '薪資發放', settings: '設定（公司資料、報名方式、LINE、假日、最低工資）' };
+const can = p => { const pp = (S.ov && S.ov.perms) || []; return pp.includes('admin') || pp.includes(p) || (p === 'today' && pp.includes('events')); };
 function activeEvents() { const t = today(); return (S.ov ? S.ov.events : []).filter(e => e.start_date && e.start_date <= t && (e.end_date || e.start_date) >= addDays(t, -1)); }
 function addDays(s, n) { const x = new Date(s + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
 function shell(section, html) {
@@ -279,7 +283,7 @@ function shell(section, html) {
   root.innerHTML = `<div class="shell">
     <nav class="side" aria-label="主選單">
       <div class="logo"><b>WORKS</b><span>沃克思 薪資管理</span></div>
-      ${NAV.map(([k, t]) => `<a class="nav ${section === k ? 'on' : ''}" href="#/${k}" ${section === k ? 'aria-current="page"' : ''}><span>${t}</span>${badges[k] ? '<span class="cnt" title="' + (k === 'events' ? '各活動待處理問題合計 ' + badges[k] + ' 件' : '進行中的活動 ' + badges[k] + ' 場') + '">' + badges[k] + '</span>' : ''}</a>`).join('')}
+      ${NAV.filter(([k]) => can(PERM_OF[k])).map(([k, t]) => `<a class="nav ${section === k ? 'on' : ''}" href="#/${k}" ${section === k ? 'aria-current="page"' : ''}><span>${t}</span>${badges[k] ? '<span class="cnt" title="' + (k === 'events' ? '各活動待處理問題合計 ' + badges[k] + ' 件' : '進行中的活動 ' + badges[k] + ' 場') + '">' + badges[k] + '</span>' : ''}</a>`).join('')}
       <div class="me"><span>${esc(S.user || '')}</span><button class="link" id="logout">登出</button></div>
     </nav>
     <main class="main" id="main">${S.flash ? '<div class="msg ' + S.flash.type + '">' + esc(S.flash.text) + '</div>' : ''}${html}</main><button class="btn backlist" id="backlist" type="button">← 返回名單</button></div>`;
@@ -300,6 +304,11 @@ async function route() {
   const sec = parts[0] || 'events';
   try {
     if (!S.ov || sec === 'events' || sec === 'payouts' || sec === 'today') await loadOverview();
+    if (PERM_OF[sec] && !can(PERM_OF[sec])) {
+      const first = NAV.find(([k]) => can(PERM_OF[k]));
+      if (first && first[0] !== sec) return go('#/' + first[0]);
+      return shell(sec, '<div class="msg err">你的角色目前沒有可用的功能，請聯絡管理員。</div>');
+    }
     if (sec === 'today') return viewToday(parts[1]);
     if (sec === 'events' && parts[1]) return viewEvent(parts[1], parts[2]);
     if (sec === 'events') return viewEvents();
@@ -427,15 +436,17 @@ async function viewEvent(id, step) {
   if (S.cache.id !== id || !step || S.cache.stale) { const keep = S.flash; shell('events', '<div class="skeleton"></div><div class="skeleton"></div>'); S.flash = keep; await loadEventData(id); }
   S.cache.stale = false;
   const info = stepInfo(e);
-  if (!step) { step = (STEPS.find(([k]) => !info[k].done) || STEPS[3])[0]; history.replaceState(null, '', '#/events/' + id + '/' + step); }
+  const VS = can('event_pay') ? STEPS : STEPS.slice(0, 2);
+  if (step && !VS.some(([k]) => k === step)) step = null;
+  if (!step) { step = (VS.find(([k]) => !info[k].done) || VS[VS.length - 1])[0]; history.replaceState(null, '', '#/events/' + id + '/' + step); }
   const [st] = eventState(e);
   const body = { staff: stepRecruit, att: stepAtt, review: stepReview, publish: stepPublish, payout: stepPayout }[step] || stepPublish;
   shell('events', `
     <div class="crumb"><a href="#/events">活動</a> / ${esc(e.name)}</div>
     <div class="head"><div><h1>${esc(e.name)}</h1><p class="sub">${esc(d(e.start_date))}${e.end_date && e.end_date !== e.start_date ? ' – ' + esc(d(e.end_date)) : ''}　${st}${e.archived_at ? '　<span class="badge">已封存</span>' : ''}</p></div>
-      <div class="row"><button class="btn ghost" id="editev">編輯活動</button><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : (e.total - e.void - e.published > 0 || (payDateOf(e) && payDateOf(e) > today()) ? '還有薪資沒發完，仍要封存？' : '確定封存？')) : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xpack">下載人員資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到/簽退 QR 碼</button></div></div>
+      <div class="row"><button class="btn ghost" id="editev">編輯活動</button><button class="btn ghost" id="arch">${S.confirmArch === e.id ? (e.archived_at ? '確定取消封存？' : (e.total - e.void - e.published > 0 || (payDateOf(e) && payDateOf(e) > today()) ? '還有薪資沒發完，仍要封存？' : '確定封存？')) : (e.archived_at ? '取消封存' : '封存')}</button><button class="btn ghost" id="xpack" ${can('people') ? '' : 'hidden'}>下載人員資料</button><button class="btn ghost" id="join">報名連結</button><button class="btn ${st === '進行中' ? '' : 'ghost'}" id="qr">簽到/簽退 QR 碼</button></div></div>
     <div class="steps" role="tablist" aria-label="流程">
-      ${STEPS.map(([k, t], i) => `<button class="step ${info[k].done ? 'done' : ''}" role="tab" aria-selected="${k === step}" data-s="${k}">
+      ${VS.map(([k, t], i) => `<button class="step ${info[k].done ? 'done' : ''}" role="tab" aria-selected="${k === step}" data-s="${k}">
         <span class="n"><i>${info[k].done ? '✓' : i + 1}</i>${['一', '二', '三', '四', '五'][i]}</span><b>${t}</b><span class="s ${info[k].attn ? 'attn' : ''}">${esc(info[k].s)}</span></button>`).join('')}
     </div>
     <div id="joinbox"></div>
@@ -526,11 +537,11 @@ const RTABS = [['apps', '報名與錄取'], ['shifts', '班次'], ['form', '報�
 const AST = { applied: ['待審', ''], waitlist: ['備取', 'warn'], accepted: ['錄取', 'ok'], rejected: ['不錄取', 'error'] };
 const shiftLabel = x => md(x.work_date) + ' ' + x.start + '–' + x.end + (x.overnight ? '⁺¹' : '') + (x.role ? ' ' + x.role : '');
 const stepRecruit = {
-  tab: () => S.filter.rtab || (S.cache.rc.shifts.length ? 'apps' : 'shifts'),
+  tab: () => (S.filter.rtab === 'pay' && !can('event_pay') ? null : S.filter.rtab) || (S.cache.rc.shifts.length ? 'apps' : 'shifts'),
   html: e => {
     const t = stepRecruit.tab(), rc = S.cache.rc;
     const pend = rc.applicants.filter(a => Object.values(a.shifts).some(v => v === 'applied')).length;
-    const tabs = `<div class="tabs" role="tablist" aria-label="招募">${RTABS.map(([k, n]) => `<button class="tab" role="tab" aria-selected="${k === t}" data-rt="${k}">${n}${k === 'apps' && pend ? ' <span class="badge warn">' + pend + '</span>' : k === 'shifts' ? ' <span class="dim">' + rc.shifts.length + '</span>' : ''}</button>`).join('')}</div>`;
+    const tabs = `<div class="tabs" role="tablist" aria-label="招募">${RTABS.filter(([k]) => k !== 'pay' || can('event_pay')).map(([k, n]) => `<button class="tab" role="tab" aria-selected="${k === t}" data-rt="${k}">${n}${k === 'apps' && pend ? ' <span class="badge warn">' + pend + '</span>' : k === 'shifts' ? ' <span class="dim">' + rc.shifts.length + '</span>' : ''}</button>`).join('')}</div>`;
     const bar = `<div class="row" style="margin-bottom:12px;align-items:center"><span class="badge ${rc.event.recruiting ? 'ok' : ''}">${rc.event.recruiting ? '招募中' : '已停止招募'}</span>
       <span class="sub grow">${rc.applicants.length} 人報名　<a href="#/settings" data-tosettings class="dim">報名方式：${({ pool: '名單制', plans: '方案制', pick: '自選班次' })[rc.mode] || '自選班次'}${rc.require_line ? '、須綁 LINE' : ''}</a></span><button class="btn ghost sm" id="copyjoin">複製報名連結</button></div>`;
     return tabs + bar + ({ apps: recruitApps, shifts: recruitShifts, form: recruitForm, pay: stepStaff }[t]).html(e);
@@ -733,7 +744,7 @@ const stepAtt = {
         <div><label for="ins">勞保月投保薪資</label><input id="ins" type="text" inputmode="numeric" value="${esc(Number(cfg.insured_salary))}" style="width:130px"></div>
         <div><label for="grace">遲到寬限（分）</label><input id="grace" type="text" inputmode="numeric" value="${esc(cfg.late_grace_minutes == null ? '' : cfg.late_grace_minutes)}" placeholder="全站 ${esc(cfg.late_grace_default || '0')}" style="width:120px" title="表定上班後這幾分鐘內簽到算準時，工資從表定時間起算。空白＝用全站設定"></div>
         <button class="btn ghost" id="cfgsave">儲存設定</button><span class="grow"></span>
-        <button class="btn ghost" id="addatt">補登出勤</button><button class="btn" id="gen">依出勤產生薪資單</button></div></div>
+        <button class="btn ghost" id="addatt">補登出勤</button>${can('event_pay') ? '<button class="btn" id="gen">依出勤產生薪資單</button>' : ''}</div></div>
       ${splitWrap(`<p class="sub" style="margin-bottom:10px">共 ${c.att.length} 筆${open ? '，<b style="color:var(--warn)">' + open + ' 筆尚未簽退</b>，產生薪資單前請先補上下班時間' : ''}。點任一列可修改。</p>
         <div class="card tablebox"><table>
         <thead><tr><th>姓名</th><th>日期</th><th>表定</th><th>上班</th><th>下班</th><th class="r">休息</th><th class="r">計薪工時</th><th>來源</th></tr></thead>
@@ -750,7 +761,7 @@ const stepAtt = {
       const r = await rpc('admin_update_event', { p_id: e.id, p_patch: { default_break_minutes: $('br').value, default_hourly_rate: $('hr').value, insured_salary: $('ins').value, late_grace_minutes: $('grace').value } });
       flash(r.ok ? 'ok' : 'err', r.ok ? '設定已儲存。時薪與投保薪資在重新產生薪資單時套用。' : evErr(r, e, '儲存失敗，請確認時薪、休息分鐘、投保薪資都是數字，遲到寬限是 0–60 分鐘（或空白）。')); refreshEvent(e, 'att');
     };
-    $('gen').onclick = async () => {
+    if ($('gen')) $('gen').onclick = async () => {
       const r = await rpc('admin_generate_payslips', { p_event: e.id });
       const sk = (r.skipped || []).map(x => x.name + '（' + x.reason + '）').join('、');
       flash(sk ? 'warn' : 'ok', '已產生 ' + r.created + ' 張、重算 ' + r.replaced + ' 張薪資單草稿。' + (sk ? '未處理：' + sk : ''));
@@ -1914,7 +1925,9 @@ function viewPayouts() {
 async function viewSettings(tab) {
   tab = tab || S.filter.settings || 'company';
   S.filter.settings = tab;
-  const TABS = [['company', '公司資料'], ['recruit', '報名方式'], ['line', 'LINE 通知'], ['holidays', '國定假日'], ['wages', '最低工資'], ['admins', '管理員']];
+  const TABS = [['company', '公司資料'], ['recruit', '報名方式'], ['line', 'LINE 通知'], ['holidays', '國定假日'], ['wages', '最低工資'], ['admins', '人員權限']]
+    .filter(([k]) => k === 'admins' ? can('admin') : can('settings'));
+  if (!TABS.some(([k]) => k === tab)) { tab = TABS.length ? TABS[0][0] : 'company'; S.filter.settings = tab; }
   let body = '';
   if (tab === 'recruit') {
     const r = await rpc('admin_recruit_settings', { p_patch: null });
@@ -2019,22 +2032,40 @@ async function viewSettings(tab) {
           <label for="hk">Webhook URL</label><div class="row" style="align-items:center"><input id="hk" type="text" readonly value="${esc(hook)}" class="grow" style="width:auto;min-width:160px"><button type="button" class="btn ghost sm" id="hkc">複製</button></div></div>
       </div></div>`;
   } else {
-    const r = await rpc('admin_list_admins');
+    const [r, rl] = await Promise.all([rpc('admin_list_admins'), rpc('admin_roles_list')]);
     const ts = v => v ? new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(v)) : '—';
+    const roles = rl.roles || [], plist = rl.perm_list || [];
+    const roleSel = (id, cur, dis) => `<select data-role-of="${esc(id)}" style="width:auto;height:34px" ${dis ? 'disabled' : ''}>${roles.map(x => `<option value="${esc(x.id)}" ${x.id === cur ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`;
+    S.roleEdit = S.roleEdit || null;
+    const ed = roles.find(x => x.id === S.roleEdit) || (S.roleEdit === 'new' ? { id: '', name: '', perms: [] } : null);
     body = `<div class="split" style="grid-template-columns:minmax(0,1fr) minmax(300px,380px)"><div>
-      <div class="card tablebox"><table><thead><tr><th>帳號</th><th>建立</th><th>最近登入</th><th></th></tr></thead>
+      <h2 style="margin-top:0">後台帳號</h2>
+      <div class="card tablebox"><table><thead><tr><th>帳號</th><th>角色</th><th>建立</th><th>最近登入</th><th></th></tr></thead>
       <tbody>${r.admins.map(a => `<tr><td><b>${esc(a.username)}</b>${a.is_self ? ' <span class="badge ok">你</span>' : ''}${a.locked ? ' <span class="badge warn">鎖定中</span>' : ''}${a.created_by ? '<div class="dim">由 ' + esc(a.created_by) + ' 新增</div>' : ''}</td>
+        <td>${roleSel(a.username, a.role_id, a.is_self)}</td>
         <td>${esc(d(a.created_at))}</td><td>${esc(ts(a.last_login))}</td>
         <td class="r">${a.is_self ? '' : `<button class="link" data-reset="${esc(a.username)}">重設密碼</button>　<button class="link" style="color:var(--danger)" data-rm="${esc(a.username)}">移除</button>`}</td></tr>`).join('')}</tbody></table></div>
       <div id="am" style="margin-top:12px"></div>
+      <h2>角色與權限</h2>
+      <div class="card tablebox"><table><thead><tr><th>角色</th><th>可以使用</th><th class="r">人數</th><th></th></tr></thead>
+      <tbody>${roles.map(x => `<tr><td><b>${esc(x.name)}</b></td><td style="white-space:normal">${x.is_full ? '全部功能（含人員權限）' : (x.perms.length ? x.perms.map(p => esc((PERM_NAME[p] || p).split('（')[0])).join('、') : '<span class="dim">沒有</span>')}</td>
+        <td class="r">${x.members}</td><td class="r">${x.is_full ? '<span class="dim">內建</span>' : `<button class="link" data-redit="${esc(x.id)}">修改</button>　<button class="link" style="color:var(--danger)" data-rdel="${esc(x.id)}">刪除</button>`}</td></tr>`).join('')}</tbody></table></div>
+      <button class="btn ghost sm" id="rnew" style="margin-top:10px">新增角色</button>
+      ${ed ? `<form id="rf" class="card pad" style="margin-top:12px;max-width:560px"><b>${ed.id ? '修改角色「' + esc(ed.name) + '」' : '新增角色'}</b>
+        <label for="rn">角色名稱</label><input id="rn" type="text" maxlength="30" value="${esc(ed.name)}" placeholder="例如：現場組長">
+        <label style="margin-top:14px">可以使用的功能</label>
+        ${plist.map(p => `<label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink);margin:8px 0 0"><input type="checkbox" data-perm="${esc(p)}" ${ed.perms.includes(p) ? 'checked' : ''} style="margin-top:4px"> <span>${esc(PERM_NAME[p] || p)}</span></label>`).join('')}
+        <p class="sub" style="margin-top:10px">人員權限（新增帳號、設定角色）只有「管理員」能用。改了角色後，該角色的人重新整理就套用。</p>
+        <div id="rm" style="margin-top:12px"></div><div class="row"><button class="btn">儲存角色</button><button type="button" class="btn ghost" id="rcancel">取消</button></div></form>` : ''}
       <form id="cpf" class="card pad" style="margin-top:16px;max-width:460px"><b>更改我的密碼</b>
         <label for="op">目前的密碼</label><input id="op" type="password" autocomplete="current-password" required>
         <label for="np">新密碼（至少 8 個字）</label><input id="np" type="password" autocomplete="new-password" required>
         <div id="cm" style="margin-top:12px"></div><button class="btn block">更改密碼</button></form></div>
-      <form id="af" class="card pad"><b>新增管理員</b><p class="sub" style="margin:4px 0 0">建立後把帳號和密碼私下交給對方，請對方登入後到這裡更改密碼。管理員可以看到所有人員的個資與證件。</p>
+      <form id="af" class="card pad"><b>新增帳號</b><p class="sub" style="margin:4px 0 0">建立後把帳號和密碼私下交給對方，請對方登入後更改密碼。角色決定他能看到哪些功能；「管理員」可以看到所有人員的個資與證件。</p>
         <label for="nu">帳號</label><input id="nu" type="text" autocapitalize="none" autocomplete="off" placeholder="amy 或 amy@example.com" required>
+        <label for="nrole">角色</label><select id="nrole">${roles.map(x => `<option value="${esc(x.id)}" ${x.name === '督導' ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
         <label for="npw">初始密碼（至少 8 個字）</label><div class="row" style="align-items:center"><input id="npw" type="text" autocomplete="off" class="grow" style="width:auto;min-width:160px" required><button type="button" class="btn ghost sm" id="gen">產生</button></div>
-        <div id="nm" style="margin-top:12px"></div><button class="btn block">新增管理員</button></form></div>`;
+        <div id="nm" style="margin-top:12px"></div><button class="btn block">新增帳號</button></form></div>`;
   }
   shell('settings', `<div class="head"><div><h1>設定</h1></div></div>
     <div class="tabs" role="tablist">${TABS.map(([k, t]) => `<button class="tab" role="tab" aria-selected="${k === tab}" data-t="${k}">${t}</button>`).join('')}</div>${body}`);
@@ -2078,7 +2109,8 @@ async function viewSettings(tab) {
       if (pwShort($('npw').value)) { $('nm').innerHTML = '<div class="msg err">密碼至少要 8 個字。</div>'; return; }
       const r = await rpc('admin_create_admin', { p_username: $('nu').value, p_password: $('npw').value });
       if (!r.ok) { $('nm').innerHTML = '<div class="msg err">' + ({ bad_username: '帳號請用 3 個字以上的英數字或 Email。', too_short: '密碼至少要 8 個字。', taken: '這個帳號已經存在。' }[r.error] || '新增失敗。') + '</div>'; return; }
-      flash('ok', '已新增管理員 ' + $('nu').value.trim().toLowerCase() + '。請把帳號與初始密碼私下交給對方。'); viewSettings('admins');
+      await rpc('admin_set_admin_role', { p_username: $('nu').value, p_role: $('nrole').value });
+      flash('ok', '已新增帳號 ' + $('nu').value.trim().toLowerCase() + '。請把帳號與初始密碼私下交給對方。'); viewSettings('admins');
     };
     $('cpf').onsubmit = async ev => {
       ev.preventDefault();
@@ -2087,6 +2119,26 @@ async function viewSettings(tab) {
       $('cm').innerHTML = r.ok ? '<div class="msg ok">密碼已更改，其他裝置上的登入已登出。</div>' : '<div class="msg err">' + (r.error === 'too_short' ? '新密碼至少要 8 個字。' : '目前的密碼不正確。') + '</div>';
       if (r.ok) { $('op').value = ''; $('np').value = ''; }
     };
+    on('[data-role-of]', 'change', async (ev, sel) => {
+      const r = await rpc('admin_set_admin_role', { p_username: sel.dataset.roleOf, p_role: sel.value });
+      $('am').innerHTML = r.ok ? '<div class="msg ok">已更改 ' + esc(sel.dataset.roleOf) + ' 的角色，對方重新登入後套用。</div>' : '<div class="msg err">' + ({ last: '至少要留一位「管理員」。', self: '不能更改自己的角色。' }[r.error] || '更改失敗。') + '</div>';
+      if (!r.ok) viewSettings('admins');
+    });
+    if ($('rnew')) $('rnew').onclick = () => { S.roleEdit = 'new'; viewSettings('admins'); };
+    on('[data-redit]', 'click', (ev, b) => { S.roleEdit = b.dataset.redit; viewSettings('admins'); });
+    if ($('rcancel')) $('rcancel').onclick = () => { S.roleEdit = null; viewSettings('admins'); };
+    on('[data-rdel]', 'click', async (ev, b) => {
+      if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = '確定刪除？'; return; }
+      const r = await rpc('admin_save_role', { p_patch: { id: b.dataset.rdel, delete: true } });
+      if (!r.ok) { $('am').innerHTML = '<div class="msg err">' + ({ in_use: '還有人用這個角色，先把他們改成其他角色再刪除。', builtin: '內建角色不能刪除。' }[r.error] || '刪除失敗。') + '</div>'; return; }
+      flash('ok', '角色已刪除。'); viewSettings('admins');
+    });
+    if ($('rf')) $('rf').onsubmit = async ev => { ev.preventDefault();
+      const perms = [...document.querySelectorAll('[data-perm]')].filter(c => c.checked).map(c => c.dataset.perm);
+      const patch = { name: $('rn').value, perms }; if (S.roleEdit && S.roleEdit !== 'new') patch.id = S.roleEdit;
+      const r = await rpc('admin_save_role', { p_patch: patch });
+      if (!r.ok) { $('rm').innerHTML = '<div class="msg err">' + ({ bad_name: '請填角色名稱（30 字內）。', taken: '已經有同名的角色。', builtin: '內建的管理員角色不能修改。' }[r.error] || '儲存失敗。') + '</div>'; return; }
+      S.roleEdit = null; flash('ok', '角色已儲存。'); viewSettings('admins'); };
     on('[data-rm]', 'click', async (ev, b) => {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = '確定移除？'; return; }
       const r = await rpc('admin_remove_admin', { p_username: b.dataset.rm });

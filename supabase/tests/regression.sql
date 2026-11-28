@@ -22,7 +22,7 @@ begin
   insert into public.people(national_id, name, birth_date, password_hash, profile_source) values ('Z999990001', '測試甲', '2000-01-01', extensions.crypt('0890101', extensions.gen_salt('bf', 4)), 'test') returning id into p1;
   insert into public.people(national_id, name, birth_date, password_hash, profile_source) values ('Z999990002', '測試乙', '2000-01-01', extensions.crypt('0890101', extensions.gen_salt('bf', 4)), 'test') returning id into p2;
   insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(tok1, 'sha256'), 'hex'), p1, now() + interval '1 hour'), (encode(extensions.digest(tok2, 'sha256'), 'hex'), p2, now() + interval '1 hour');
-  insert into public.admins(username, password_hash) values ('regression-admin', 'x');
+  insert into public.admins(username, password_hash, role_id) values ('regression-admin', 'x', (select id from public.admin_roles where is_full order by created_at limit 1));
   insert into public.admin_sessions(token_hash, admin_id, expires_at) select encode(extensions.digest(atok, 'sha256'), 'hex'), id, now() + interval '1 hour' from public.admins where username = 'regression-admin';
 
   -- 1. 登入失敗不洩漏帳號是否存在
@@ -828,5 +828,24 @@ begin
     perform public.admin_recruit_settings(atok, '{"late_grace":"0"}');
   end;
 
-  if fails = '' then raise exception 'PASS 全部 43 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 44. 人員權限：新增帳號預設督導；督導看得到活動但看不到薪資單與金額、不能進人員／發薪／帳號管理；可看班表；管理員不能把自己降級；內部函式匿名不能呼叫
+  declare sid44 uuid; stok44 text := encode(extensions.gen_random_bytes(16), 'hex'); ev44 uuid;
+  begin
+    insert into public.admins(username, password_hash) values ('regress-sup44', 'x') returning id into sid44;
+    insert into public.admin_sessions(token_hash, admin_id, expires_at) values (encode(extensions.digest(stok44, 'sha256'), 'hex'), sid44, now() + interval '1 hour');
+    select event_id into ev44 from public.payslips limit 1;
+    if (select r.name from public.admins a join public.admin_roles r on r.id = a.role_id where a.id = sid44) <> '督導' then fails := fails || ' [44a default role]'; end if;
+    r := public.admin_event(stok44, ev44);
+    if (r->>'ok')::boolean is not true or jsonb_array_length(r->'payslips') <> 0 then fails := fails || ' [44b sup event]'; end if;
+    if public.admin_people(stok44)->>'error' is distinct from 'session' or public.admin_payout(stok44, ev44)->>'error' is distinct from 'session'
+       or public.admin_list_admins(stok44)->>'error' is distinct from 'session' or public.admin_generate_payslips(stok44, ev44)->>'error' is distinct from 'session' then fails := fails || ' [44c sup denied]'; end if;
+    if (public.admin_calendar(stok44, current_date, current_date + 7)->>'ok')::boolean is not true then fails := fails || ' [44d sup calendar]'; end if;
+    if exists (select 1 from jsonb_array_elements(public.admin_overview(stok44)->'events') x where x ? 'net_sum') then fails := fails || ' [44e net leak]'; end if;
+    if public.admin_set_admin_role(atok, 'regression-admin', (select id from public.admin_roles where name = '督導'))->>'error' is distinct from 'self' then fails := fails || ' [44f self demote]'; end if;
+    if public.admin_save_role(atok, jsonb_build_object('id', (select id from public.admin_roles where is_full limit 1), 'perms', '[]'::jsonb))->>'error' is distinct from 'builtin' then fails := fails || ' [44g builtin]'; end if;
+    if public.admin_save_role(atok, '{"name":"x44","perms":["nope"]}')->>'error' is distinct from 'bad_perms' then fails := fails || ' [44h bad perm]'; end if;
+    if has_function_privilege('anon', 'public.admin_event_core(text,uuid)', 'execute') or has_function_privilege('anon', 'public.admin_actor(text,text)', 'execute') then fails := fails || ' [44i core anon]'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 44 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

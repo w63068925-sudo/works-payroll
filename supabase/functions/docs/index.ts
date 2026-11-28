@@ -285,7 +285,7 @@ Deno.serve(async (req: Request) => {
     }
     // 管理員核對完資料：只記錄核對時間與核對人，證件維持原本的畫質（2026-11-26 起不再縮成存證圖）
     if (b.action === "verify_docs") {
-      const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
+      const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? ""), p_perm: "people" });
       if (!actor) return json({ ok: false, error: "session" });
       const personId = String(b.person_id ?? "");
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(personId)) return json({ ok: false, error: "bad_person" });
@@ -296,7 +296,7 @@ Deno.serve(async (req: Request) => {
     }
     // 現金發薪簽收單照片：管理員上傳到私有空間 receipts/活動ID/，查看時核發 2 分鐘連結並留紀錄
     if (b.action === "receipt_upload_url" || b.action === "receipt_confirm" || b.action === "receipt_view") {
-      const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
+      const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? ""), p_perm: "payouts" });
       if (!actor) return json({ ok: false, error: "session" });
       const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       if (b.action === "receipt_view") {
@@ -362,7 +362,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, files_removed: paths.length - left.length, cleanup_pending: pending });
     }
     if (b.action === "view_url") {
-      const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? "") });
+      const { data: actor } = await sb.rpc("admin_actor", { p_token: String(b.admin_token ?? ""), p_perm: "people" });
       if (!actor) return json({ ok: false, error: "session" });
       if (!KINDS.includes(kind)) return json({ ok: false, error: "bad_kind" });
       const personId = String(b.person_id ?? "");

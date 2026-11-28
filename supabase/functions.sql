@@ -6,8 +6,8 @@ CREATE OR REPLACE FUNCTION public.admin_actor(p_token text)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-  select a.username from public.admin_sessions s join public.admins a on a.id = s.admin_id
-  where s.token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') and s.expires_at > now();
+  select a.username from public.admin_sessions s join public.admins a on a.id = s.admin_id join public.admin_roles r on r.id = a.role_id
+  where s.token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') and s.expires_at > now() and r.is_full;
 $function$
 ;
 
@@ -17,7 +17,7 @@ CREATE OR REPLACE FUNCTION public.admin_add_attendance(p_token text, p_event uui
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_pid uuid; v_id uuid;
+declare v_actor text := public.admin_actor(p_token, 'events'); v_pid uuid; v_id uuid;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select id into v_pid from public.people where national_id = upper(btrim(coalesce(p_national_id,'')));
@@ -38,7 +38,7 @@ CREATE OR REPLACE FUNCTION public.admin_approve_attendance(p_token text, p_id uu
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'events');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_kind = 'early' then
@@ -59,7 +59,7 @@ CREATE OR REPLACE FUNCTION public.admin_archive_event(p_token text, p_event uuid
  SET search_path TO ''
 AS $function$
 -- 封存只影響後台顯示：活動、薪資單、工讀生端都不變，可隨時取消封存
-declare v_actor text := public.admin_actor(p_token); e public.events;
+declare v_actor text := public.admin_actor(p_token, 'events'); e public.events;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into e from public.events where id = p_event for update;
@@ -86,7 +86,7 @@ CREATE OR REPLACE FUNCTION public.admin_attendance(p_token text, p_event uuid)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'events|today');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true,
@@ -116,7 +116,7 @@ CREATE OR REPLACE FUNCTION public.admin_calendar(p_token text, p_from date, p_to
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'calendar');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_from is null or p_to is null or p_to < p_from or p_to - p_from > 62 then return jsonb_build_object('ok', false, 'error', 'bad_range'); end if;
@@ -138,7 +138,7 @@ CREATE OR REPLACE FUNCTION public.admin_change_password(p_token text, p_old text
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v public.admins;
+declare v_actor text := public.admin_actor(p_token, 'any'); v public.admins;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into v from public.admins where username = v_actor for update;
@@ -157,7 +157,7 @@ CREATE OR REPLACE FUNCTION public.admin_checkin_code(p_token text, p_event uuid)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_code text;
+declare v_actor text := public.admin_actor(p_token, 'today|events'); v_code text;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   v_code := public.checkin_make_code(p_event, floor(extract(epoch from now()) / 60)::bigint);
@@ -172,7 +172,7 @@ CREATE OR REPLACE FUNCTION public.admin_contract(p_token text, p_app uuid)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); a public.applications;
+declare v_actor text := public.admin_actor(p_token, 'events'); a public.applications;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into a from public.applications where id = p_app;
@@ -206,7 +206,7 @@ CREATE OR REPLACE FUNCTION public.admin_create_event(p_token text, p_patch jsonb
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_id uuid; v_s date; v_e date; v_pay date; v_days int;
+declare v_actor text := public.admin_actor(p_token, 'events'); v_id uuid; v_s date; v_e date; v_pay date; v_days int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if length(btrim(coalesce(p_patch->>'name',''))) < 2 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
@@ -234,7 +234,7 @@ CREATE OR REPLACE FUNCTION public.admin_decide(p_token text, p_items jsonb, p_st
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); it jsonb; v_app uuid; v_shift uuid; a public.applications; s public.shifts; v_done int := 0;
+declare v_actor text := public.admin_actor(p_token, 'events'); it jsonb; v_app uuid; v_shift uuid; a public.applications; s public.shifts; v_done int := 0;
   full_list jsonb := '[]'::jsonb; clash_list jsonb := '[]'::jsonb; v_old text; plan_list jsonb := '[]'::jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
@@ -281,7 +281,7 @@ CREATE OR REPLACE FUNCTION public.admin_delete_shift(p_token text, p_shift uuid)
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'events');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if exists (select 1 from public.application_shifts where shift_id = p_shift and status = 'accepted') then return jsonb_build_object('ok', false, 'error', 'has_accepted'); end if;
@@ -291,13 +291,13 @@ begin
 end $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.admin_event(p_token text, p_event uuid)
+CREATE OR REPLACE FUNCTION public.admin_event_core(p_token text, p_event uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'events');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true,
@@ -317,13 +317,13 @@ begin
 end $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.admin_event_staff(p_token text, p_event uuid)
+CREATE OR REPLACE FUNCTION public.admin_event_staff_core(p_token text, p_event uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_today date := (now() at time zone 'Asia/Taipei')::date;
+declare v_actor text := public.admin_actor(p_token, 'events|today'); v_today date := (now() at time zone 'Asia/Taipei')::date;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true,
@@ -357,7 +357,7 @@ CREATE OR REPLACE FUNCTION public.admin_generate_payslips(p_token text, p_event 
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); e public.events; pr record; g jsonb;
+declare v_actor text := public.admin_actor(p_token, 'event_pay'); e public.events; pr record; g jsonb;
   v_created int := 0; v_replaced int := 0; skipped jsonb := '[]'::jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
@@ -383,7 +383,7 @@ CREATE OR REPLACE FUNCTION public.admin_recompute_payslip(p_token text, p_event 
  SET search_path TO ''
 AS $function$
 -- 核對時改完某人的出勤後，只重算這個人的薪資單草稿
-declare v_actor text := public.admin_actor(p_token); g jsonb;
+declare v_actor text := public.admin_actor(p_token, 'event_pay'); g jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   perform 1 from public.events where id = p_event for update;
@@ -401,7 +401,7 @@ CREATE OR REPLACE FUNCTION public.admin_holidays(p_token text, p_set jsonb DEFAU
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'settings');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_set is not null then
@@ -421,7 +421,7 @@ CREATE OR REPLACE FUNCTION public.admin_line_overview(p_token text)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'settings');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   -- 只算 LINE（LINE 每月額度）；Email 另外統計
@@ -443,7 +443,7 @@ CREATE OR REPLACE FUNCTION public.admin_line_settings(p_token text, p_patch json
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_id text;
+declare v_actor text := public.admin_actor(p_token, 'settings'); v_id text;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_patch ? 'basic_id' then
@@ -464,7 +464,7 @@ CREATE OR REPLACE FUNCTION public.admin_line_test(p_token text, p_national_id te
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); p public.people;
+declare v_actor text := public.admin_actor(p_token, 'settings'); p public.people;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into p from public.people where national_id = upper(btrim(coalesce(p_national_id, '')));
@@ -485,7 +485,7 @@ declare v_actor text := public.admin_actor(p_token);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true, 'me', v_actor, 'admins', coalesce((select jsonb_agg(jsonb_build_object('username', a.username, 'created_at', a.created_at,
-      'is_self', a.username = v_actor, 'locked', a.locked_until is not null and a.locked_until > now(),
+      'is_self', a.username = v_actor, 'role_id', a.role_id, 'role', (select name from public.admin_roles where id = a.role_id), 'locked', a.locked_until is not null and a.locked_until > now(),
       'last_login', (select max(l.at) from public.audit_log l where l.actor = a.username and l.action = 'admin_login'),
       'created_by', (select l.actor from public.audit_log l where l.action = 'admin_created' and l.detail->>'username' = a.username order by l.at desc limit 1)
     ) order by a.created_at) from public.admins a), '[]'::jsonb));
@@ -498,7 +498,7 @@ CREATE OR REPLACE FUNCTION public.admin_log_export(p_token text, p_kind text, p_
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'any');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_kind is null or p_kind not in ('insurance_roster', 'accepted_list', 'event_step', 'missing_docs') then return jsonb_build_object('ok', false, 'error', 'bad_kind'); end if;
@@ -560,7 +560,7 @@ CREATE OR REPLACE FUNCTION public.admin_min_wages(p_token text, p_set jsonb DEFA
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'settings');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_set is not null then
@@ -577,13 +577,13 @@ begin
 end $function$
 ;
 
-CREATE OR REPLACE FUNCTION public.admin_overview(p_token text)
+CREATE OR REPLACE FUNCTION public.admin_overview_core(p_token text)
  RETURNS jsonb
  LANGUAGE plpgsql
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'any');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true, 'username', v_actor,
@@ -608,7 +608,7 @@ CREATE OR REPLACE FUNCTION public.admin_payout(p_token text, p_event uuid)
  SET search_path TO ''
 AS $function$
 -- 匯款清單只含轉帳；現金另列（簽收單用），並附已上傳的簽收單照片清單
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'payouts');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   insert into public.audit_log(actor, action, table_name, row_id) values (v_actor, 'payout_exported', 'events', p_event);
@@ -638,7 +638,7 @@ CREATE OR REPLACE FUNCTION public.admin_payslip(p_token text, p_id uuid)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); r jsonb;
+declare v_actor text := public.admin_actor(p_token, 'event_pay'); r jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select jsonb_build_object('id', s.id, 'status', s.status, 'relation', s.relation, 'role', s.role, 'basis', s.basis, 'generated', s.generated,
@@ -668,7 +668,7 @@ CREATE OR REPLACE FUNCTION public.admin_people(p_token text, p_q text DEFAULT NU
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_q text := btrim(coalesce(p_q,''));
+declare v_actor text := public.admin_actor(p_token, 'people'); v_q text := btrim(coalesce(p_q,''));
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true, 'total', (select count(*) from public.people),
@@ -689,7 +689,7 @@ CREATE OR REPLACE FUNCTION public.admin_person(p_token text, p_id uuid)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); r jsonb;
+declare v_actor text := public.admin_actor(p_token, 'people'); r jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select jsonb_build_object('id', p.id, 'name', p.name, 'nickname', p.nickname, 'admin_note', p.admin_note, 'national_id', p.national_id, 'birth_date', p.birth_date, 'birth_raw', p.birth_raw,
@@ -725,7 +725,7 @@ CREATE OR REPLACE FUNCTION public.admin_recruit(p_token text, p_event uuid)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'events');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return (select jsonb_build_object('ok', true, 'mode', public.recruit_mode(), 'require_line', public.recruit_need_line(),
@@ -792,7 +792,7 @@ CREATE OR REPLACE FUNCTION public.admin_reset_password(p_token text, p_person uu
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_bd date;
+declare v_actor text := public.admin_actor(p_token, 'people'); v_bd date;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select birth_date into v_bd from public.people where id = p_person;
@@ -814,7 +814,7 @@ CREATE OR REPLACE FUNCTION public.admin_resolve_issue(p_token text, p_issue bigi
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'event_pay');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   update public.data_issues set resolved = coalesce(p_resolved, true) where id = p_issue;
@@ -831,7 +831,7 @@ CREATE OR REPLACE FUNCTION public.admin_roster(p_token text, p_filter jsonb)
  SET search_path TO ''
 AS $function$
 declare
-  v_actor text := public.admin_actor(p_token);
+  v_actor text := public.admin_actor(p_token, 'roster');
   f jsonb := coalesce(p_filter, '{}'::jsonb);
   v_q text := nullif(btrim(coalesce(f->>'q', '')), '');
   v_ev uuid; v_from date; v_to date; v_st text[]; v_rows jsonb; v_n int;
@@ -886,7 +886,7 @@ CREATE OR REPLACE FUNCTION public.admin_save_event_info(p_token text, p_event uu
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); q jsonb; v_qs jsonb := '[]'::jsonb; n int := 0;
+declare v_actor text := public.admin_actor(p_token, 'events'); q jsonb; v_qs jsonb := '[]'::jsonb; n int := 0;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_patch ? 'form' then
@@ -919,7 +919,7 @@ CREATE OR REPLACE FUNCTION public.admin_save_shifts(p_token text, p_event uuid, 
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_from date; v_to date; v_start time; v_end time; v_n int := 0; dd date; v_head int; v_rate numeric; r record;
+declare v_actor text := public.admin_actor(p_token, 'events'); v_from date; v_to date; v_start time; v_end time; v_n int := 0; dd date; v_head int; v_rate numeric; r record;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   begin
@@ -976,7 +976,7 @@ CREATE OR REPLACE FUNCTION public.admin_set_attendance(p_token text, p_id uuid, 
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_in timestamptz; v_out timestamptz; v_break int;
+declare v_actor text := public.admin_actor(p_token, 'events'); v_in timestamptz; v_out timestamptz; v_break int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   begin
@@ -1006,7 +1006,7 @@ CREATE OR REPLACE FUNCTION public.admin_set_staff(p_token text, p_event uuid, p_
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_rate numeric; v_ins numeric;
+declare v_actor text := public.admin_actor(p_token, 'event_pay'); v_rate numeric; v_ins numeric;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   begin
@@ -1030,7 +1030,7 @@ CREATE OR REPLACE FUNCTION public.admin_set_status(p_token text, p_ids uuid[], p
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_done int; v_skip int := 0; v_blocked int := 0;
+declare v_actor text := public.admin_actor(p_token, 'event_pay'); v_done int; v_skip int := 0; v_blocked int := 0;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_status not in ('draft','published','void') then return jsonb_build_object('ok', false, 'error', 'bad_status'); end if;
@@ -1064,7 +1064,8 @@ begin
   if exists (select 1 from public.admins where username = v_user) then return jsonb_build_object('ok', false, 'error', 'taken'); end if;
   update public.admin_setup_codes set used_at = now() where code_hash = v_hash and used_at is null and expires_at > now() returning code_hash into v_used;
   if v_used is null then return jsonb_build_object('ok', false, 'error', 'bad_code'); end if;
-  insert into public.admins(username, password_hash) values (v_user, extensions.crypt(p_password, extensions.gen_salt('bf', 10)));
+  insert into public.admins(username, password_hash, role_id) values (v_user, extensions.crypt(p_password, extensions.gen_salt('bf', 10)),
+    (select id from public.admin_roles where is_full order by created_at limit 1));
   insert into public.audit_log(actor, action, table_name, detail) values (v_user, 'admin_created', 'admins', jsonb_build_object('username', v_user, 'via', 'setup_code'));
   return jsonb_build_object('ok', true);
 end $function$
@@ -1076,7 +1077,7 @@ CREATE OR REPLACE FUNCTION public.admin_signup_code(p_token text, p_event uuid)
  STABLE SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'events');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return coalesce((select jsonb_build_object('ok', true, 'code', signup_code, 'open', coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1) from public.events where id = p_event),
@@ -1090,7 +1091,7 @@ CREATE OR REPLACE FUNCTION public.admin_update_employer(p_token text, p_patch js
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_id uuid;
+declare v_actor text := public.admin_actor(p_token, 'settings'); v_id uuid;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_patch ? 'tax_id' and nullif(btrim(p_patch->>'tax_id'),'') is not null and btrim(p_patch->>'tax_id') !~ '^\d{8}$' then
@@ -1116,7 +1117,7 @@ CREATE OR REPLACE FUNCTION public.admin_update_event(p_token text, p_id uuid, p_
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); v_n int := 0; e public.events; v_pay date; v_days int; v_apply boolean := coalesce((p_patch->>'apply_to_payslips')::boolean, false);
+declare v_actor text := public.admin_actor(p_token, 'events'); v_n int := 0; e public.events; v_pay date; v_days int; v_apply boolean := coalesce((p_patch->>'apply_to_payslips')::boolean, false);
   v_name text; v_start date; v_end date; v_out int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
@@ -1169,7 +1170,7 @@ CREATE OR REPLACE FUNCTION public.admin_update_payslip(p_token text, p_id uuid, 
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'event_pay');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_patch ? 'relation' and p_patch->>'relation' not in ('employment','contract') then return jsonb_build_object('ok', false, 'error', 'bad_relation'); end if;
@@ -2839,7 +2840,7 @@ CREATE OR REPLACE FUNCTION public.admin_event_people_export(p_token text, p_even
  SET search_path TO ''
 AS $function$
 -- 活動人員資料下載：錄取、出勤或有薪資單的人；含個資與證件資訊，先寫紀錄再回傳
-declare v_actor text := public.admin_actor(p_token); v_rows jsonb;
+declare v_actor text := public.admin_actor(p_token, 'people'); v_rows jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if not exists (select 1 from public.events where id = p_event) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
@@ -2874,7 +2875,7 @@ CREATE OR REPLACE FUNCTION public.admin_ai_import(p_token text, p_payload jsonb,
 AS $function$
 -- AI 匯入：claude.ai 匯入台整理好的活動、班別與人員名單。p_commit = false 只檢查並回傳預覽，true 才寫入（有錯的列略過）
 -- 新活動或指定既有活動；人員只補空白欄位不覆蓋；出勤為表單填寫的日期（非打卡）；有金額才建薪資單草稿（不會被「依出勤產生」覆蓋）
-declare v_actor text := public.admin_actor(p_token); e public.events; ev jsonb := coalesce(p_payload->'event', '{}'::jsonb);
+declare v_actor text := public.admin_actor(p_token, 'import'); e public.events; ev jsonb := coalesce(p_payload->'event', '{}'::jsonb);
   v_s date; v_e date; v_pay date; v_file text := nullif(btrim(coalesce(p_payload#>>'{source,file_id}','')),'');
   v_dup uuid; x jsonb; d jsonb; sh jsonb; v_rows jsonb := '[]'::jsonb; v_shifts jsonb := '[]'::jsonb;
   v_nid text; v_name text; v_bd date; v_dates date[]; v_days jsonb; v_errs text[]; v_warns text[]; v_fill text[]; pr public.people;
@@ -3107,7 +3108,7 @@ CREATE OR REPLACE FUNCTION public.admin_remind_incomplete(p_token text, p_event 
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token); e public.events; v_q int; v_total int; v_noline int;
+declare v_actor text := public.admin_actor(p_token, 'event_pay'); e public.events; v_q int; v_total int; v_noline int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into e from public.events where id = p_event;
@@ -3163,7 +3164,7 @@ CREATE OR REPLACE FUNCTION public.admin_checkin_share(p_token text, p_event uuid
  SET search_path TO ''
 AS $function$
 -- p_action：status 看目前連結、create 產生新連結（舊的同時停用）、revoke 停用
-declare v_actor text := public.admin_actor(p_token); e public.events; v_tok text; v_exp timestamptz; s public.checkin_shares;
+declare v_actor text := public.admin_actor(p_token, 'today|events'); e public.events; v_tok text; v_exp timestamptz; s public.checkin_shares;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into e from public.events where id = p_event for update;
@@ -3327,7 +3328,7 @@ CREATE OR REPLACE FUNCTION public.admin_mail_settings(p_token text, p_patch json
  SET search_path TO ''
 AS $function$
 -- 新人建檔驗證信的寄信設定：Apps Script 網址與共用密鑰。密鑰只寫不讀（畫面只顯示有沒有設定）；全部欄位驗證通過才寫入
-declare v_actor text := public.admin_actor(p_token); v_url text; v_key text;
+declare v_actor text := public.admin_actor(p_token, 'settings'); v_url text; v_key text;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_patch is not null then
@@ -3376,7 +3377,7 @@ CREATE OR REPLACE FUNCTION public.admin_set_pay_method(p_token text, p_ids uuid[
  SET search_path TO ''
 AS $function$
 -- 改發放方式（轉帳／現金）；現金已發放的不能改回轉帳。改成現金時「沒有匯款帳號」標為已處理；改回轉帳且仍沒帳號時重新打開
-declare v_actor text := public.admin_actor(p_token); v_n int; v_paid int; v_changed uuid[];
+declare v_actor text := public.admin_actor(p_token, 'payouts'); v_n int; v_paid int; v_changed uuid[];
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_method is null or p_method not in ('transfer', 'cash') then return jsonb_build_object('ok', false, 'error', 'bad_method'); end if;
@@ -3407,7 +3408,7 @@ CREATE OR REPLACE FUNCTION public.admin_mark_cash_paid(p_token text, p_ids uuid[
  SET search_path TO ''
 AS $function$
 -- 現金已發放／取消：只對已發布、發放方式為現金的薪資單；標記已發放前，該活動要先上傳過簽收單照片
-declare v_actor text := public.admin_actor(p_token); v_n int;
+declare v_actor text := public.admin_actor(p_token, 'payouts'); v_n int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_paid is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
@@ -3437,7 +3438,7 @@ CREATE OR REPLACE FUNCTION public.admin_payout_receipts(p_token text, p_event uu
  SET search_path TO ''
 AS $function$
 -- 發薪步驟顯示已上傳的現金簽收單清單（不含檔案路徑）
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'payouts');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true, 'receipts', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'uploaded_by', r.uploaded_by, 'uploaded_at', r.uploaded_at) order by r.uploaded_at)
@@ -3459,7 +3460,7 @@ CREATE OR REPLACE FUNCTION public.admin_delete_person(p_token text, p_id uuid, p
  SET search_path TO ''
 AS $function$
 -- 永久刪除：要輸入完整身分證字號確認；有薪資單或出勤就拒絕。回傳要刪的儲存檔路徑給 docs 函式清掉
-declare v_actor text := public.admin_actor(p_token); p public.people; v_paths text[];
+declare v_actor text := public.admin_actor(p_token, 'people'); p public.people; v_paths text[];
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   select * into p from public.people where id = p_id for update;
@@ -3485,7 +3486,7 @@ CREATE OR REPLACE FUNCTION public.admin_set_person_disabled(p_token text, p_id u
  SET search_path TO ''
 AS $function$
 -- 停用：不能登入（踢掉現有登入）、預設不出現在人員名單；紀錄全部保留。恢復則清掉停用
-declare v_actor text := public.admin_actor(p_token); v_n int;
+declare v_actor text := public.admin_actor(p_token, 'people'); v_n int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_disabled is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
@@ -3613,7 +3614,7 @@ CREATE OR REPLACE FUNCTION public.admin_save_plan(p_token text, p_event uuid, p_
  SET search_path TO ''
 AS $function$
 -- 建立、改名、改名額或停用方案／專屬連結。同一組班次已有啟用中的方案就沿用，不重複產生連結
-declare v_actor text := public.admin_actor(p_token); pl public.recruit_plans; v_ids uuid[]; v_name text; v_head int; v_new public.recruit_plans;
+declare v_actor text := public.admin_actor(p_token, 'events'); pl public.recruit_plans; v_ids uuid[]; v_name text; v_head int; v_new public.recruit_plans;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if not exists (select 1 from public.events where id = p_event) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
@@ -3670,7 +3671,7 @@ CREATE OR REPLACE FUNCTION public.admin_decide_plan(p_token text, p_apps uuid[],
  SET search_path TO ''
 AS $function$
 -- 方案報名的人整組處理：錄取時方案名額、每一班名額、時段衝突都要過，否則這個人整組都不錄取
-declare v_actor text := public.admin_actor(p_token); a public.applications; pl public.recruit_plans; v_items jsonb; v_n int; r jsonb; v_done int := 0;
+declare v_actor text := public.admin_actor(p_token, 'events'); a public.applications; pl public.recruit_plans; v_items jsonb; v_n int; r jsonb; v_done int := 0;
   full_list jsonb := '[]'::jsonb; clash_list jsonb := '[]'::jsonb; v_name text;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
@@ -3719,7 +3720,7 @@ CREATE OR REPLACE FUNCTION public.admin_assign(p_token text, p_shift uuid, p_app
  SET search_path TO ''
 AS $function$
 -- 名單制排班：把報名這場活動的人排入（直接錄取）或移出某個班次；名額、時段衝突沿用 admin_decide 的檢查
-declare v_actor text := public.admin_actor(p_token); s public.shifts; v_new uuid[]; v_items jsonb; r jsonb;
+declare v_actor text := public.admin_actor(p_token, 'events'); s public.shifts; v_new uuid[]; v_items jsonb; r jsonb;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_add is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
@@ -3754,7 +3755,7 @@ CREATE OR REPLACE FUNCTION public.admin_recruit_settings(p_token text, p_patch j
  SET search_path TO ''
 AS $function$
 -- 報名方式設定（全站）：p_patch 為 null 只讀取
-declare v_actor text := public.admin_actor(p_token); v_mode text; v_line text;
+declare v_actor text := public.admin_actor(p_token, 'settings'); v_mode text; v_line text;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_patch is not null then
@@ -3944,7 +3945,7 @@ CREATE OR REPLACE FUNCTION public.admin_set_person_test(p_token text, p_id uuid,
  SET search_path TO ''
 AS $function$
 -- 測試帳號：不受「同一時段只能錄取一班」限制，方便跨活動測試（2026-11-28 使用者要求）
-declare v_actor text := public.admin_actor(p_token);
+declare v_actor text := public.admin_actor(p_token, 'people');
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_test is null then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
@@ -3999,7 +4000,7 @@ CREATE OR REPLACE FUNCTION public.admin_add_attendance_times(p_token text, p_eve
  SET search_path TO ''
 AS $function$
 -- 補登出勤一次完成（建立＋上下班時間＋休息），全部以台北時間計算：下班不晚於上班視為隔天；滿 4 小時帶活動休息分鐘
-declare v_actor text := public.admin_actor(p_token); r jsonb; v_id uuid; v_in timestamptz; v_out timestamptz; v_mins int; v_break int; e public.events;
+declare v_actor text := public.admin_actor(p_token, 'events'); r jsonb; v_id uuid; v_in timestamptz; v_out timestamptz; v_mins int; v_break int; e public.events;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   if p_date is null or coalesce(p_in, '') !~ '^([01]\d|2[0-3]):[0-5]\d$' or (coalesce(p_out, '') <> '' and p_out !~ '^([01]\d|2[0-3]):[0-5]\d$') then
@@ -4060,7 +4061,7 @@ CREATE OR REPLACE FUNCTION public.admin_checkin_roster(p_token text, p_event uui
  SET search_path TO ''
 AS $function$
 begin
-  if public.admin_actor(p_token) is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if public.admin_actor(p_token, 'today|events') is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true, 'rows', public.checkin_roster(p_event));
 end $function$
 ;
@@ -4089,3 +4090,197 @@ revoke all on function public.admin_checkin_roster(text, uuid) from public;
 grant execute on function public.admin_checkin_roster(text, uuid) to anon, authenticated, service_role;
 revoke all on function public.payroll_share_roster(text) from public;
 grant execute on function public.payroll_share_roster(text) to anon, authenticated, service_role;
+
+-- 人員權限（2026-11-28）：admin_roles 表、admins.role_id（not null）、admins_default_role 觸發器；*_core 為原函式改名，前端呼叫同名包裝函式
+CREATE OR REPLACE FUNCTION public.trg_admin_default_role()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  if new.role_id is null then
+    new.role_id := case when not exists (select 1 from public.admins) then (select id from public.admin_roles where is_full order by created_at limit 1)
+      else coalesce((select id from public.admin_roles where name = '督導'), (select id from public.admin_roles where not is_full order by created_at limit 1),
+                    (select id from public.admin_roles where is_full order by created_at limit 1)) end;
+  end if;
+  return new;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_perm_list()
+ RETURNS text[]
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+  select array['today','events','event_pay','calendar','people','import','roster','payouts','settings']
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_actor(p_token text, p_perm text)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select a.username from public.admin_sessions s join public.admins a on a.id = s.admin_id join public.admin_roles r on r.id = a.role_id
+  where s.token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') and s.expires_at > now()
+    and (r.is_full or p_perm = 'any' or exists (select 1 from unnest(string_to_array(p_perm, '|')) x where x = any(r.perms)));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_perms(p_token text)
+ RETURNS text[]
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+  select case when r.is_full then public.admin_perm_list() || array['admin'] else r.perms end
+  from public.admin_sessions s join public.admins a on a.id = s.admin_id join public.admin_roles r on r.id = a.role_id
+  where s.token_hash = encode(extensions.digest(coalesce(p_token,''), 'sha256'), 'hex') and s.expires_at > now();
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_overview(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare r jsonb := public.admin_overview_core(p_token); pp text[] := public.admin_perms(p_token);
+begin
+  if not coalesce((r->>'ok')::boolean, false) then return r; end if;
+  if not ('event_pay' = any(pp) or 'payouts' = any(pp)) then
+    r := jsonb_set(r, '{events}', coalesce((select jsonb_agg(ev - 'net_sum' - 'cash_pending' - 'draft' - 'published' - 'void' - 'total') from jsonb_array_elements(r->'events') ev), '[]'::jsonb));
+  end if;
+  return r || jsonb_build_object('perms', to_jsonb(pp));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_event(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare r jsonb := public.admin_event_core(p_token, p_event);
+begin
+  if coalesce((r->>'ok')::boolean, false) and not ('event_pay' = any(public.admin_perms(p_token))) then
+    r := r || jsonb_build_object('payslips', '[]'::jsonb, 'issues', '[]'::jsonb, 'event_issues', '[]'::jsonb, 'pay_hidden', true);
+  end if;
+  return r;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_event_staff(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare r jsonb := public.admin_event_staff_core(p_token, p_event);
+begin
+  if coalesce((r->>'ok')::boolean, false) and not ('event_pay' = any(public.admin_perms(p_token))) and jsonb_typeof(r->'staff') = 'array' then
+    r := jsonb_set(r, '{staff}', coalesce((select jsonb_agg(x - 'slip' - 'staff' - 'rate' - 'pay_type') from jsonb_array_elements(r->'staff') x), '[]'::jsonb));
+  end if;
+  return r;
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_roles_list(p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  if public.admin_actor(p_token) is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true, 'perm_list', to_jsonb(public.admin_perm_list()),
+    'roles', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'name', r.name, 'perms', to_jsonb(r.perms), 'is_full', r.is_full,
+      'members', (select count(*) from public.admins a where a.role_id = r.id)) order by r.is_full desc, r.created_at) from public.admin_roles r), '[]'::jsonb));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_save_role(p_token text, p_patch jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 新增、修改或刪除角色。內建「管理員」不能改、不能刪；有人在用的角色不能刪
+declare v_actor text := public.admin_actor(p_token); v_name text; v_perms text[]; r public.admin_roles; v_id uuid;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  perform pg_advisory_xact_lock(hashtext('admin_roster'));
+  if p_patch ? 'id' then
+    begin select * into r from public.admin_roles where id = (p_patch->>'id')::uuid for update;
+    exception when others then return jsonb_build_object('ok', false, 'error', 'not_found'); end;
+    if r.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+    if r.is_full then return jsonb_build_object('ok', false, 'error', 'builtin'); end if;
+    if coalesce((p_patch->>'delete')::boolean, false) then
+      if exists (select 1 from public.admins where role_id = r.id) then return jsonb_build_object('ok', false, 'error', 'in_use'); end if;
+      delete from public.admin_roles where id = r.id;
+      insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'role_deleted', 'admin_roles', r.id, jsonb_build_object('name', r.name));
+      return jsonb_build_object('ok', true);
+    end if;
+  end if;
+  v_name := btrim(coalesce(p_patch->>'name', r.name, ''));
+  if length(v_name) < 1 or length(v_name) > 30 then return jsonb_build_object('ok', false, 'error', 'bad_name'); end if;
+  begin
+    select coalesce(array_agg(distinct x order by x), '{}') into v_perms from jsonb_array_elements_text(coalesce(p_patch->'perms', to_jsonb(r.perms), '[]'::jsonb)) x;
+  exception when others then return jsonb_build_object('ok', false, 'error', 'bad_perms'); end;
+  if exists (select 1 from unnest(v_perms) x where not (x = any(public.admin_perm_list()))) then return jsonb_build_object('ok', false, 'error', 'bad_perms'); end if;
+  if exists (select 1 from public.admin_roles where name = v_name and id is distinct from r.id) then return jsonb_build_object('ok', false, 'error', 'taken'); end if;
+  if r.id is null then
+    insert into public.admin_roles(name, perms) values (v_name, v_perms) returning id into v_id;
+  else
+    update public.admin_roles set name = v_name, perms = v_perms where id = r.id; v_id := r.id;
+  end if;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'role_saved', 'admin_roles', v_id, jsonb_build_object('name', v_name, 'perms', to_jsonb(v_perms)));
+  return jsonb_build_object('ok', true, 'id', v_id);
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_set_admin_role(p_token text, p_username text, p_role uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 指定後台帳號的角色；至少要留一位「管理員」，也不能把自己降級（避免沒人能管理權限）
+declare v_actor text := public.admin_actor(p_token); v_user text := lower(btrim(coalesce(p_username, ''))); r public.admin_roles;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  perform pg_advisory_xact_lock(hashtext('admin_roster'));
+  select * into r from public.admin_roles where id = p_role;
+  if r.id is null then return jsonb_build_object('ok', false, 'error', 'bad_role'); end if;
+  if not exists (select 1 from public.admins where username = v_user) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if v_user = v_actor and not r.is_full then return jsonb_build_object('ok', false, 'error', 'self'); end if;
+  if not r.is_full and (select count(*) from public.admins a join public.admin_roles x on x.id = a.role_id where x.is_full and a.username <> v_user) = 0 then
+    return jsonb_build_object('ok', false, 'error', 'last');
+  end if;
+  update public.admins set role_id = r.id where username = v_user;
+  delete from public.admin_sessions where admin_id = (select id from public.admins where username = v_user) and v_user <> v_actor;
+  insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'admin_role_changed', 'admins', jsonb_build_object('username', v_user, 'role', r.name));
+  return jsonb_build_object('ok', true);
+end $function$
+;
+
+revoke all on function public.trg_admin_default_role() from public, anon, authenticated;
+revoke all on function public.admin_perm_list() from public, anon, authenticated;
+revoke all on function public.admin_perms(text) from public, anon, authenticated;
+revoke all on function public.admin_actor(text, text) from public, anon, authenticated;
+grant execute on function public.admin_actor(text, text) to service_role;
+revoke all on function public.admin_overview_core(text) from public, anon, authenticated;
+revoke all on function public.admin_event_core(text, uuid) from public, anon, authenticated;
+revoke all on function public.admin_event_staff_core(text, uuid) from public, anon, authenticated;
+grant execute on function public.admin_overview(text) to anon, authenticated, service_role;
+grant execute on function public.admin_event(text, uuid) to anon, authenticated, service_role;
+grant execute on function public.admin_event_staff(text, uuid) to anon, authenticated, service_role;
+revoke all on function public.admin_roles_list(text) from public;
+revoke all on function public.admin_save_role(text, jsonb) from public;
+revoke all on function public.admin_set_admin_role(text, text, uuid) from public;
+grant execute on function public.admin_roles_list(text) to anon, authenticated, service_role;
+grant execute on function public.admin_save_role(text, jsonb) to anon, authenticated, service_role;
+grant execute on function public.admin_set_admin_role(text, text, uuid) to anon, authenticated, service_role;
