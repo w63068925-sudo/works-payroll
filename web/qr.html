@@ -51,6 +51,22 @@ function fatal(text) { clearTimeout(timer); app.innerHTML = '<div class="msg err
 
 // 拿著 QR 畫面的人自己簽到／簽退：在這個畫面直接完成並顯示結果，QR 碼留在上方繼續給大家掃
 // 用這支手機上的工讀生登入（工讀生頁登入時存的憑證）；沒登入才開新分頁去登入
+
+// QR 畫面下方的今日打卡名單：誰還沒簽到、誰上班中、誰已簽退（每 15 秒更新）
+function rosterHtml(rows) {
+  const e3 = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const n = k => rows.filter(r => r.state === k).length;
+  const chip = { none: ['未簽到', '#fff4e5', '#8a5a00'], in: ['上班中', '#e7f5ee', '#1d7a55'], done: ['已簽退', '#f2f2f2', '#222'] };
+  if (!rows.length) return '<p style="color:#6a6a6a;font-size:13px;margin:16px 0 0">今天這場活動沒有排班或打卡紀錄。</p>';
+  return '<div style="margin-top:18px;text-align:left;max-width:520px;margin-left:auto;margin-right:auto">'
+    + '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:#6a6a6a;margin-bottom:8px"><b style="color:#222">今日打卡</b><span>未簽到 ' + n('none') + '</span><span>上班中 ' + n('in') + '</span><span>已簽退 ' + n('done') + '</span><span>共 ' + rows.length + ' 人</span></div>'
+    + '<div style="border:1px solid #ebebeb;border-radius:14px;overflow:hidden;background:#fff">'
+    + rows.map((r, i) => '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;font-size:14px;' + (i ? 'border-top:1px solid #ebebeb' : '') + '">'
+      + '<span style="flex:1;min-width:0;font-weight:600">' + e3(r.name) + (r.sched ? '<span style="font-weight:400;color:#6a6a6a;font-size:12px">　' + e3(r.sched) + '</span>' : '') + '</span>'
+      + '<span style="font-size:12px;color:#6a6a6a;white-space:nowrap">' + (r.in ? '簽到 ' + e3(r.in) : '') + (r.out ? '　簽退 ' + e3(r.out) : '') + '</span>'
+      + '<span style="font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;white-space:nowrap;background:' + chip[r.state][1] + ';color:' + chip[r.state][2] + '">' + chip[r.state][0] + '</span></div>').join('')
+    + '</div></div>';
+}
 function selfClockWidget(box, getUrl, getCode, getAt) {
   const wTok = () => { try { return sessionStorage.getItem('payroll_token') || localStorage.getItem('payroll_token_keep'); } catch (e) { return null; } };
   const wrpc = async (name, body) => { const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!res.ok) throw new Error('連線失敗'); return res.json(); };
@@ -91,7 +107,7 @@ function selfClockWidget(box, getUrl, getCode, getAt) {
         box.querySelector('#selfno').onclick = () => { box.querySelector('#selfmsg').innerHTML = ''; };
         return;
       }
-      if (r.ok) { msg('ok', who + (act === 'in' ? '已簽到，時間 ' + e2(r.clock_in) + '。' : '已簽退，時間 ' + e2(r.clock_out) + '。辛苦了。') + (st.me ? outBtn : '')); bindOut(tok); return; }
+      if (r.ok) { msg('ok', who + (act === 'in' ? '已簽到，時間 ' + e2(r.clock_in) + '。' : '已簽退，時間 ' + e2(r.clock_out) + '。辛苦了。') + (st.me ? outBtn : '')); bindOut(tok); if (window.__rosterNow) window.__rosterNow(); return; }
       msg('warn', who + ({ not_scheduled: '你今天沒有被排到這場活動的班，無法簽到。', not_event_day: '今天不在這場活動的日期內。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '還沒簽到，無法簽退。' }[r.error] || '沒有完成，請再試一次。'));
     } catch (err) { msg('warn', '網路連線失敗，請再按一次。'); }
     finally { busy = false; go.disabled = false; }
@@ -125,6 +141,7 @@ async function tick() {
     app.innerHTML = `<h1>${esc(r.event)}</h1><p class="sub">${esc(fmt(r.start_date))}${r.end_date !== r.start_date ? '–' + esc(fmt(r.end_date)) : ''}　掃描簽到／簽退</p>
       <div class="qr" id="qr"></div><div class="bar"><i id="bar"></i></div>
       <div id="selfbox" style="max-width:440px;margin:0 auto"></div>
+      <div id="roster"></div>
       <div class="msg warn" id="net" hidden>網路不穩，QR 碼可能已過期，自動重試中…</div>
       <p class="foot">請工讀生用手機相機掃描，登入後完成簽到或簽退。QR 碼每分鐘自動更換，截圖或轉傳都會失效。<br>這個頁面請只在活動現場開給工讀生掃，不要轉傳。連結到 ${esc(tpe(r.expires_at))} 失效。</p>`;
   }
@@ -143,7 +160,13 @@ async function tick() {
 
 if (!share) fatal('連結不完整，請向管理員重新索取打卡連結。');
 else if (typeof qrcode !== 'function') fatal('QR 元件載入失敗，請重新整理。');
-else { keepAwake(); tick(); }
+else {
+  keepAwake(); tick();
+  let rtimer = null;
+  const loadRoster = async () => { clearTimeout(rtimer); try { const rr = await rpc('payroll_share_roster', { p_share: share }); const box = document.getElementById('roster'); if (rr.ok && box) box.innerHTML = rosterHtml(rr.rows || []); } catch (e) {} rtimer = setTimeout(loadRoster, 15000); };
+  window.__rosterNow = loadRoster;
+  setTimeout(loadRoster, 800);
+}
 })();
 </script>
 </body>

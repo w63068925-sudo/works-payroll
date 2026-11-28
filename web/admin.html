@@ -1067,6 +1067,7 @@ async function openDetail(kind, key, e, keepScroll) {
   if (kind === 'att') {
     const r = S.cache.att.find(x => x.id === key); if (!r) return;
     box.innerHTML = `${close}<h1 style="font-size:19px">${esc(r.name)}</h1><p class="sub" style="margin-top:4px">${esc(d(r.work_date))}　${esc(SRC[r.source] || '')}${r.scheduled_text ? '　原排定 ' + esc(r.scheduled_text) : ''}</p>
+      ${S.detailMsg && S.detailMsg.key === key ? '<div class="msg ' + S.detailMsg.type + '" style="margin-top:12px">' + esc(S.detailMsg.text) + '</div>' : ''}
       <p class="sub" style="margin-top:8px">直接改下面的時間後按「儲存」。下班時間比上班早，就當作隔天下班。</p>
       <div class="row" style="margin-top:14px"><div class="grow"><label for="ain">上班時間</label><input id="ain" type="time" value="${esc(r.clock_in ? String(r.clock_in).slice(11, 16) : '')}"></div>
         <div class="grow"><label for="aout">下班時間</label><input id="aout" type="time" value="${esc(r.clock_out ? String(r.clock_out).slice(11, 16) : '')}"></div></div>
@@ -1098,7 +1099,7 @@ async function openDetail(kind, key, e, keepScroll) {
       const outDay = tout && tin && tout <= tin ? next(day) : day;
       const r2 = await rpc('admin_set_attendance', { p_id: key, p_patch: { clock_in: tin ? day + 'T' + tin : '', clock_out: tout ? outDay + 'T' + tout : '', break_minutes: $('abr').value, note: $('anote').value } });
       if (!r2.ok) { $('dm').innerHTML = '<div class="msg err">' + (r2.error === 'out_before_in' ? '下班時間必須晚於上班時間。' : '輸入的內容有誤。') + '</div>'; return; }
-      flash('ok', '出勤已更新。'); refreshEvent(e, 'att');
+      flash('ok', '出勤已更新。'); S.detailMsg = { key, type: 'ok', text: '已儲存：上班 ' + (tin || '—') + '、下班 ' + (tout || '—') + '。' }; S.detail = { kind: 'att', key }; refreshEvent(e, 'att');
     };
     return;
   }
@@ -1233,6 +1234,22 @@ async function viewToday(pick) {
 
 // 拿著 QR 畫面的人自己簽到／簽退：在這個畫面直接完成並顯示結果，QR 碼留在上方繼續給大家掃
 // 用這支手機上的工讀生登入（工讀生頁登入時存的憑證）；沒登入才開新分頁去登入
+
+// QR 畫面下方的今日打卡名單：誰還沒簽到、誰上班中、誰已簽退（每 15 秒更新）
+function rosterHtml(rows) {
+  const e3 = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const n = k => rows.filter(r => r.state === k).length;
+  const chip = { none: ['未簽到', '#fff4e5', '#8a5a00'], in: ['上班中', '#e7f5ee', '#1d7a55'], done: ['已簽退', '#f2f2f2', '#222'] };
+  if (!rows.length) return '<p style="color:#6a6a6a;font-size:13px;margin:16px 0 0">今天這場活動沒有排班或打卡紀錄。</p>';
+  return '<div style="margin-top:18px;text-align:left;max-width:520px;margin-left:auto;margin-right:auto">'
+    + '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:#6a6a6a;margin-bottom:8px"><b style="color:#222">今日打卡</b><span>未簽到 ' + n('none') + '</span><span>上班中 ' + n('in') + '</span><span>已簽退 ' + n('done') + '</span><span>共 ' + rows.length + ' 人</span></div>'
+    + '<div style="border:1px solid #ebebeb;border-radius:14px;overflow:hidden;background:#fff">'
+    + rows.map((r, i) => '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;font-size:14px;' + (i ? 'border-top:1px solid #ebebeb' : '') + '">'
+      + '<span style="flex:1;min-width:0;font-weight:600">' + e3(r.name) + (r.sched ? '<span style="font-weight:400;color:#6a6a6a;font-size:12px">　' + e3(r.sched) + '</span>' : '') + '</span>'
+      + '<span style="font-size:12px;color:#6a6a6a;white-space:nowrap">' + (r.in ? '簽到 ' + e3(r.in) : '') + (r.out ? '　簽退 ' + e3(r.out) : '') + '</span>'
+      + '<span style="font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;white-space:nowrap;background:' + chip[r.state][1] + ';color:' + chip[r.state][2] + '">' + chip[r.state][0] + '</span></div>').join('')
+    + '</div></div>';
+}
 function selfClockWidget(box, getUrl, getCode, getAt) {
   const wTok = () => { try { return sessionStorage.getItem('payroll_token') || localStorage.getItem('payroll_token_keep'); } catch (e) { return null; } };
   const wrpc = async (name, body) => { const res = await fetch(API + name, { method: 'POST', headers: { apikey: KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (!res.ok) throw new Error('連線失敗'); return res.json(); };
@@ -1273,7 +1290,7 @@ function selfClockWidget(box, getUrl, getCode, getAt) {
         box.querySelector('#selfno').onclick = () => { box.querySelector('#selfmsg').innerHTML = ''; };
         return;
       }
-      if (r.ok) { msg('ok', who + (act === 'in' ? '已簽到，時間 ' + e2(r.clock_in) + '。' : '已簽退，時間 ' + e2(r.clock_out) + '。辛苦了。') + (st.me ? outBtn : '')); bindOut(tok); return; }
+      if (r.ok) { msg('ok', who + (act === 'in' ? '已簽到，時間 ' + e2(r.clock_in) + '。' : '已簽退，時間 ' + e2(r.clock_out) + '。辛苦了。') + (st.me ? outBtn : '')); bindOut(tok); if (window.__rosterNow) window.__rosterNow(); return; }
       msg('warn', who + ({ not_scheduled: '你今天沒有被排到這場活動的班，無法簽到。', not_event_day: '今天不在這場活動的日期內。', already_in: '你已經簽到過了。', already_done: '今天已經完成簽到與簽退。', not_in: '還沒簽到，無法簽退。' }[r.error] || '沒有完成，請再試一次。'));
     } catch (err) { msg('warn', '網路連線失敗，請再按一次。'); }
     finally { busy = false; go.disabled = false; }
@@ -1290,11 +1307,16 @@ function showQr(e) {
   overlay.innerHTML = `<div class="qrscreen"><p class="sub">掃描簽到／簽退</p><h1 style="margin:4px 0 18px">${esc(e.name)}</h1>
     <div class="qrbox" id="bigqr"><p class="sub">產生中…</p></div><p class="sub" style="margin-top:14px">每分鐘自動更換，請工讀生用手機相機掃描後登入。</p>
     <div id="selfbox" style="max-width:440px;margin:12px auto 0"></div>
+    <div id="roster"></div>
     <div id="qrshare" style="max-width:460px;margin:18px auto 0;text-align:left"></div>
     <button class="btn ghost" id="qrclose" style="margin-top:18px">關閉</button></div>`;
-  const stop = () => { clearTimeout(timer); overlay.innerHTML = ''; };
+  let rtimer = null;
+  const loadRoster = async () => { clearTimeout(rtimer); if (!$('roster')) return; try { const rr = await rpc('admin_checkin_roster', { p_event: e.id }); if (rr.ok && $('roster')) $('roster').innerHTML = rosterHtml(rr.rows || []); } catch (err) {} rtimer = setTimeout(loadRoster, 15000); };
+  window.__rosterNow = loadRoster;
+  const stop = () => { clearTimeout(timer); clearTimeout(rtimer); window.__rosterNow = null; overlay.innerHTML = ''; };
   $('qrclose').onclick = stop;
   shareBox(e);
+  loadRoster();
   const tick = async () => {
     if (!$('bigqr')) return;
     try {

@@ -988,7 +988,11 @@ begin
   if v_break < 0 or v_break > 240 then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
   update public.attendance set clock_in = v_in, clock_out = v_out, break_minutes = v_break,
     note = nullif(btrim(coalesce(p_patch->>'note','')), ''),
-    source = case when source = 'qr' and (clock_in is distinct from v_in or clock_out is distinct from v_out) then 'manual' else source end
+    source = case when source = 'qr' and (clock_in is distinct from v_in or clock_out is distinct from v_out) then 'manual' else source end,
+    in_notice = case when clock_in is distinct from v_in then null else in_notice end,
+    in_notice_minutes = case when clock_in is distinct from v_in then null else in_notice_minutes end,
+    out_notice = case when clock_out is distinct from v_out then null else out_notice end,
+    out_notice_minutes = case when clock_out is distinct from v_out then null else out_notice_minutes end
   where id = p_id;
   if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
   insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'attendance_updated', 'attendance', p_id, p_patch);
@@ -4020,3 +4024,68 @@ end $function$
 ;
 revoke all on function public.admin_add_attendance_times(text, uuid, text, date, text, text) from public;
 grant execute on function public.admin_add_attendance_times(text, uuid, text, date, text, text) to anon, authenticated, service_role;
+
+-- 今天的打卡名單：今天有錄取班次的人＋今天（或跨夜未簽退）有出勤的人；只給姓名、表定時段、簽到簽退時間
+CREATE OR REPLACE FUNCTION public.checkin_roster(p_event uuid)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  with t as (select (now() at time zone 'Asia/Taipei')::date d),
+  sch as (
+    select a.person_id, min(s.work_date + s.start_time) si, max(s.work_date + s.end_time + case when s.end_time <= s.start_time then interval '1 day' else interval '0' end) so
+    from public.application_shifts x join public.applications a on a.id = x.application_id join public.shifts s on s.id = x.shift_id, t
+    where a.event_id = p_event and a.status = 'active' and x.status = 'accepted' and s.work_date = t.d
+    group by a.person_id),
+  att as (
+    select distinct on (at.person_id) at.person_id, at.clock_in, at.clock_out
+    from public.attendance at, t
+    where at.event_id = p_event and at.clock_in is not null and (at.work_date = t.d or (at.clock_out is null and at.clock_in > now() - interval '20 hours'))
+    order by at.person_id, at.clock_in desc),
+  ids as (select person_id from sch union select person_id from att)
+  select coalesce(jsonb_agg(jsonb_build_object('name', p.name,
+      'sched', case when sch.si is not null then to_char(sch.si, 'HH24:MI') || '–' || to_char(sch.so, 'HH24:MI') end,
+      'in', to_char(att.clock_in at time zone 'Asia/Taipei', 'HH24:MI'), 'out', to_char(att.clock_out at time zone 'Asia/Taipei', 'HH24:MI'),
+      'state', case when att.clock_out is not null then 'done' when att.clock_in is not null then 'in' else 'none' end)
+    order by case when att.clock_out is not null then 2 when att.clock_in is not null then 1 else 0 end, sch.si nulls last, p.name), '[]'::jsonb)
+  from ids join public.people p on p.id = ids.person_id left join sch on sch.person_id = ids.person_id left join att on att.person_id = ids.person_id
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.admin_checkin_roster(p_token text, p_event uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  if public.admin_actor(p_token) is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  return jsonb_build_object('ok', true, 'rows', public.checkin_roster(p_event));
+end $function$
+;
+
+CREATE OR REPLACE FUNCTION public.payroll_share_roster(p_share text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 分享打卡頁的打卡名單：和取打卡碼同樣的分享碼檢查（失效、停用、封存、過期都不給）
+declare s public.checkin_shares; e public.events;
+begin
+  if coalesce(p_share, '') !~ '^[0-9a-f]{48}$' then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
+  select * into s from public.checkin_shares where token_hash = encode(extensions.digest(p_share, 'sha256'), 'hex');
+  if s.id is null or s.revoked_at is not null then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
+  if s.expires_at <= now() then return jsonb_build_object('ok', false, 'error', 'expired'); end if;
+  select * into e from public.events where id = s.event_id;
+  if e.id is null or e.archived_at is not null then return jsonb_build_object('ok', false, 'error', 'invalid'); end if;
+  if ((coalesce(e.end_date, e.start_date) + 2)::timestamp at time zone 'Asia/Taipei') <= now() then return jsonb_build_object('ok', false, 'error', 'expired'); end if;
+  return jsonb_build_object('ok', true, 'rows', public.checkin_roster(e.id));
+end $function$
+;
+revoke all on function public.checkin_roster(uuid) from public, anon, authenticated;
+revoke all on function public.admin_checkin_roster(text, uuid) from public;
+grant execute on function public.admin_checkin_roster(text, uuid) to anon, authenticated, service_role;
+revoke all on function public.payroll_share_roster(text) from public;
+grant execute on function public.payroll_share_roster(text) to anon, authenticated, service_role;
