@@ -163,7 +163,9 @@ else if (typeof qrcode !== 'function') fatal('QR 元件載入失敗，請重新�
 else {
   keepAwake(); tick();
   let rtimer = null;
-  const loadRoster = async () => { clearTimeout(rtimer); try { const rr = await rpc('payroll_share_roster', { p_share: share }); const box = document.getElementById('roster'); if (rr.ok && box) box.innerHTML = rosterHtml(rr.rows || []); } catch (e) {} rtimer = setTimeout(loadRoster, 15000); };
+  let rstop = false;
+  // 連結失效（停用、過期）就停止更新
+  const loadRoster = async () => { clearTimeout(rtimer); if (rstop) return; try { const rr = await rpc('payroll_share_roster', { p_share: share }); const box = document.getElementById('roster'); if (rr.ok && box) box.innerHTML = rosterHtml(rr.rows || []); else if (rr.ok === false && rr.error) { rstop = true; if (box) box.innerHTML = '<p class="dim">打卡連結已失效，名單停止更新。</p>'; return; } } catch (e) {} rtimer = setTimeout(loadRoster, 15000); };
   window.__rosterNow = loadRoster;
   setTimeout(loadRoster, 800);
 }

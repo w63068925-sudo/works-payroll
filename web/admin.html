@@ -1092,7 +1092,7 @@ async function openDetail(kind, key, e, keepScroll) {
         ${r.in_notice === 'early' ? `<div class="issue"><div>提早 ${esc(r.in_notice_minutes)} 分鐘到場<div class="dim">${r.early_approved ? '已核准提早開工，從實際簽到時間計薪' : '未核准，從表定時間起算'}</div></div><button class="btn ghost sm" data-appr="early" data-on="${!r.early_approved}">${r.early_approved ? '撤銷核准' : '核准提早開工'}</button></div>` : ''}
         ${r.in_notice === 'late' ? `<div class="issue"><div>遲到 ${esc(r.in_notice_minutes)} 分鐘<div class="dim">從實際簽到時間計薪，不另外扣款</div></div></div>` : ''}
         ${r.out_notice === 'overtime' ? `<div class="issue"><div>超過表定下班 ${esc(r.out_notice_minutes)} 分鐘<div class="dim">${r.ot_approved ? '已核准延長工時，照實際簽退時間計薪（含加班費）' : '待核准，目前算到表定下班時間'}</div></div><button class="btn ${r.ot_approved ? 'ghost' : ''} sm" data-appr="overtime" data-on="${!r.ot_approved}">${r.ot_approved ? '撤銷核准' : '核准加班'}</button></div>` : ''}
-        ${r.in_notice_text || r.out_notice_text ? `<p class="dim" style="margin-top:8px">本人確認過的說明：${esc([r.in_notice_text, r.out_notice_text].filter(Boolean).join(' ／ '))}</p>` : ''}` : ''}`;
+        ${r.in_notice_text || r.out_notice_text ? `<p class="dim" style="margin-top:8px">${r.source === 'manual' ? '打卡時本人確認過的說明（時間已由管理員修改，內容是修改前的）' : '本人確認過的說明'}：${esc([r.in_notice_text, r.out_notice_text].filter(Boolean).join(' ／ '))}</p>` : ''}` : ''}`;
     bindClose();
     box.querySelectorAll('[data-appr]').forEach(b => b.onclick = async () => {
       const r3 = await rpc('admin_approve_attendance', { p_id: key, p_kind: b.dataset.appr, p_on: b.dataset.on === 'true' });
@@ -1321,10 +1321,12 @@ function showQr(e) {
     <div id="roster"></div>
     <div id="qrshare" style="max-width:460px;margin:18px auto 0;text-align:left"></div>
     <button class="btn ghost" id="qrclose" style="margin-top:18px">關閉</button></div>`;
-  let rtimer = null;
-  const loadRoster = async () => { clearTimeout(rtimer); if (!$('roster')) return; try { const rr = await rpc('admin_checkin_roster', { p_event: e.id }); if (rr.ok && $('roster')) $('roster').innerHTML = rosterHtml(rr.rows || []); } catch (err) {} rtimer = setTimeout(loadRoster, 15000); };
+  let rtimer = null, alive = true;
+  const box = $('roster');
+  // 關閉畫面或登入失效就停止更新（避免舊的輪詢寫到之後開啟的另一個 QR 畫面）
+  const loadRoster = async () => { clearTimeout(rtimer); if (!alive || !box.isConnected) return; try { const rr = await rpc('admin_checkin_roster', { p_event: e.id }); if (!alive || !box.isConnected) return; if (rr.ok) box.innerHTML = rosterHtml(rr.rows || []); else if (rr.error === 'session') { alive = false; box.innerHTML = '<p class="dim">登入已過期，打卡名單停止更新。</p>'; return; } } catch (err) {} if (alive) rtimer = setTimeout(loadRoster, 15000); };
   window.__rosterNow = loadRoster;
-  const stop = () => { clearTimeout(timer); clearTimeout(rtimer); window.__rosterNow = null; overlay.innerHTML = ''; };
+  const stop = () => { alive = false; clearTimeout(timer); clearTimeout(rtimer); window.__rosterNow = null; overlay.innerHTML = ''; };
   $('qrclose').onclick = stop;
   shareBox(e);
   loadRoster();

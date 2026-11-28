@@ -976,7 +976,8 @@ CREATE OR REPLACE FUNCTION public.admin_set_attendance(p_token text, p_id uuid, 
  SECURITY DEFINER
  SET search_path TO ''
 AS $function$
-declare v_actor text := public.admin_actor(p_token, 'events'); v_in timestamptz; v_out timestamptz; v_break int;
+declare v_actor text := public.admin_actor(p_token, 'events'); v_in timestamptz; v_out timestamptz; v_break int; a public.attendance;
+  v_ik text; v_in_n int; v_ok text; v_out_n int;
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   begin
@@ -986,16 +987,39 @@ begin
   exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
   if v_in is not null and v_out is not null and v_out <= v_in then return jsonb_build_object('ok', false, 'error', 'out_before_in'); end if;
   if v_break < 0 or v_break > 240 then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+  select * into a from public.attendance where id = p_id for update;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  -- 改了時間就依新的時間重算提早／遲到／超時標記（與掃碼時同一套門檻），不再符合的核准一併清掉
+  v_ik := a.in_notice; v_in_n := a.in_notice_minutes;
+  if a.clock_in is distinct from v_in then
+    v_ik := null; v_in_n := null;
+    if v_in is not null and a.sched_in is not null then
+      if v_in < a.sched_in - interval '1 minute' then
+        v_ik := 'early'; v_in_n := ceil(extract(epoch from a.sched_in - v_in) / 60);
+      elsif v_in >= a.sched_in + interval '1 minute' and v_in > a.sched_in + make_interval(mins => coalesce(a.grace_minutes, 0)) then
+        v_ik := 'late'; v_in_n := floor(extract(epoch from v_in - a.sched_in) / 60);
+      end if;
+    end if;
+  end if;
+  v_ok := a.out_notice; v_out_n := a.out_notice_minutes;
+  if a.clock_out is distinct from v_out then
+    v_ok := null; v_out_n := null;
+    if v_out is not null and a.sched_out is not null and v_out >= a.sched_out + interval '1 minute' then
+      v_ok := 'overtime'; v_out_n := floor(extract(epoch from v_out - a.sched_out) / 60);
+    end if;
+  end if;
   update public.attendance set clock_in = v_in, clock_out = v_out, break_minutes = v_break,
     note = nullif(btrim(coalesce(p_patch->>'note','')), ''),
     source = case when source = 'qr' and (clock_in is distinct from v_in or clock_out is distinct from v_out) then 'manual' else source end,
-    in_notice = case when clock_in is distinct from v_in then null else in_notice end,
-    in_notice_minutes = case when clock_in is distinct from v_in then null else in_notice_minutes end,
-    out_notice = case when clock_out is distinct from v_out then null else out_notice end,
-    out_notice_minutes = case when clock_out is distinct from v_out then null else out_notice_minutes end
+    in_notice = v_ik, in_notice_minutes = v_in_n, out_notice = v_ok, out_notice_minutes = v_out_n,
+    early_approved_at = case when v_ik is distinct from 'early' then null else early_approved_at end,
+    early_approved_by = case when v_ik is distinct from 'early' then null else early_approved_by end,
+    ot_approved_at = case when v_ok is distinct from 'overtime' then null else ot_approved_at end,
+    ot_approved_by = case when v_ok is distinct from 'overtime' then null else ot_approved_by end
   where id = p_id;
-  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
-  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'attendance_updated', 'attendance', p_id, p_patch);
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'attendance_updated', 'attendance', p_id,
+    p_patch || jsonb_build_object('before', jsonb_build_object('clock_in', a.clock_in, 'clock_out', a.clock_out, 'in_notice', a.in_notice, 'out_notice', a.out_notice,
+      'early_approved', a.early_approved_at is not null, 'ot_approved', a.ot_approved_at is not null)));
   return jsonb_build_object('ok', true);
 end $function$
 ;
@@ -4033,12 +4057,17 @@ CREATE OR REPLACE FUNCTION public.checkin_roster(p_event uuid)
  STABLE
  SET search_path TO ''
 AS $function$
-  with t as (select (now() at time zone 'Asia/Taipei')::date d),
-  sch as (
-    select a.person_id, min(s.work_date + s.start_time) si, max(s.work_date + s.end_time + case when s.end_time <= s.start_time then interval '1 day' else interval '0' end) so
+  -- 今天的班次，加上昨天開始、還沒結束的跨夜班；每個人的班次逐段列出
+  with t as (select (now() at time zone 'Asia/Taipei')::date d, now() at time zone 'Asia/Taipei' n),
+  seg as (
+    select a.person_id, s.work_date + s.start_time si,
+      s.work_date + s.end_time + case when s.end_time <= s.start_time then interval '1 day' else interval '0' end so
     from public.application_shifts x join public.applications a on a.id = x.application_id join public.shifts s on s.id = x.shift_id, t
-    where a.event_id = p_event and a.status = 'active' and x.status = 'accepted' and s.work_date = t.d
-    group by a.person_id),
+    where a.event_id = p_event and a.status = 'active' and x.status = 'accepted'
+      and (s.work_date = t.d or (s.work_date = t.d - 1 and s.end_time <= s.start_time and s.work_date + s.end_time + interval '1 day' > t.n))),
+  sch as (
+    select person_id, min(si) si, string_agg(to_char(si, 'HH24:MI') || '–' || to_char(so, 'HH24:MI'), '、' order by si) txt
+    from seg group by person_id),
   att as (
     select distinct on (at.person_id) at.person_id, at.clock_in, at.clock_out
     from public.attendance at, t
@@ -4046,7 +4075,7 @@ AS $function$
     order by at.person_id, at.clock_in desc),
   ids as (select person_id from sch union select person_id from att)
   select coalesce(jsonb_agg(jsonb_build_object('name', p.name,
-      'sched', case when sch.si is not null then to_char(sch.si, 'HH24:MI') || '–' || to_char(sch.so, 'HH24:MI') end,
+      'sched', sch.txt,
       'in', to_char(att.clock_in at time zone 'Asia/Taipei', 'HH24:MI'), 'out', to_char(att.clock_out at time zone 'Asia/Taipei', 'HH24:MI'),
       'state', case when att.clock_out is not null then 'done' when att.clock_in is not null then 'in' else 'none' end)
     order by case when att.clock_out is not null then 2 when att.clock_in is not null then 1 else 0 end, sch.si nulls last, p.name), '[]'::jsonb)

@@ -847,5 +847,35 @@ begin
     if has_function_privilege('anon', 'public.admin_event_core(text,uuid)', 'execute') or has_function_privilege('anon', 'public.admin_actor(text,text)', 'execute') then fails := fails || ' [44i core anon]'; end if;
   end;
 
-  if fails = '' then raise exception 'PASS 全部 44 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 45：修改出勤依新時間重算提早／遲到／超時與核准；QR 頁名單逐段列班次並含昨天開始的跨夜班
+  declare e45 uuid; p45 uuid; h1 uuid; h2 uuid; hn uuid; ho uuid; ap45 uuid; att45 uuid; d45 date := (now() at time zone 'Asia/Taipei')::date; ro jsonb;
+  begin
+    insert into public.events(employer_id, name, start_date, end_date, default_hourly_rate) values (emp, '回歸45', d45 - 1, d45, 200) returning id into e45;
+    insert into public.people(national_id, name, birth_date, profile_source) values ('Z999990451', '測試四五', '2000-01-01', 'test') returning id into p45;
+    insert into public.shifts(event_id, work_date, start_time, end_time, role, headcount) values (e45, d45, '01:00', '02:00', 'A', 1) returning id into h1;
+    insert into public.shifts(event_id, work_date, start_time, end_time, role, headcount) values (e45, d45, '23:00', '23:30', 'B', 1) returning id into h2;
+    insert into public.shifts(event_id, work_date, start_time, end_time, role, headcount) values (e45, d45 - 1, '23:59', '23:58', 'N', 1) returning id into hn;
+    insert into public.shifts(event_id, work_date, start_time, end_time, role, headcount) values (e45, d45 - 1, '08:00', '12:00', 'O', 1) returning id into ho;
+    insert into public.applications(event_id, person_id, status) values (e45, p45, 'active') returning id into ap45;
+    insert into public.application_shifts(application_id, shift_id, status) values (ap45, h1, 'accepted'), (ap45, h2, 'accepted');
+    ro := public.checkin_roster(e45);
+    if ro->0->>'sched' is distinct from '01:00–02:00、23:00–23:30' then fails := fails || ' [45a segments]'; end if;
+    delete from public.application_shifts where application_id = ap45;
+    insert into public.application_shifts(application_id, shift_id, status) values (ap45, ho, 'accepted');
+    if jsonb_array_length(public.checkin_roster(e45)) <> 0 then fails := fails || ' [45b yesterday day shift]'; end if;
+    insert into public.application_shifts(application_id, shift_id, status) values (ap45, hn, 'accepted');
+    ro := public.checkin_roster(e45);
+    if jsonb_array_length(ro) <> 1 or ro->0->>'sched' is distinct from '23:59–23:58' then fails := fails || ' [45c overnight]'; end if;
+    insert into public.attendance(person_id, event_id, work_date, clock_in, clock_out, source, sched_in, sched_out, in_notice, in_notice_minutes, grace_minutes, early_approved_at, ot_approved_at, out_notice, out_notice_minutes)
+    values (p45, e45, d45, (d45 + time '09:30') at time zone 'Asia/Taipei', (d45 + time '19:00') at time zone 'Asia/Taipei', 'qr', (d45 + time '10:00') at time zone 'Asia/Taipei', (d45 + time '18:00') at time zone 'Asia/Taipei', 'early', 30, 5, now(), now(), 'overtime', 60) returning id into att45;
+    perform public.admin_set_attendance(atok, att45, jsonb_build_object('clock_in', d45 || ' 10:20', 'clock_out', d45 || ' 17:00'));
+    if (select in_notice || in_notice_minutes || coalesce(out_notice,'-') || (early_approved_at is null)::text || (ot_approved_at is null)::text from public.attendance where id = att45) is distinct from 'late20-truetrue' then fails := fails || ' [45d recompute]'; end if;
+    perform public.admin_set_attendance(atok, att45, jsonb_build_object('clock_in', d45 || ' 10:04', 'clock_out', d45 || ' 18:30'));
+    if (select coalesce(in_notice,'-') || out_notice || out_notice_minutes from public.attendance where id = att45) is distinct from '-overtime30' then fails := fails || ' [45e grace/overtime]'; end if;
+    update public.attendance set ot_approved_at = now() where id = att45;
+    perform public.admin_set_attendance(atok, att45, jsonb_build_object('clock_in', d45 || ' 09:00', 'clock_out', d45 || ' 18:30'));
+    if (select in_notice || in_notice_minutes || (ot_approved_at is not null)::text || (early_approved_at is null)::text from public.attendance where id = att45) is distinct from 'early60truetrue' then fails := fails || ' [45f keep unchanged approval]'; end if;
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 45 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;
