@@ -1067,9 +1067,10 @@ async function openDetail(kind, key, e, keepScroll) {
   if (kind === 'att') {
     const r = S.cache.att.find(x => x.id === key); if (!r) return;
     box.innerHTML = `${close}<h1 style="font-size:19px">${esc(r.name)}</h1><p class="sub" style="margin-top:4px">${esc(d(r.work_date))}　${esc(SRC[r.source] || '')}${r.scheduled_text ? '　原排定 ' + esc(r.scheduled_text) : ''}</p>
-      <p class="sub" style="margin-top:8px">直接改下面的上下班時間後按「儲存」。</p>
-      <label for="ain">上班時間</label><input id="ain" type="datetime-local" value="${esc(r.clock_in || '')}">
-      <label for="aout">下班時間</label><input id="aout" type="datetime-local" value="${esc(r.clock_out || '')}">
+      <p class="sub" style="margin-top:8px">直接改下面的時間後按「儲存」。下班時間比上班早，就當作隔天下班。</p>
+      <div class="row" style="margin-top:14px"><div class="grow"><label for="ain">上班時間</label><input id="ain" type="time" value="${esc(r.clock_in ? String(r.clock_in).slice(11, 16) : '')}"></div>
+        <div class="grow"><label for="aout">下班時間</label><input id="aout" type="time" value="${esc(r.clock_out ? String(r.clock_out).slice(11, 16) : '')}"></div></div>
+      ${r.sched_in || r.sched_out ? `<div class="row" style="margin-top:8px;gap:6px">${r.sched_in ? `<button type="button" class="btn ghost sm" id="usein">上班帶入表定 ${esc(hm(r.sched_in))}</button>` : ''}${r.sched_out ? `<button type="button" class="btn ghost sm" id="useout">下班帶入表定 ${esc(hm(r.sched_out))}</button>` : ''}</div>` : ''}
       <label for="abr">休息分鐘</label><input id="abr" type="text" inputmode="numeric" value="${esc(r.break_minutes)}">
       <label for="anote">修改原因</label><textarea id="anote" placeholder="忘記簽退，依現場負責人確認">${esc(r.note || '')}</textarea>
       <div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">儲存</button>
@@ -1087,8 +1088,15 @@ async function openDetail(kind, key, e, keepScroll) {
       flash('ok', b.dataset.on === 'true' ? '已核准。重新產生薪資單後會套用。' : '已撤銷核准。重新產生薪資單後會套用。');
       S.detail = { kind: 'att', key }; refreshEvent(e, 'att');
     });
+    if ($('usein')) $('usein').onclick = () => { $('ain').value = hm(r.sched_in); };
+    if ($('useout')) $('useout').onclick = () => { $('aout').value = hm(r.sched_out); };
     $('save').onclick = async () => {
-      const r2 = await rpc('admin_set_attendance', { p_id: key, p_patch: { clock_in: $('ain').value, clock_out: $('aout').value, break_minutes: $('abr').value, note: $('anote').value } });
+      // 日期用這筆出勤的日期（上班已有日期就用那天），下班不晚於上班就算隔天
+      const day = (r.clock_in ? String(r.clock_in).slice(0, 10) : r.work_date), tin = $('ain').value, tout = $('aout').value;
+      if (!tin && tout) { $('dm').innerHTML = '<div class="msg err">請先填上班時間。</div>'; return; }
+      const next = d0 => { const x = new Date(d0 + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 1); return x.toISOString().slice(0, 10); };
+      const outDay = tout && tin && tout <= tin ? next(day) : day;
+      const r2 = await rpc('admin_set_attendance', { p_id: key, p_patch: { clock_in: tin ? day + 'T' + tin : '', clock_out: tout ? outDay + 'T' + tout : '', break_minutes: $('abr').value, note: $('anote').value } });
       if (!r2.ok) { $('dm').innerHTML = '<div class="msg err">' + (r2.error === 'out_before_in' ? '下班時間必須晚於上班時間。' : '輸入的內容有誤。') + '</div>'; return; }
       flash('ok', '出勤已更新。'); refreshEvent(e, 'att');
     };
