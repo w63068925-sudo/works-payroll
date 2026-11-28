@@ -795,5 +795,28 @@ begin
     if (r->>'ok')::boolean is not true or (select out_notice from public.attendance where person_id = p42) is distinct from 'overtime' then fails := fails || ' [42c ack recorded ' || r::text || ']'; end if;
   end;
 
-  if fails = '' then raise exception 'PASS 全部 42 組測試通過'; else raise exception 'FAIL%', fails; end if;
+  -- 43. 遲到寬限：全站 5 分鐘時遲到 3 分鐘不跳提醒、工資從表定起算；這場改 0 分鐘後要確認；設定值檢查
+  declare e43 uuid; s43 uuid; p43 uuid; a43 uuid; t43 text := encode(extensions.gen_random_bytes(16), 'hex'); att43 public.attendance; d43 date := (now() at time zone 'Asia/Taipei')::date;
+  begin
+    if public.admin_recruit_settings(atok, '{"late_grace":"61"}')->>'error' is distinct from 'bad_grace' then fails := fails || ' [43a bad grace]'; end if;
+    perform public.admin_recruit_settings(atok, '{"late_grace":"5"}');
+    insert into public.events(employer_id, name, start_date, end_date) values (emp, '回歸43', d43 - 1, d43 + 1) returning id into e43;
+    insert into public.shifts(event_id, work_date, start_time, end_time, headcount) values (e43, ((now() at time zone 'Asia/Taipei') - interval '3 minutes')::date, ((now() at time zone 'Asia/Taipei') - interval '3 minutes')::time(0), ((now() at time zone 'Asia/Taipei') + interval '3 hours')::time(0), 2) returning id into s43;
+    insert into public.people(national_id, name, birth_date, profile_source) values ('Z999990430', '測試四三', '2000-01-01', 'test') returning id into p43;
+    insert into public.sessions(token_hash, person_id, expires_at) values (encode(extensions.digest(t43, 'sha256'), 'hex'), p43, now() + interval '1 hour');
+    insert into public.applications(event_id, person_id, status) values (e43, p43, 'active') returning id into a43;
+    insert into public.application_shifts(application_id, shift_id, status) values (a43, s43, 'accepted');
+    insert into public.checkin_tickets(ticket_hash, event_id, expires_at) values (encode(extensions.digest('regress-t43', 'sha256'), 'hex'), e43, now() + interval '10 minutes');
+    r := public.payroll_clock(t43, 'regress-t43', 'in');
+    if (r->>'ok')::boolean is not true then fails := fails || ' [43b in within grace ' || r::text || ']'; end if;
+    select * into att43 from public.attendance where person_id = p43;
+    if att43.grace_minutes <> 5 or public.att_pay_in(att43) <> att43.sched_in then fails := fails || ' [43c pay from sched]'; end if;
+    perform public.admin_update_event(atok, e43, '{"late_grace_minutes":"0"}');
+    delete from public.attendance where person_id = p43;
+    r := public.payroll_clock(t43, 'regress-t43', 'in');
+    if r->'notice'->>'kind' is distinct from 'late' then fails := fails || ' [43d late without grace ' || r::text || ']'; end if;
+    perform public.admin_recruit_settings(atok, '{"late_grace":"0"}');
+  end;
+
+  if fails = '' then raise exception 'PASS 全部 43 組測試通過'; else raise exception 'FAIL%', fails; end if;
 end $$;

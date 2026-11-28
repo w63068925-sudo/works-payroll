@@ -731,6 +731,7 @@ const stepAtt = {
         <div><label for="hr">預設時薪</label><input id="hr" type="text" inputmode="decimal" value="${esc(cfg.default_hourly_rate == null ? '' : Number(cfg.default_hourly_rate))}" placeholder="200" style="width:110px"></div>
         <div><label for="br">滿 4 小時休息（分，照常給薪）</label><input id="br" type="text" inputmode="numeric" value="${esc(cfg.default_break_minutes)}" style="width:150px"></div>
         <div><label for="ins">勞保月投保薪資</label><input id="ins" type="text" inputmode="numeric" value="${esc(Number(cfg.insured_salary))}" style="width:130px"></div>
+        <div><label for="grace">遲到寬限（分）</label><input id="grace" type="text" inputmode="numeric" value="${esc(cfg.late_grace_minutes == null ? '' : cfg.late_grace_minutes)}" placeholder="全站 ${esc(cfg.late_grace_default || '0')}" style="width:120px" title="表定上班後這幾分鐘內簽到算準時，工資從表定時間起算。空白＝用全站設定"></div>
         <button class="btn ghost" id="cfgsave">儲存設定</button><span class="grow"></span>
         <button class="btn ghost" id="addatt">補登出勤</button><button class="btn" id="gen">依出勤產生薪資單</button></div></div>
       ${splitWrap(`<p class="sub" style="margin-bottom:10px">共 ${c.att.length} 筆${open ? '，<b style="color:var(--warn)">' + open + ' 筆尚未簽退</b>，產生薪資單前請先補上下班時間' : ''}。點任一列可修改。</p>
@@ -746,8 +747,8 @@ const stepAtt = {
     on('tbody tr[data-k]', 'click', (ev, tr) => openDetail('att', tr.dataset.k, e));
     $('addatt').onclick = () => openDetail('addatt', 'new', e);
     $('cfgsave').onclick = async () => {
-      const r = await rpc('admin_update_event', { p_id: e.id, p_patch: { default_break_minutes: $('br').value, default_hourly_rate: $('hr').value, insured_salary: $('ins').value } });
-      flash(r.ok ? 'ok' : 'err', r.ok ? '設定已儲存。時薪與投保薪資在重新產生薪資單時套用。' : evErr(r, e, '儲存失敗，請確認時薪、休息分鐘、投保薪資都是數字。')); refreshEvent(e, 'att');
+      const r = await rpc('admin_update_event', { p_id: e.id, p_patch: { default_break_minutes: $('br').value, default_hourly_rate: $('hr').value, insured_salary: $('ins').value, late_grace_minutes: $('grace').value } });
+      flash(r.ok ? 'ok' : 'err', r.ok ? '設定已儲存。時薪與投保薪資在重新產生薪資單時套用。' : evErr(r, e, '儲存失敗，請確認時薪、休息分鐘、投保薪資都是數字，遲到寬限是 0–60 分鐘（或空白）。')); refreshEvent(e, 'att');
     };
     $('gen').onclick = async () => {
       const r = await rpc('admin_generate_payslips', { p_event: e.id });
@@ -1042,14 +1043,25 @@ async function openDetail(kind, key, e, keepScroll) {
     return;
   }
   if (kind === 'addatt') {
-    box.innerHTML = `${close}<h1 style="font-size:19px">補登出勤</h1><p class="sub" style="margin-top:4px">給忘記掃碼簽到的人。建立後再填上下班時間。</p>
+    box.innerHTML = `${close}<h1 style="font-size:19px">補登出勤</h1><p class="sub" style="margin-top:4px">給忘記掃碼簽到的人，直接填上下班時間。下班時間比上班早就當作隔天。已經有的出勤，點表格裡那一列修改。</p>
       <label for="xid">身分證字號</label><input id="xid" type="text" maxlength="10" autocapitalize="characters">
-      <label for="xd">日期</label><input id="xd" type="date" value="${esc(e.start_date || '')}"><div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">建立</button>`;
+      <label for="xd">日期</label><input id="xd" type="date" value="${esc(e.start_date || '')}">
+      <div class="row" style="margin-top:14px"><div class="grow"><label for="xin">上班時間</label><input id="xin" type="time"></div><div class="grow"><label for="xout">下班時間（可先空白）</label><input id="xout" type="time"></div></div>
+      <div id="dm" style="margin-top:12px"></div><button class="btn block" id="save">補登</button>`;
     bindClose();
     $('save').onclick = async () => {
-      const r = await rpc('admin_add_attendance', { p_event: e.id, p_national_id: $('xid').value, p_date: $('xd').value || null });
-      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + ({ no_person: '找不到這個身分證字號，請先用新人報名連結登錄。', exists: '這個人當天已經有出勤紀錄。' }[r.error] || '請確認日期。') + '</div>'; return; }
-      S.detail = { kind: 'att', key: r.id }; refreshEvent(e, 'att');
+      const day = $('xd').value, tin = $('xin').value, tout = $('xout').value;
+      if (!day || !tin) { $('dm').innerHTML = '<div class="msg err">請填日期和上班時間。</div>'; return; }
+      const next = d0 => { const x = new Date(d0 + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 1); return x.toISOString().slice(0, 10); };
+      const outDay = tout && tout <= tin ? next(day) : day;
+      const r = await rpc('admin_add_attendance', { p_event: e.id, p_national_id: $('xid').value, p_date: day });
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + ({ no_person: '找不到這個身分證字號，請先用新人報名連結登錄。', exists: '這個人當天已經有出勤紀錄，請點表格裡那一列修改。' }[r.error] || '請確認日期。') + '</div>'; return; }
+      // 休息照簽退時的規則：滿 4 小時給活動設定的休息分鐘
+      const mins = tout ? (new Date(outDay + 'T' + tout) - new Date(day + 'T' + tin)) / 60000 : 0;
+      const brk = mins >= 240 ? Math.min(Number((S.cache.settings || {}).default_break_minutes) || 0, mins) : 0;
+      const r2 = await rpc('admin_set_attendance', { p_id: r.id, p_patch: { clock_in: day + 'T' + tin, clock_out: tout ? outDay + 'T' + tout : '', break_minutes: String(brk), note: '管理員補登' } });
+      if (!r2.ok) { S.detail = { kind: 'att', key: r.id }; flash('warn', '已建立出勤，但時間沒存進去，請在右側再填一次。'); return refreshEvent(e, 'att'); }
+      flash('ok', '已補登出勤。'); S.detail = { kind: 'att', key: r.id }; refreshEvent(e, 'att');
     };
     return;
   }
@@ -1897,6 +1909,11 @@ async function viewSettings(tab) {
         <ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">
           <li>打開後，新建檔和在「我的資料」儲存時都要填 Email，錄取通知會寄到這裡。關閉時 Email 變成選填。</li>
           <li>舊資料沒有 Email 的人，下次修改「我的資料」時才需要補；不影響看薪資單、報名和簽到退。目前有 Email 的人 ${r.with_email} / ${r.people}。</li></ul></div>
+      <div class="card pad" style="margin-top:10px"><b>遲到寬限（全站預設）</b>
+        <div class="row" style="align-items:center;margin-top:8px"><input id="rgrace" type="text" inputmode="numeric" value="${esc(r.late_grace || '0')}" style="width:90px"> <span class="sub">分鐘（0–60）</span></div>
+        <ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">
+          <li>表定上班後這幾分鐘內簽到算準時：不跳遲到提醒，工資從表定上班時間起算。超過才算遲到，工資照實際簽到時間算。</li>
+          <li>每場活動可以在「出勤」步驟另外設定；空白就用這裡的預設。設定只套用之後的簽到，已經簽到的紀錄不會變。</li></ul></div>
       <div class="card pad" style="margin-top:10px"><b>錄取通知</b>
         <ul class="sub" style="margin:6px 0 0;padding-left:18px;line-height:1.8">
           <li>錄取（或名單制排入）後約 2 分鐘通知：有綁 LINE 的發 LINE；有 Email 的另外寄 Email，內容是活動名稱和上班時間。</li>
@@ -2006,8 +2023,8 @@ async function viewSettings(tab) {
     on('[name=rmode]', 'change', () => document.querySelectorAll('#rsf > label.card').forEach(l => { const on1 = l.querySelector('input').checked; l.style.borderColor = on1 ? 'var(--ink)' : ''; l.style.boxShadow = on1 ? '0 0 0 1px var(--ink)' : ''; }));
     f('rsf').onsubmit = async ev => { ev.preventDefault();
       const m = document.querySelector('[name=rmode]:checked');
-      const r = await rpc('admin_recruit_settings', { p_patch: { mode: m ? m.value : 'pick', require_line: $('rline').checked ? 'true' : 'false', require_email: $('remail').checked ? 'true' : 'false' } });
-      if (!r.ok) { $('rsm').innerHTML = '<div class="msg err">' + (r.error === 'line_not_ready' ? 'LINE 通知還沒設定好或已關閉，不能要求報名前綁定 LINE。' : '儲存失敗。') + '</div>'; return; }
+      const r = await rpc('admin_recruit_settings', { p_patch: { mode: m ? m.value : 'pick', require_line: $('rline').checked ? 'true' : 'false', require_email: $('remail').checked ? 'true' : 'false', late_grace: $('rgrace').value.trim() || '0' } });
+      if (!r.ok) { $('rsm').innerHTML = '<div class="msg err">' + (r.error === 'line_not_ready' ? 'LINE 通知還沒設定好或已關閉，不能要求報名前綁定 LINE。' : r.error === 'bad_grace' ? '遲到寬限請填 0–60 的整數。' : '儲存失敗。') + '</div>'; return; }
       S.cache.stale = true; flash('ok', '報名方式已更新。'); viewSettings('recruit'); };
   }
   if (f('cf')) f('cf').onsubmit = async ev => { ev.preventDefault(); const r = await rpc('admin_update_employer', { p_patch: { legal_name: $('ln').value, tax_id: $('tx').value, contact: $('ct').value } }); if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + (r.error === 'contact_too_long' ? '聯絡窗口最多 200 字。' : '統一編號必須是 8 個數字。') + '</div>'; return; } await loadOverview(); flash('ok', '公司資料已更新。'); viewSettings('company'); };

@@ -90,7 +90,8 @@ declare v_actor text := public.admin_actor(p_token);
 begin
   if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
   return jsonb_build_object('ok', true,
-    'settings', (select jsonb_build_object('default_break_minutes', default_break_minutes, 'default_hourly_rate', default_hourly_rate, 'insured_salary', insured_salary) from public.events where id = p_event),
+    'settings', (select jsonb_build_object('default_break_minutes', default_break_minutes, 'default_hourly_rate', default_hourly_rate, 'insured_salary', insured_salary,
+        'late_grace_minutes', late_grace_minutes, 'late_grace_default', coalesce(public.setting('late_grace_minutes'), '0')) from public.events where id = p_event),
     'default_break_minutes', (select default_break_minutes from public.events where id = p_event),
     'rows', coalesce((select jsonb_agg(jsonb_build_object('id', a.id, 'person_id', a.person_id, 'name', p.name, 'work_date', a.work_date,
       'clock_in', to_char(a.clock_in at time zone 'Asia/Taipei', 'YYYY-MM-DD"T"HH24:MI'),
@@ -1144,7 +1145,8 @@ begin
       pay_date = v_pay, pay_within_days = v_days,
       default_break_minutes = case when p_patch ? 'default_break_minutes' then coalesce(nullif(p_patch->>'default_break_minutes','')::int, 0) else default_break_minutes end,
       default_hourly_rate = case when p_patch ? 'default_hourly_rate' then nullif(p_patch->>'default_hourly_rate','')::numeric else default_hourly_rate end,
-      insured_salary = case when p_patch ? 'insured_salary' then coalesce(nullif(p_patch->>'insured_salary','')::numeric, 11100) else insured_salary end
+      insured_salary = case when p_patch ? 'insured_salary' then coalesce(nullif(p_patch->>'insured_salary','')::numeric, 11100) else insured_salary end,
+      late_grace_minutes = case when p_patch ? 'late_grace_minutes' then nullif(btrim(coalesce(p_patch->>'late_grace_minutes','')),'')::int else late_grace_minutes end
     where id = p_id;
   exception when others then return jsonb_build_object('ok', false, 'error', 'bad_value'); end;
   if v_apply and (p_patch ? 'pay_date' or p_patch ? 'pay_within_days') then
@@ -1194,7 +1196,10 @@ CREATE OR REPLACE FUNCTION public.att_pay_in(a attendance)
  IMMUTABLE
  SET search_path TO ''
 AS $function$
-  select case when a.sched_in is not null and a.clock_in < a.sched_in and a.early_approved_at is null then a.sched_in else a.clock_in end $function$
+  select case when a.sched_in is not null and a.clock_in < a.sched_in and a.early_approved_at is null then a.sched_in
+    -- 遲到寬限內簽到：算準時，從表定上班時間起算
+    when a.sched_in is not null and a.clock_in > a.sched_in and a.clock_in <= a.sched_in + make_interval(mins => a.grace_minutes) then a.sched_in
+    else a.clock_in end $function$
 ;
 
 CREATE OR REPLACE FUNCTION public.att_pay_out(a attendance)
@@ -1754,7 +1759,7 @@ begin
       v_kind := 'early'; v_n := ceil(extract(epoch from v_s_in - v_now) / 60);
       v_text := format('表定上班時間為 %s，你提早 %s 分鐘到場。提早到場的時間不計入工時，工資自 %s 起算。如果是主管要求你提早開始工作，請告訴現場主管，由主管在系統核准後改從實際簽到時間計薪。',
         to_char(v_s_in at time zone 'Asia/Taipei', 'HH24:MI'), v_n, to_char(v_s_in at time zone 'Asia/Taipei', 'HH24:MI'));
-    elsif v_s_in is not null and v_now >= v_s_in + interval '1 minute' then
+    elsif v_s_in is not null and v_now >= v_s_in + interval '1 minute' and v_now > v_s_in + make_interval(mins => public.event_grace(e.id)) then
       v_kind := 'late'; v_n := floor(extract(epoch from v_now - v_s_in) / 60);
       v_text := format('表定上班時間為 %s，你已遲到 %s 分鐘。工資自實際簽到時間 %s 起算，只少算未出勤的分鐘數，不另外扣款。',
         to_char(v_s_in at time zone 'Asia/Taipei', 'HH24:MI'), v_n, to_char(v_now at time zone 'Asia/Taipei', 'HH24:MI'));
@@ -1762,8 +1767,8 @@ begin
     if v_kind is not null and not coalesce(p_ack, false) then
       return jsonb_build_object('ok', false, 'error', 'need_ack', 'event', e.name, 'notice', jsonb_build_object('kind', v_kind, 'minutes', v_n, 'text', v_text)) || public.checkin_state(v_pid, e.id);
     end if;
-    insert into public.attendance(person_id, event_id, work_date, clock_in, source, sched_in, sched_out, in_notice, in_notice_minutes, in_notice_text, in_ack_at)
-    values (v_pid, e.id, v_today, v_now, 'qr', v_s_in, v_s_out, v_kind, v_n, v_text, case when v_kind is not null then v_now end);
+    insert into public.attendance(person_id, event_id, work_date, clock_in, source, sched_in, sched_out, in_notice, in_notice_minutes, in_notice_text, in_ack_at, grace_minutes)
+    values (v_pid, e.id, v_today, v_now, 'qr', v_s_in, v_s_out, v_kind, v_n, v_text, case when v_kind is not null then v_now end, public.event_grace(e.id));
     insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_pid::text, 'clock_in', 'events', e.id, case when v_kind is not null then jsonb_build_object('notice', v_kind, 'minutes', v_n) end);
   elsif p_action = 'out' then
     if v_open.id is null then return jsonb_build_object('ok', false, 'error', 'not_in', 'event', e.name) || public.checkin_state(v_pid, e.id); end if;
@@ -1787,7 +1792,7 @@ begin
         return jsonb_build_object('ok', false, 'error', 'need_ack', 'event', e.name, 'notice', jsonb_build_object('kind', v_kind, 'minutes', v_n, 'text', v_text)) || public.checkin_state(v_pid, e.id);
       end if;
     end if;
-    v_pay_in := case when v_open.sched_in is not null and v_open.clock_in < v_open.sched_in and v_open.early_approved_at is null then v_open.sched_in else v_open.clock_in end;
+    v_pay_in := public.att_pay_in(v_open);
     v_pay_out := case when v_open.sched_out is not null and v_now > v_open.sched_out and v_open.ot_approved_at is null then v_open.sched_out else v_now end;
     v_mins := greatest(floor(extract(epoch from v_pay_out - v_pay_in) / 60), 0);
     update public.attendance set clock_out = v_now,
@@ -3754,18 +3759,22 @@ begin
     v_line := coalesce(p_patch->>'require_line', coalesce(public.setting('recruit_require_line'), 'false'));
     if v_line not in ('true', 'false') then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
     if p_patch ? 'require_email' and coalesce(p_patch->>'require_email', '') not in ('true', 'false') then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
+    if p_patch ? 'late_grace' and coalesce(p_patch->>'late_grace', '') !~ '^(\d|[1-5]\d|60)$' then return jsonb_build_object('ok', false, 'error', 'bad_grace'); end if;
     if v_line = 'true' and not (nullif(btrim(coalesce(public.setting('line_basic_id'), '')), '') is not null and coalesce(public.setting('line_enabled'), 'true') = 'true') then
       return jsonb_build_object('ok', false, 'error', 'line_not_ready');
     end if;
     insert into public.app_settings(key, value) values ('recruit_mode', v_mode), ('recruit_require_line', v_line)
       on conflict (key) do update set value = excluded.value;
+    if p_patch ? 'late_grace' then
+      insert into public.app_settings(key, value) values ('late_grace_minutes', p_patch->>'late_grace') on conflict (key) do update set value = excluded.value;
+    end if;
     if p_patch ? 'require_email' then
       if p_patch->>'require_email' not in ('true', 'false') then return jsonb_build_object('ok', false, 'error', 'bad_value'); end if;
       insert into public.app_settings(key, value) values ('require_email', p_patch->>'require_email') on conflict (key) do update set value = excluded.value;
     end if;
     insert into public.audit_log(actor, action, table_name, detail) values (v_actor, 'recruit_settings', 'app_settings', jsonb_build_object('mode', v_mode, 'require_line', v_line, 'require_email', p_patch->>'require_email'));
   end if;
-  return jsonb_build_object('ok', true, 'mode', public.recruit_mode(), 'require_line', coalesce(public.setting('recruit_require_line'), 'false') = 'true', 'require_line_effective', public.recruit_need_line(), 'require_email', public.require_email(),
+  return jsonb_build_object('ok', true, 'mode', public.recruit_mode(), 'require_line', coalesce(public.setting('recruit_require_line'), 'false') = 'true', 'require_line_effective', public.recruit_need_line(), 'require_email', public.require_email(), 'late_grace', coalesce(public.setting('late_grace_minutes'), '0'),
     'line_ready', nullif(btrim(coalesce(public.setting('line_basic_id'), '')), '') is not null and coalesce(public.setting('line_enabled'), 'true') = 'true',
     'mail_ready', nullif(btrim(coalesce(public.setting('mail_webapp_url'), '')), '') is not null and nullif(btrim(coalesce(public.setting('mail_key'), '')), '') is not null,
     'recruiting', (select count(*) from public.events where recruiting and archived_at is null and coalesce(end_date, start_date) >= (now() at time zone 'Asia/Taipei')::date - 1),
@@ -3965,3 +3974,16 @@ end $function$
 ;
 revoke all on function public.payroll_remember(text) from public;
 grant execute on function public.payroll_remember(text) to anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.event_grace(p_event uuid)
+ RETURNS integer
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  select least(60, greatest(0, coalesce((select late_grace_minutes from public.events where id = p_event),
+    case when public.setting('late_grace_minutes') ~ '^\d{1,2}$' then public.setting('late_grace_minutes')::int end, 0)))
+$function$
+;
+-- 遲到寬限（2026-11-28）：app_settings.late_grace_minutes、events.late_grace_minutes、attendance.grace_minutes
+revoke all on function public.event_grace(uuid) from public, anon, authenticated;
