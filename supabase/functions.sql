@@ -3987,3 +3987,36 @@ $function$
 ;
 -- 遲到寬限（2026-11-28）：app_settings.late_grace_minutes、events.late_grace_minutes、attendance.grace_minutes
 revoke all on function public.event_grace(uuid) from public, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.admin_add_attendance_times(p_token text, p_event uuid, p_national_id text, p_date date, p_in text, p_out text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+-- 補登出勤一次完成（建立＋上下班時間＋休息），全部以台北時間計算：下班不晚於上班視為隔天；滿 4 小時帶活動休息分鐘
+declare v_actor text := public.admin_actor(p_token); r jsonb; v_id uuid; v_in timestamptz; v_out timestamptz; v_mins int; v_break int; e public.events;
+begin
+  if v_actor is null then return jsonb_build_object('ok', false, 'error', 'session'); end if;
+  if p_date is null or coalesce(p_in, '') !~ '^([01]\d|2[0-3]):[0-5]\d$' or (coalesce(p_out, '') <> '' and p_out !~ '^([01]\d|2[0-3]):[0-5]\d$') then
+    return jsonb_build_object('ok', false, 'error', 'bad_value');
+  end if;
+  select * into e from public.events where id = p_event;
+  if e.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  r := public.admin_add_attendance(p_token, p_event, p_national_id, p_date);
+  if not coalesce((r->>'ok')::boolean, false) then return r; end if;
+  v_id := (r->>'id')::uuid;
+  v_in := (p_date + p_in::time) at time zone 'Asia/Taipei';
+  if coalesce(p_out, '') <> '' then
+    v_out := ((case when p_out::time <= p_in::time then p_date + 1 else p_date end) + p_out::time) at time zone 'Asia/Taipei';
+    v_mins := floor(extract(epoch from v_out - v_in) / 60);
+  end if;
+  v_break := case when coalesce(v_mins, 0) >= 240 then least(coalesce(e.default_break_minutes, 0), v_mins) else 0 end;
+  update public.attendance set clock_in = v_in, clock_out = v_out, break_minutes = v_break, note = '管理員補登', grace_minutes = public.event_grace(p_event) where id = v_id;
+  insert into public.audit_log(actor, action, table_name, row_id, detail) values (v_actor, 'attendance_updated', 'attendance', v_id,
+    jsonb_build_object('clock_in', p_date || ' ' || p_in, 'clock_out', p_out, 'break_minutes', v_break, 'manual', true));
+  return jsonb_build_object('ok', true, 'id', v_id, 'break_minutes', v_break);
+end $function$
+;
+revoke all on function public.admin_add_attendance_times(text, uuid, text, date, text, text) from public;
+grant execute on function public.admin_add_attendance_times(text, uuid, text, date, text, text) to anon, authenticated, service_role;

@@ -815,6 +815,16 @@ begin
     delete from public.attendance where person_id = p43;
     r := public.payroll_clock(t43, 'regress-t43', 'in');
     if r->'notice'->>'kind' is distinct from 'late' then fails := fails || ' [43d late without grace ' || r::text || ']'; end if;
+    -- 補登：跨夜下班算隔天、滿 4 小時帶休息、不滿不帶；時間格式錯整筆不建立
+    update public.events set default_break_minutes = 30 where id = e43;
+    insert into public.people(national_id, name, birth_date, profile_source) values ('Z999990431', '測試四三乙', '2000-01-01', 'test');
+    r := public.admin_add_attendance_times(atok, e43, 'Z999990431', d43, '22:00', '06:00');
+    if (r->>'ok')::boolean is not true or (select clock_out - clock_in from public.attendance where id = (r->>'id')::uuid) <> interval '8 hours' or (r->>'break_minutes')::int <> 30 then fails := fails || ' [43e overnight ' || r::text || ']'; end if;
+    insert into public.people(national_id, name, birth_date, profile_source) values ('Z999990432', '測試四三丙', '2000-01-01', 'test');
+    r := public.admin_add_attendance_times(atok, e43, 'Z999990432', d43, '10:00', '13:00');
+    if (r->>'break_minutes')::int <> 0 then fails := fails || ' [43f short no break]'; end if;
+    if public.admin_add_attendance_times(atok, e43, 'Z999990432', d43 + 1, '9:00', '') ->>'error' is distinct from 'bad_value'
+       or exists (select 1 from public.attendance a join public.people p on p.id = a.person_id where p.national_id = 'Z999990432' and a.work_date = d43 + 1) then fails := fails || ' [43g bad time]'; end if;
     perform public.admin_recruit_settings(atok, '{"late_grace":"0"}');
   end;
 

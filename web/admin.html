@@ -1052,15 +1052,9 @@ async function openDetail(kind, key, e, keepScroll) {
     $('save').onclick = async () => {
       const day = $('xd').value, tin = $('xin').value, tout = $('xout').value;
       if (!day || !tin) { $('dm').innerHTML = '<div class="msg err">請填日期和上班時間。</div>'; return; }
-      const next = d0 => { const x = new Date(d0 + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 1); return x.toISOString().slice(0, 10); };
-      const outDay = tout && tout <= tin ? next(day) : day;
-      const r = await rpc('admin_add_attendance', { p_event: e.id, p_national_id: $('xid').value, p_date: day });
-      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + ({ no_person: '找不到這個身分證字號，請先用新人報名連結登錄。', exists: '這個人當天已經有出勤紀錄，請點表格裡那一列修改。' }[r.error] || '請確認日期。') + '</div>'; return; }
-      // 休息照簽退時的規則：滿 4 小時給活動設定的休息分鐘
-      const mins = tout ? (new Date(outDay + 'T' + tout) - new Date(day + 'T' + tin)) / 60000 : 0;
-      const brk = mins >= 240 ? Math.min(Number((S.cache.settings || {}).default_break_minutes) || 0, mins) : 0;
-      const r2 = await rpc('admin_set_attendance', { p_id: r.id, p_patch: { clock_in: day + 'T' + tin, clock_out: tout ? outDay + 'T' + tout : '', break_minutes: String(brk), note: '管理員補登' } });
-      if (!r2.ok) { S.detail = { kind: 'att', key: r.id }; flash('warn', '已建立出勤，但時間沒存進去，請在右側再填一次。'); return refreshEvent(e, 'att'); }
+      // 建立、上下班時間、休息分鐘在資料庫一次完成（台北時間；下班不晚於上班視為隔天）
+      const r = await rpc('admin_add_attendance_times', { p_event: e.id, p_national_id: $('xid').value, p_date: day, p_in: tin, p_out: tout || '' });
+      if (!r.ok) { $('dm').innerHTML = '<div class="msg err">' + ({ no_person: '找不到這個身分證字號，請先用新人報名連結登錄。', exists: '這個人當天已經有出勤紀錄，請點表格裡那一列修改。', bad_value: '請確認日期與時間。' }[r.error] || '請確認日期。') + '</div>'; return; }
       flash('ok', '已補登出勤。'); S.detail = { kind: 'att', key: r.id }; refreshEvent(e, 'att');
     };
     return;
